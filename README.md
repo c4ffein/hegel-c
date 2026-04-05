@@ -1,7 +1,7 @@
 # Hegel C binding
 
-Currently a duct-taped C library — your tests include a .h, link a .a, never see Rust.
-- The current implementation is Rust because that's what talks to the Hegel server (which is a Rust/Python service).
+Currently a mostly vibe-coded WiP duct-taped C library — your tests include a .h, link a .a, never see Rust.
+- The current implementation is Rust because we rely on the main lib that talks to the Hegel server (which is a Rust/Python service).
 - The alternative would be reimplementing the Hegel wire protocol in pure C.
 - This will only be done once there is a sufficient test suite to verify consistency between these 2 options.
 - While the Rust bridge was the fast path to get everything working, it will be kept - we want both:
