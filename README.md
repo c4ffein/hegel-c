@@ -10,11 +10,16 @@ Currently a mostly vibe-coded WiP duct-taped C library — your tests include a 
     - if the Hegel team ever release a low-level C header for FFI bindings, we'll adapt to it, still providing a nice standard layer to make it as adapted to a C codebase as possible
 
 ## TODO
+- [ ] `hegel_run_test_result()` — return 0/1 instead of calling `exit()`. Both hegel-rust (`panic`) and hegel-go (`return error`) do this. Enables test suites that share a single server process. Requires wrapping `Hegel::run()` with `catch_unwind` in `lib.rs`.
+- [ ] Test suite API (`hegel_suite_new/add/run`) — C equivalent of `cargo test`/`go test`. Run multiple tests in one binary, share server (~1s startup amortized across all tests instead of per-binary).
+- [ ] Fix `from-hegel-rust` test mismatches — `make verify` in `tests/from-hegel-rust/` uses Claude as arbitrator to verify C tests match their Rust originals. Currently 4 mismatches (integer tests missing `find_any` edge cases, shrink boundary off-by-one, combinator tests using int where Rust uses text).
+- [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md` for the full correspondence map. ~20 more portable tests not yet ported.
 - [ ] Suppress "Draw N:" trace output from Hegel during shrinking (noisy)
 - [ ] Create specific repo (could get Scotch through scripts for real-world tests?)
 - [ ] selftest suite
-  - [ ] Rewrite all 16 selftest files to follow the three-layer pattern described in `Selftest pattern`
+  - [x] Rewrite all 16 selftest files to follow the three-layer pattern described in `Selftest pattern`
     - Claude pretended to understand what I asked for, parroted me to prove their understanding, and implemented these. Never trust Claude.
+    - Redone 2026-04-05: actually verified all 16 compile and pass this time.
   - [ ] Grammar-based strategy fuzzer
     — recursive generator for structured strings with
       - method letters,
@@ -32,7 +37,9 @@ Currently a mostly vibe-coded WiP duct-taped C library — your tests include a 
 - [ ] verify Hegel's database replay failing cases across runs with fork mode
 - [ ] PT-Scotch (MPI) tests — fork mode might actually work if we're clever about it. The naive problem: `MPI_Init` in `main()` runs before `hegel_run_test`, so forked children inherit stale MPI state. But we fork before the test body runs, so in theory the test function could call `MPI_Init`/`MPI_Finalize` itself, inside the child. The tricky part: `mpiexec -n 3` means 3 parent processes each fork a child, and those 3 children need to `MPI_Init` together — requires a cross-rank barrier before the fork so children are synchronized. Just musings for now, needs a prototype to see if MPI implementations actually tolerate this. Fallback: nofork mode works fine (no crash isolation but shrinking still works) => tbh maybe slop reflection from Claude, maybe real, won't check today
   - [ ] Just verify by writing tests of hegel-c tests handling various mpi code
-- [ ] Pool hegel server across test cases — startup cost (~1s) dominates short tests => told Claude, verify
+- [ ] Pool hegel server across test cases — hegeltest already pools within a process (`OnceLock<HegelSession>`), but we run 16 separate binaries so each pays ~1s. Fix: bundle PASS tests into one binary, or implement the suite API above.
+- [ ] Investigate `hegel_note(tc, msg)` — both Rust (`tc.note()`) and Go (`ht.Note()`) expose debug output that only prints during final replay (not during shrinking). Would cut noise and help users diagnose shrunk counterexamples.
+- [ ] Investigate `hegel_target(tc, value, label)` — both Rust and Go expose property-directed testing: guide generation toward maximizing a numeric metric. Useful for coverage-driven fuzzing. Check if hegeltest exposes it.
 - [ ] Parallel test execution
 - [ ] Look at `graph_gen.h` / `scotch_helpers.h` for inspiration — some data structures (CSR graph builders, strategy string generators) could still generalize into reusable hegel-c helpers
 - [ ] Real C implementation.
