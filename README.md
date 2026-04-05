@@ -76,7 +76,7 @@ Four categories:
 - **PASS tests**: function is correct, hegel should find no bug, exit 0
 - **FAIL tests**: function has a known bug, hegel should find it, exit non-zero
 - **CRASH tests**: function segfaults/aborts on specific inputs, fork isolation should catch it, exit non-zero
-- **CRASH+PASS tests**: function crashes on some inputs but the hegel test uses `hegel_assume` or generators to avoid those inputs — fork isolation catches any stray crashes, but the test should still pass (exit 0). Proves crash isolation doesn't interfere with normal test flow.
+- **CRASH+FAIL tests**: function either crash or fail depending on the inputs, the reducer should still work
 
 ## Benchmarking
 
