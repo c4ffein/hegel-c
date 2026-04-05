@@ -48,7 +48,7 @@ The Makefile defines three categories — each test binary's expected exit code 
 
 ## Selftest three-layer pattern
 
-Each test should have three layers (NOTE: current tests don't all follow this yet):
+Each test has three layers:
 
 1. **Function under test** — standalone C function with a known bug/edge case
 2. **Hegel test** — property test using `hegel_draw_*` and `HEGEL_ASSERT` to exercise that function

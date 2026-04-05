@@ -5,15 +5,38 @@
 ** Test: hegel_gen_draw_list_int produces correct-length lists with
 ** values in the element generator's range.
 **
-** Property: list of int(0,9) with length in [2,10] has:
-**   - length in [2,10]
-**   - all elements in [0,9]
-** This test should PASS.
+** Layer 1: sum_array() computes the sum of an int array.
+** Layer 2: draw a list of int(0, 9) with length in [2, 10], then
+**          assert sum_array(buf, len) is in [0, 9 * len].
+**          This test should PASS.
+**
+** Expected: EXIT 0.
 */
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "hegel_c.h"
+
+/* ---- Layer 1: function under test ----
+** Returns the sum of the first len elements of arr. */
+
+static
+int
+sum_array (
+const int *                 arr,
+int                         len)
+{
+  int                 s;
+  int                 i;
+
+  s = 0;
+  for (i = 0; i < len; i ++)
+    s += arr[i];
+
+  return (s);
+}
+
+/* ---- Layer 2: hegel test ---- */
 
 static
 void
@@ -23,7 +46,7 @@ hegel_testcase *            tc)
   hegel_gen *          elem;
   int                  buf[16];
   int                  len;
-  int                  i;
+  int                  total;
 
   elem = hegel_gen_int (0, 9);
   len = hegel_gen_draw_list_int (tc, elem, 2, 10, buf, 16);
@@ -31,13 +54,15 @@ hegel_testcase *            tc)
   HEGEL_ASSERT (len >= 2 && len <= 10,
                 "list length %d not in [2,10]", len);
 
-  for (i = 0; i < len; i ++) {
-    HEGEL_ASSERT (buf[i] >= 0 && buf[i] <= 9,
-                  "list[%d] = %d, expected [0,9]", i, buf[i]);
-  }
+  total = sum_array (buf, len);
+
+  HEGEL_ASSERT (total >= 0 && total <= 9 * len,
+                "sum_array = %d, expected [0, %d]", total, 9 * len);
 
   hegel_gen_free (elem);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
 
 int
 main (

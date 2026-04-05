@@ -4,9 +4,9 @@
 /*
 ** Test: fork isolation catches stack overflow.
 **
-** Uses alloca to blow the stack immediately rather than recursive calls,
-** which avoids potential issues with each shrink attempt also stack-
-** overflowing (slow death spiral).
+** Layer 1: stack_heavy() allocates ~64 MB on the stack for large inputs.
+** Layer 2: hegel draws x in [0, 20] and calls stack_heavy().
+**          Uses alloca (not recursion) so shrinking stays fast.
 **
 ** Expected: EXIT NON-ZERO.
 */
@@ -15,7 +15,27 @@
 
 #include "hegel_c.h"
 
+/* ---- Layer 1: function under test ----
+** Allocates a large stack buffer for inputs > 5.
+** Bug: 64 MB exceeds any reasonable stack limit — crashes. */
+
 static volatile char sink;
+
+static
+void
+stack_heavy (
+int                         x)
+{
+  volatile char *     p;
+
+  if (x > 5) {
+    p = (volatile char *) alloca (64 * 1024 * 1024);
+    p[0] = 42;
+    sink = p[0];
+  }
+}
+
+/* ---- Layer 2: hegel test ---- */
 
 static
 void
@@ -23,17 +43,12 @@ testStackOverflow (
 hegel_testcase *            tc)
 {
   int                 x;
-  volatile char *     p;
 
   x = hegel_draw_int (tc, 0, 20);
-
-  if (x == 7) {
-    /* Allocate ~64 MB on the stack — way past any stack limit */
-    p = (volatile char *) alloca (64 * 1024 * 1024);
-    p[0] = 42;
-    sink = p[0];
-  }
+  stack_heavy (x);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_CRASH) ---- */
 
 int
 main (

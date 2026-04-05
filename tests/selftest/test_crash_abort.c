@@ -4,8 +4,9 @@
 /*
 ** Test: fork isolation catches abort().
 **
-** The function calls abort() when x == 42.
-** In fork mode, hegel should catch the SIGABRT and report it.
+** Layer 1: check_input() aborts when x == 42 (overzealous validation).
+** Layer 2: hegel draws x in [0, 100] and calls check_input().
+**          Fork mode should catch the SIGABRT and report it.
 **
 ** Expected: EXIT NON-ZERO.
 */
@@ -13,6 +14,21 @@
 #include <stdlib.h>
 
 #include "hegel_c.h"
+
+/* ---- Layer 1: function under test ----
+** Validates input.  Bug: calls abort() on a valid input (42)
+** instead of returning an error code. */
+
+static
+void
+check_input (
+int                         x)
+{
+  if (x == 42)
+    abort ();
+}
+
+/* ---- Layer 2: hegel test ---- */
 
 static
 void
@@ -22,12 +38,13 @@ hegel_testcase *            tc)
   int                 x;
 
   x = hegel_draw_int (tc, 0, 100);
+  check_input (x);
 
-  if (x == 42)
-    abort ();
-
-  HEGEL_ASSERT (x != 42, "x=%d", x); /* redundant, but clear */
+  HEGEL_ASSERT (x >= 0 && x <= 100,
+                "x=%d out of range", x);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_CRASH) ---- */
 
 int
 main (

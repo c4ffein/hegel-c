@@ -4,15 +4,29 @@
 /*
 ** Test: fork isolation catches segfaults.
 **
-** The function dereferences a null pointer when x == 0.
-** In fork mode, hegel should catch the crash (SIGSEGV), report it,
-** and continue shrinking. The test runner itself must NOT crash.
+** Layer 1: deref() dereferences a pointer with no NULL check.
+** Layer 2: hegel draws x in [0, 100] and passes a NULL pointer when
+**          x == 0.  Fork mode should catch the SIGSEGV and continue
+**          shrinking.
 **
 ** Expected: EXIT NON-ZERO (hegel reports the crash as a test failure).
 */
 #include <stdio.h>
 
 #include "hegel_c.h"
+
+/* ---- Layer 1: function under test ----
+** Returns the value at *p.  Bug: no NULL check — crashes on NULL. */
+
+static
+int
+deref (
+const int *                 p)
+{
+  return (*p);
+}
+
+/* ---- Layer 2: hegel test ---- */
 
 static volatile int sink;
 
@@ -26,13 +40,11 @@ hegel_testcase *            tc)
 
   x = hegel_draw_int (tc, 0, 100);
 
-  if (x == 0) {
-    ptr = (int *) 0;
-    sink = *ptr; /* SIGSEGV */
-  }
-
-  HEGEL_ASSERT (x >= 0, "x=%d", x); /* always true, but we never get here if x==0 */
+  ptr = (x == 0) ? (int *) 0 : &x;
+  sink = deref (ptr);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_CRASH) ---- */
 
 int
 main (
@@ -44,7 +56,6 @@ char *              argv[])
 
   printf ("Testing fork isolation: segfault...\n");
   hegel_run_test (testSegfault);
-  /* If we reach here, fork mode caught the crash */
   printf ("BUG: should not reach here\n");
 
   return (1);

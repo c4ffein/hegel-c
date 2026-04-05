@@ -4,13 +4,30 @@
 /*
 ** Test: a trivially true property passes cleanly.
 **
-** Property: x + 0 == x for all int x.
-** This test should PASS (sanity check that the runner works at all).
+** Layer 1: add() returns a + b.
+** Layer 2: hegel draws x and asserts add(x, 0) == x (additive identity).
+**          This test should PASS (sanity check that the runner works at all).
+**
+** Expected: EXIT 0.
 */
 #include <stdio.h>
 #include <limits.h>
 
 #include "hegel_c.h"
+
+/* ---- Layer 1: function under test ----
+** Simple addition — correct for all inputs (no overflow in identity test). */
+
+static
+int
+add (
+int                         a,
+int                         b)
+{
+  return (a + b);
+}
+
+/* ---- Layer 2: hegel test ---- */
 
 static
 void
@@ -20,9 +37,11 @@ hegel_testcase *            tc)
   int                 x;
 
   x = hegel_draw_int (tc, INT_MIN, INT_MAX);
-  HEGEL_ASSERT (x + 0 == x,
-                "x + 0 != x for x=%d", x);
+  HEGEL_ASSERT (add (x, 0) == x,
+                "add(%d, 0) != %d", x, x);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
 
 int
 main (

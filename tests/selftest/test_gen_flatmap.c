@@ -4,26 +4,43 @@
 /*
 ** Test: hegel_gen_flat_map_int produces dependent generation.
 **
-** Property: flat_map(n -> int(0, n)) on int(1,100) always produces
-** a result in [0, n] where n is the source draw.
+** Layer 1: in_range() checks if x is within [lo, hi].
+** Layer 2: flat_map(n -> int(0, n)) on int(1, 100) — result must
+**          satisfy in_range(result, 0, 100).  The real test is that
+**          dependent generation doesn't crash or produce garbage.
+**          This test should PASS.
 **
-** We can't observe n directly in the assertion (it's inside the draw),
-** but we CAN assert result <= 100 (the max of the source range).
-** The real test is that this doesn't crash or produce garbage.
-** This test should PASS.
+** Expected: EXIT 0.
 */
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "hegel_c.h"
 
+/* ---- Layer 1: function under test ----
+** Returns non-zero if x is in [lo, hi] (inclusive). */
+
+static
+int
+in_range (
+int                         x,
+int                         lo,
+int                         hi)
+{
+  return (x >= lo && x <= hi);
+}
+
+/* ---- flat_map callback ---- */
+
 static
 hegel_gen *
-makeRangeGen (int n, void * ctx)
+make_range_gen (int n, void * ctx)
 {
   (void) ctx;
   return (hegel_gen_int (0, n));
 }
+
+/* ---- Layer 2: hegel test ---- */
 
 static
 void
@@ -33,16 +50,16 @@ hegel_testcase *            tc)
   hegel_gen *          gn;
   int                  result;
 
-  gn = hegel_gen_flat_map_int (hegel_gen_int (1, 100), makeRangeGen, NULL);
+  gn = hegel_gen_flat_map_int (hegel_gen_int (1, 100), make_range_gen, NULL);
   result = hegel_gen_draw_int (tc, gn);
 
-  HEGEL_ASSERT (result >= 0,
-                "flat_map result negative: %d", result);
-  HEGEL_ASSERT (result <= 100,
-                "flat_map result exceeds source max: %d", result);
+  HEGEL_ASSERT (in_range (result, 0, 100),
+                "flat_map result %d not in [0, 100]", result);
 
   hegel_gen_free (gn);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
 
 int
 main (

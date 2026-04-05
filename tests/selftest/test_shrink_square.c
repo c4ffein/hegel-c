@@ -4,8 +4,9 @@
 /*
 ** Test: x * x >= 0 fails on signed overflow when |x| > 46340.
 **
-** We draw x in [40000, 100000] so overflow is very likely (any x > 46340
-** overflows). Hegel should find and shrink to a value near 46341.
+** Layer 1: square() computes x*x via unsigned cast — wraps on overflow.
+** Layer 2: hegel draws x in [40000, 100000] and asserts square(x) >= 0.
+**          Hegel should find and shrink to a value near 46341.
 **
 ** Expected: EXIT NON-ZERO.
 */
@@ -14,24 +15,38 @@
 
 #include "hegel_c.h"
 
+/* ---- Layer 1: function under test ----
+** Computes x*x.  Uses unsigned multiply to avoid UB, then casts back.
+** Bug: result wraps negative for |x| > 46340. */
+
+static
+int
+square (
+int                         x)
+{
+  unsigned int              usq;
+
+  usq = (unsigned int) x * (unsigned int) x;
+  return ((int) usq);
+}
+
+/* ---- Layer 2: hegel test ---- */
+
 static
 void
-testSquareNonNegative (
+testSquareNonNeg (
 hegel_testcase *            tc)
 {
   int                 x;
-  unsigned int        usq;
-  int                 sq;
+  int                 result;
 
   x = hegel_draw_int (tc, 40000, 100000);
-  /* Cast to unsigned to compute without UB, then cast back to check sign bit.
-  ** At -O2, signed overflow is UB and the compiler can optimize away checks,
-  ** so we do the multiply in unsigned and interpret the result. */
-  usq = (unsigned int) x * (unsigned int) x;
-  sq = (int) usq;
-  HEGEL_ASSERT (sq >= 0,
-                "x=%d, x*x=%d — expected non-negative", x, sq);
+  result = square (x);
+  HEGEL_ASSERT (result >= 0,
+                "square(%d) = %d — expected non-negative", x, result);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_FAIL) ---- */
 
 int
 main (
@@ -41,7 +56,7 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  hegel_run_test (testSquareNonNegative);
+  hegel_run_test (testSquareNonNeg);
 
   return (0);
 }

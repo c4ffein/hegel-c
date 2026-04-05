@@ -4,9 +4,9 @@
 /*
 ** Test: hegel detects a failure and shrinks toward the boundary.
 **
-** Property: "all ints are less than 100" — obviously false.
-** Hegel should find a counterexample >= 100 and shrink it to exactly 100
-** (the smallest failing value in the range).
+** Layer 1: clamp99() is supposed to cap values at 99 but is a no-op (bug).
+** Layer 2: hegel draws x in [0, 10000] and asserts clamp99(x) < 100.
+**          Hegel should shrink to exactly 100 (the smallest failing value).
 **
 ** Expected: EXIT NON-ZERO.
 */
@@ -15,17 +15,35 @@
 
 #include "hegel_c.h"
 
+/* ---- Layer 1: function under test ----
+** Supposed to clamp x to [0, 99] for use as an array index.
+** Bug: forgot the actual clamping — returns x unchanged. */
+
+static
+int
+clamp99 (
+int                         x)
+{
+  return (x);
+}
+
+/* ---- Layer 2: hegel test ---- */
+
 static
 void
-testLessThan100 (
+testClampBound (
 hegel_testcase *            tc)
 {
   int                 x;
+  int                 result;
 
   x = hegel_draw_int (tc, 0, 10000);
-  HEGEL_ASSERT (x < 100,
-                "x=%d, expected < 100", x);
+  result = clamp99 (x);
+  HEGEL_ASSERT (result < 100,
+                "clamp99(%d) = %d, expected < 100", x, result);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_FAIL) ---- */
 
 int
 main (
@@ -35,7 +53,7 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  hegel_run_test (testLessThan100);
+  hegel_run_test (testClampBound);
 
   return (0);
 }

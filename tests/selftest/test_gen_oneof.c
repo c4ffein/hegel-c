@@ -4,13 +4,29 @@
 /*
 ** Test: hegel_gen_one_of picks from sub-generators correctly.
 **
-** Property: one_of(int(0,0), int(1,1)) only produces 0 or 1.
-** This test should PASS.
+** Layer 1: is_binary() checks if x is 0 or 1.
+** Layer 2: one_of(int(0,0), int(1,1)) — result must satisfy is_binary().
+**          This test should PASS.
+**
+** Expected: EXIT 0.
 */
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "hegel_c.h"
+
+/* ---- Layer 1: function under test ----
+** Returns non-zero if x is a binary digit (0 or 1). */
+
+static
+int
+is_binary (
+int                         x)
+{
+  return (x == 0 || x == 1);
+}
+
+/* ---- Layer 2: hegel test ---- */
 
 static
 void
@@ -27,11 +43,13 @@ hegel_testcase *            tc)
 
   result = hegel_gen_draw_int (tc, gn);
 
-  HEGEL_ASSERT (result == 0 || result == 1,
+  HEGEL_ASSERT (is_binary (result),
                 "one_of(int(0,0), int(1,1)) produced %d", result);
 
   hegel_gen_free (gn);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
 
 int
 main (

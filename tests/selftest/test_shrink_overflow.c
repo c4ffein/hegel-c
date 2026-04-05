@@ -4,30 +4,50 @@
 /*
 ** Test: x + y > x when y > 0 — fails on signed overflow.
 **
-** Expected: hegel finds the failure. The shrunk counterexample should
-** have y small (close to 1) and x close to INT_MAX.
-** This binary should EXIT NON-ZERO.
+** Layer 1: checked_add() adds two ints without overflow protection.
+** Layer 2: hegel draws x in [0, INT_MAX] and y in [1, INT_MAX],
+**          asserts checked_add(x, y) > x.  Hegel should shrink to
+**          y close to 1 and x close to INT_MAX.
+**
+** Expected: EXIT NON-ZERO.
 */
 #include <stdio.h>
 #include <limits.h>
 
 #include "hegel_c.h"
 
+/* ---- Layer 1: function under test ----
+** Adds two integers.  Bug: no overflow check — wraps around for
+** large x + y, returning a value smaller than x. */
+
+static
+int
+checked_add (
+int                         x,
+int                         y)
+{
+  return (x + y);
+}
+
+/* ---- Layer 2: hegel test ---- */
+
 static
 void
-testAdditionMonotone (
+testAddMonotone (
 hegel_testcase *            tc)
 {
   int                 x;
   int                 y;
-  int                 sum;
+  int                 result;
 
   x = hegel_draw_int (tc, 0, INT_MAX);
   y = hegel_draw_int (tc, 1, INT_MAX);
-  sum = x + y; /* may overflow */
-  HEGEL_ASSERT (sum > x,
-                "x=%d, y=%d, x+y=%d — not greater than x", x, y, sum);
+  result = checked_add (x, y);
+  HEGEL_ASSERT (result > x,
+                "checked_add(%d, %d) = %d — not greater than x", x, y, result);
 }
+
+/* ---- Layer 3: runner (see Makefile TESTS_FAIL) ---- */
 
 int
 main (
@@ -37,7 +57,7 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  hegel_run_test (testAdditionMonotone);
+  hegel_run_test (testAddMonotone);
 
   return (0);
 }
