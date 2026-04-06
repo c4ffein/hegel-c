@@ -99,11 +99,12 @@ jobs:
           path: rust-version/target/release/
 
       - name: Run MPI tests
-        env:
-          PRTE_MCA_prte_allow_run_as_root: 1
-          PRTE_MCA_prte_allow_run_as_root_confirm: 1
         run: |
           export PATH="$HOME/.local/bin:$PATH"
+          export OMPI_ALLOW_RUN_AS_ROOT=1
+          export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+          export PRTE_ALLOW_RUN_AS_ROOT=1
+          export PRTE_ALLOW_RUN_AS_ROOT_CONFIRM=1
           cd tests/mpi && make test
 
   scotch:
@@ -129,9 +130,10 @@ jobs:
           path: rust-version/target/release/
 
       - name: Run Scotch integration tests
-        env:
-          PRTE_MCA_prte_allow_run_as_root: 1
-          PRTE_MCA_prte_allow_run_as_root_confirm: 1
         run: |
           export PATH="$HOME/.local/bin:$PATH"
+          export OMPI_ALLOW_RUN_AS_ROOT=1
+          export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+          export PRTE_ALLOW_RUN_AS_ROOT=1
+          export PRTE_ALLOW_RUN_AS_ROOT_CONFIRM=1
           cd tests/irl/scotch && make test-deb
