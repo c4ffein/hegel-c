@@ -77,17 +77,20 @@ jobs:
         run: cd tests/from-hegel-rust && make test
 
   scotch:
-    name: Scotch integration tests
+    name: Scotch integration tests (Debian 13 / OpenMPI 5)
     needs: build
     runs-on: ubuntu-latest
+    container: debian:13
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y gcc make curl libscotch-dev libptscotch-dev openmpi-bin libopenmpi-dev
 
-      - name: Install Scotch (system package)
-        run: sudo apt-get update && sudo apt-get install -y libscotch-dev libptscotch-dev
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Download library artifact
         uses: actions/download-artifact@v4
@@ -96,4 +99,6 @@ jobs:
           path: rust-version/target/release/
 
       - name: Run Scotch integration tests
-        run: cd tests/irl/scotch && make test-deb
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd tests/irl/scotch && make test-deb
