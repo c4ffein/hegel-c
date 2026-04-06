@@ -91,6 +91,7 @@ _run-tests: all check-license
 			passed=$$((passed + 1)); \
 		else \
 			echo "FAIL (exit $$rc)"; \
+			echo "$$output"; \
 			errors=$$((errors + 1)); \
 		fi; \
 	done; \
@@ -106,6 +107,7 @@ _run-tests: all check-license
 			passed=$$((passed + 1)); \
 		else \
 			echo "FAIL (exit $$rc)"; \
+			echo "$$output"; \
 			errors=$$((errors + 1)); \
 		fi; \
 	done; \

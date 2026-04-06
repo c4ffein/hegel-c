@@ -81,6 +81,7 @@ test: all check-license
 			passed=$$((passed + 1)); \
 		else \
 			echo "FAIL (exit $$rc)"; \
+			echo "$$output"; \
 			errors=$$((errors + 1)); \
 		fi; \
 	done; \
@@ -96,6 +97,7 @@ test: all check-license
 			passed=$$((passed + 1)); \
 		else \
 			echo "FAIL (exit $$rc)"; \
+			echo "$$output"; \
 			errors=$$((errors + 1)); \
 		fi; \
 	done; \
@@ -111,6 +113,7 @@ test: all check-license
 			passed=$$((passed + 1)); \
 		else \
 			echo "FAIL — expected non-zero exit but got $$rc"; \
+			echo "$$output"; \
 			errors=$$((errors + 1)); \
 		fi; \
 	done; \
