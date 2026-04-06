@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein — see hegel/LICENSE for terms.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build libhegel_c.a
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            rust-version/target
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-${{ runner.os }}-${{ hashFiles('rust-version/Cargo.lock') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Build
+        run: cd rust-version && cargo build --release
+
+      - name: Upload library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libhegel_c
+          path: rust-version/target/release/libhegel_c.a
+
+  selftest:
+    name: Selftest (20 tests)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download library artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libhegel_c
+          path: rust-version/target/release/
+
+      - name: Run selftest suite
+        run: cd tests/selftest && make test
+
+  from-hegel-rust:
+    name: From-hegel-rust (19 tests)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download library artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libhegel_c
+          path: rust-version/target/release/
+
+      - name: Run from-hegel-rust test suite
+        run: cd tests/from-hegel-rust && make test
+
+  scotch:
+    name: Scotch integration tests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Scotch
+        run: sudo apt-get update && sudo apt-get install -y libscotch-dev
+
+      - name: Download library artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libhegel_c
+          path: rust-version/target/release/
+
+      - name: Run Scotch integration tests
+        run: cd tests/irl/scotch && make test
