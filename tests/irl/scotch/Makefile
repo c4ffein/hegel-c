@@ -4,19 +4,21 @@
 # Scotch integration tests — property-test real Scotch graph
 # partitioning with hegel-c.
 #
-# Scotch can come from:
-# - System install: apt install libscotch-dev
-# - Local build:   make inspiration && cd inspiration/scotch/src && make scotch
+# Two ways to get Scotch headers and libs:
 #
-# The Makefile tries inspiration/scotch first, falls back to system.
+#   make test-local  — uses inspiration/scotch built from source
+#                      (make inspiration && cd inspiration/scotch/src && make scotch)
+#
+#   make test-deb    — uses system libscotch-dev (apt install libscotch-dev)
+#                      headers in /usr/include/scotch, used in CI
 
 REPO_ROOT    = $(abspath ../../..)
 HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
 SCOTCH_LOCAL = $(REPO_ROOT)/inspiration/scotch
 
-# Use local Scotch build if available, else system
-SCOTCH_INC   = $(shell [ -d "$(SCOTCH_LOCAL)/include" ] && echo "-I$(SCOTCH_LOCAL)/include")
-SCOTCH_LIB   = $(shell [ -d "$(SCOTCH_LOCAL)/lib" ] && echo "-L$(SCOTCH_LOCAL)/lib")
+# Scotch paths — set by test-local / test-deb targets
+SCOTCH_INC   ?=
+SCOTCH_LIB   ?=
 
 CC       = gcc
 MPICC    = mpicc
@@ -32,21 +34,20 @@ TESTS_MPI  = test_dgraph_part
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_MPI)
 
-.PHONY: help all clean test hegel-c-lib check-license
+.PHONY: help all clean test test-local test-deb _run-tests hegel-c-lib check-license
 
 help:
 	@echo "tests/irl/scotch Makefile"
 	@echo ""
 	@echo "Targets:"
 	@echo "  help              Show this help (default)"
-	@echo "  all               Build all test binaries"
-	@echo "  test              Build, run tests, check SPDX headers"
+	@echo "  all               Build all test binaries (requires SCOTCH_INC / SCOTCH_LIB)"
+	@echo "  test-local        Build and test with inspiration/scotch (built from source)"
+	@echo "  test-deb          Build and test with system libscotch-dev"
 	@echo "  hegel-c-lib       Build libhegel_c.a only"
 	@echo "  check-license     Verify SPDX headers"
 	@echo "  clean             Remove test binaries"
 	@echo ""
-	@echo ""
-	@echo "Scotch source: $(if $(SCOTCH_INC),inspiration/scotch (local build),system)"
 	@echo "Includes PT-Scotch MPI tests (requires mpicc + libptscotch)"
 
 all: hegel-c-lib $(ALL_TESTS)
@@ -63,7 +64,20 @@ test_graph_part: test_graph_part.c hegel-c-lib
 test_dgraph_part: test_dgraph_part.c hegel-c-lib
 	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS_MPI)
 
-test: all check-license
+test:
+	@echo "ERROR: use 'make test-local' or 'make test-deb'" >&2; exit 1
+
+test-local: clean
+	$(MAKE) _run-tests \
+		SCOTCH_INC="-I$(SCOTCH_LOCAL)/include" \
+		SCOTCH_LIB="-L$(SCOTCH_LOCAL)/lib"
+
+test-deb: clean
+	$(MAKE) _run-tests \
+		SCOTCH_INC="-I/usr/include/scotch" \
+		SCOTCH_LIB=""
+
+_run-tests: all check-license
 	@passed=0; errors=0; total=0; \
 	echo ""; \
 	echo "==== Scotch sequential tests ===="; \
