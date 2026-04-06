@@ -367,17 +367,28 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
 /// to a clean process exit.  Without this, a double-panic can occur
 /// when hegel's panic hook interacts with the fork machinery.
 fn run_hegel<F: FnMut(TestCase) + Send + Sync>(h: Hegel<F>) {
-    let result = catch_unwind(AssertUnwindSafe(|| h.run()));
-    if let Err(e) = result {
-        let msg: String = if let Some(s) = e.downcast_ref::<String>() {
-            s.clone()
-        } else if let Some(s) = e.downcast_ref::<&str>() {
-            s.to_string()
-        } else {
-            "test failed".to_string()
-        };
-        eprintln!("{}", msg);
+    if run_hegel_result(h) != 0 {
         std::process::exit(1);
+    }
+}
+
+/// Like run_hegel, but returns 0 on success and 1 on failure instead of
+/// calling exit().  Allows callers to continue after a property failure.
+fn run_hegel_result<F: FnMut(TestCase) + Send + Sync>(h: Hegel<F>) -> c_int {
+    let result = catch_unwind(AssertUnwindSafe(|| h.run()));
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            let msg: String = if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else {
+                "test failed".to_string()
+            };
+            eprintln!("{}", msg);
+            1
+        }
     }
 }
 
@@ -418,6 +429,30 @@ pub unsafe extern "C" fn hegel_run_test_n(test_fn: CTestFn, n_cases: u64) {
     .settings(hegel::Settings::new().test_cases(n_cases)));
 }
 
+/// Like hegel_run_test, but returns 0 on success, 1 on failure instead
+/// of calling exit(1).  Allows multiple tests in one binary.
+///
+/// # Safety
+/// `test_fn` must be a valid C function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_test_result(test_fn: CTestFn) -> c_int {
+    run_hegel_result(Hegel::new(move |tc: TestCase| {
+        run_forked(test_fn, tc);
+    }))
+}
+
+/// Like hegel_run_test_n, but returns 0/1 instead of exiting.
+///
+/// # Safety
+/// `test_fn` must be a valid C function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_run_test_result_n(test_fn: CTestFn, n_cases: u64) -> c_int {
+    run_hegel_result(Hegel::new(move |tc: TestCase| {
+        run_forked(test_fn, tc);
+    })
+    .settings(hegel::Settings::new().test_cases(n_cases)))
+}
+
 /// Run a hegel property test WITHOUT fork isolation.
 ///
 /// **Not recommended for general use.** A crash (SIGSEGV, SIGABRT)
@@ -449,6 +484,91 @@ pub unsafe extern "C" fn hegel_run_test_nofork_n(test_fn: CTestFn, n_cases: u64)
         unsafe { test_fn(&mut htc) };
     })
     .settings(hegel::Settings::new().test_cases(n_cases)));
+}
+
+/**************************************/
+/*                                    */
+/* Test suite API.                    */
+/*                                    */
+/**************************************/
+
+/// A test suite that runs multiple tests in one binary, sharing a single
+/// Hegel server process.  Uses hegel_run_test_result internally.
+pub struct HegelSuite {
+    tests: Vec<(String, CTestFn)>,
+}
+
+/// Create a new empty test suite.
+#[unsafe(no_mangle)]
+pub extern "C" fn hegel_suite_new() -> *mut HegelSuite {
+    Box::into_raw(Box::new(HegelSuite { tests: Vec::new() }))
+}
+
+/// Add a named test to the suite.
+///
+/// # Safety
+/// `suite` must be a valid pointer from hegel_suite_new.
+/// `name` must be a valid null-terminated C string.
+/// `test_fn` must be a valid C function pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_suite_add(
+    suite: *mut HegelSuite,
+    name: *const c_char,
+    test_fn: CTestFn,
+) {
+    let s = unsafe { &mut *suite };
+    let n = if name.is_null() {
+        "<unnamed>".to_string()
+    } else {
+        unsafe { CStr::from_ptr(name) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    s.tests.push((n, test_fn));
+}
+
+/// Run all tests in the suite.  Prints results to stderr.
+/// Returns 0 if all passed, 1 if any failed.
+///
+/// # Safety
+/// `suite` must be a valid pointer from hegel_suite_new.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_suite_run(suite: *mut HegelSuite) -> c_int {
+    let s = unsafe { &*suite };
+    let total = s.tests.len();
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+
+    eprintln!();
+    eprintln!("==== Running {} test(s) ====", total);
+    for (name, test_fn) in &s.tests {
+        eprint!("  {:<35}", name);
+        let rc = run_hegel_result(Hegel::new({
+            let f = *test_fn;
+            move |tc: TestCase| { run_forked(f, tc); }
+        }));
+        if rc == 0 {
+            eprintln!("OK");
+            passed += 1;
+        } else {
+            eprintln!("FAIL");
+            failed += 1;
+        }
+    }
+    eprintln!();
+    eprintln!("==== Results: {}/{} passed, {} failed ====", passed, total, failed);
+    if failed > 0 { 1 } else { 0 }
+}
+
+/// Free a test suite.  Safe to call with NULL.
+///
+/// # Safety
+/// `suite` must be a valid pointer from hegel_suite_new, or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hegel_suite_free(suite: *mut HegelSuite) {
+    if !suite.is_null() {
+        unsafe { drop(Box::from_raw(suite)); }
+    }
 }
 
 /// Fail the current test case with a message. Triggers hegel shrinking.
@@ -736,6 +856,25 @@ pub unsafe extern "C-unwind" fn hegel_draw_regex(
     }
     unsafe { *buf.add(copy_len) = 0; }
     copy_len as c_int
+}
+
+/// Print a debug message that only appears during the final replay of a
+/// failing test case (not during generation or shrinking).  Useful for
+/// annotating the minimal counterexample with computed values.
+///
+/// # Safety
+/// `tc` must be a valid pointer obtained from a hegel test callback.
+/// `msg` must be a valid null-terminated C string, or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn hegel_note(tc: *mut HegelTestCase, msg: *const c_char) {
+    let message = if msg.is_null() {
+        return;
+    } else {
+        unsafe { CStr::from_ptr(msg) }
+            .to_string_lossy()
+    };
+    let htc = unsafe { &*tc };
+    htc.tc.note(&message);
 }
 
 /// Assume a condition. If false, this test case is discarded (not a failure).

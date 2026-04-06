@@ -15,20 +15,41 @@ LDFLAGS      = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 TESTS_PASS = test_integers_i32_bounds \
              test_integers_i64_bounds \
              test_integers_u64_bounds \
+             test_floats_f32_bounds \
+             test_floats_f64_bounds \
              test_combinators_filter \
              test_combinators_one_of \
+             test_combinators_one_of_many \
              test_combinators_optional \
              test_combinators_flat_map \
-             test_combinators_map
+             test_combinators_map \
+             test_lists_bounds \
+             test_lists_mapped
 
 # Tests that verify shrink quality (should FAIL, exit non-zero, check shrunk value)
 TESTS_SHRINK = test_shrink_int_above_13 \
                test_shrink_int_to_zero \
-               test_shrink_boundary_100
+               test_shrink_boundary_101 \
+               test_shrink_bounded_zero \
+               test_shrink_bounded_positive \
+               test_shrink_large_range
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_SHRINK)
 
-.PHONY: all clean test report verify hegel-c-lib
+.PHONY: help all clean test report verify hegel-c-lib check-license
+
+help:
+	@echo "tests/from-hegel-rust Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  help              Show this help (default)"
+	@echo "  all               Build Rust lib + all test binaries"
+	@echo "  test              Build, run tests, check SPDX headers"
+	@echo "  hegel-c-lib       Build libhegel_c.a only"
+	@echo "  check-license     Verify SPDX headers on all source files"
+	@echo "  report            Generate correspondence report (report.md)"
+	@echo "  verify            Semantic verify C↔Rust equivalence (requires claude)"
+	@echo "  clean             Remove test binaries and reports"
 
 all: hegel-c-lib $(ALL_TESTS)
 
@@ -41,7 +62,7 @@ hegel-c-lib:
 test_%: test_%.c hegel-c-lib
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test: all
+test: all check-license
 	@passed=0; failed=0; total=0; \
 	echo ""; \
 	echo "==== PASS tests (all examples satisfy predicate) ===="; \
@@ -84,6 +105,20 @@ test: all
 	echo "==== Results: $$passed/$$total passed, $$failed errors ===="; \
 	if [ $$failed -ne 0 ]; then exit 1; fi
 
+check-license:
+	@missing=0; \
+	for f in *.c *.md Makefile; do \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
+			echo "  MISSING: $$f"; \
+			missing=$$((missing + 1)); \
+		fi; \
+	done; \
+	if [ $$missing -ne 0 ]; then \
+		echo "$$missing file(s) missing SPDX header"; \
+		exit 1; \
+	fi; \
+	echo "All files have SPDX headers."
+
 report:
 	@echo "# hegel-rust → hegel-c Test Correspondence Report" > $(CURDIR)/report.md; \
 	echo "" >> $(CURDIR)/report.md; \
@@ -124,7 +159,13 @@ report:
 	cat $(CURDIR)/report.md
 
 verify:
-	@if [ ! -d "$(REPO_ROOT)/inspiration/hegel-rust" ]; then \
+	@if ! command -v claude >/dev/null 2>&1; then \
+		echo "ERROR: 'claude' CLI not found."; \
+		echo "  This target uses Claude Code to semantically verify C tests against their Rust originals."; \
+		echo "  Install: https://docs.anthropic.com/en/docs/claude-code"; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$(REPO_ROOT)/inspiration/hegel-rust" ]; then \
 		echo "ERROR: Run 'make inspiration' from repo root first."; \
 		exit 1; \
 	fi; \

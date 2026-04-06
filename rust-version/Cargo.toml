@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["staticlib"]
 
 [dependencies]
-hegeltest = "0.1"
+hegeltest = "0.4"
 libc = "0.2"
 
 [profile.release]

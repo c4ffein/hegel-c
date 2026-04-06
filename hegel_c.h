@@ -34,9 +34,16 @@ void hegel_set_case_setup (void (*setup_fn)(void));
 /* ---- Test runners ---- */
 
 /* Run a property test: test_fn is called once per generated test case.
-** Each test case runs in a forked child process (crash-safe). */
+** Each test case runs in a forked child process (crash-safe).
+** On failure, prints the counterexample and calls exit(1). */
 void hegel_run_test (void (*test_fn)(hegel_testcase *));
 void hegel_run_test_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases);
+
+/* Same semantics but returns 0 on success, 1 on failure instead of
+** calling exit().  Allows running multiple tests in one binary while
+** sharing a single Hegel server process. */
+int hegel_run_test_result (void (*test_fn)(hegel_testcase *));
+int hegel_run_test_result_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases);
 
 /* Same as above but WITHOUT fork isolation.
 ** NOT RECOMMENDED: a crash kills the process with no shrinking.
@@ -64,6 +71,40 @@ int hegel_draw_text  (hegel_testcase * tc, int min_size, int max_size,
 ** hegel_draw_text. */
 int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
                       char * buf, int capacity);
+
+/* ---- Test suite ---- */
+
+/* A test suite runs multiple tests in one binary, sharing a single
+** Hegel server process.  This amortizes the ~1s server startup cost
+** across all tests instead of paying it per-binary.
+**
+** Example:
+**   hegel_suite * s = hegel_suite_new ();
+**   hegel_suite_add (s, "test_foo", test_foo);
+**   hegel_suite_add (s, "test_bar", test_bar);
+**   int rc = hegel_suite_run (s);
+**   hegel_suite_free (s);
+**   return rc;
+*/
+typedef struct HegelSuite hegel_suite;
+
+hegel_suite * hegel_suite_new  (void);
+void          hegel_suite_add  (hegel_suite * suite, const char * name,
+                                void (*test_fn)(hegel_testcase *));
+int           hegel_suite_run  (hegel_suite * suite);
+void          hegel_suite_free (hegel_suite * suite);
+
+/* ---- Debug output ---- */
+
+/* Print a message during the final replay of a failing test case only.
+** Does nothing during generation and shrinking — use this to annotate
+** the minimal counterexample with computed values.
+** Example:
+**   char buf[128];
+**   snprintf(buf, sizeof(buf), "computed hash = %u", hash);
+**   hegel_note(tc, buf);
+*/
+void hegel_note (hegel_testcase * tc, const char * msg);
 
 /* ---- Assertions and assumptions ---- */
 

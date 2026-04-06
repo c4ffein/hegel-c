@@ -1,3 +1,7 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 c4ffein
+     Part of hegel-c — see hegel/LICENSE for terms. -->
+
 # Verify one hegel-rust → hegel-c test equivalence
 
 You are comparing a C test file (from hegel-c) against the Rust test it claims to be equivalent to.

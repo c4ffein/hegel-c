@@ -1,19 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 c4ffein — see hegel/LICENSE for terms.
 
-HEGEL_DIR    = ..
-HEGEL_C_LIB  = $(HEGEL_DIR)/rust-version/target/release
-SCOTCH_LIB   = ../../build/lib
-
-# Hegel server is resolved relative to cwd (.hegel/venv/bin/hegel).
-# REPO_ROOT must point to the repo root where .hegel/ lives.
 REPO_ROOT    = $(abspath ../..)
+HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
 
 CC       = gcc
-CFLAGS   = -Wall -Wextra -O2 -I$(HEGEL_DIR) -funwind-tables -fexceptions
-LDFLAGS  = -L$(HEGEL_C_LIB) -L$(SCOTCH_LIB) \
-           -lhegel_c -lscotch -lscotcherr \
-           -lpthread -lm -ldl
+CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
+LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
 # Tests that should PASS (exit 0)
 TESTS_PASS = test_pass_simple \
@@ -25,12 +18,16 @@ TESTS_PASS = test_pass_simple \
              test_gen_optional \
              test_gen_list \
              test_gen_map_ctx \
-             test_gen_composed
+             test_gen_composed \
+             test_result_api \
+             test_suite_api \
+             test_strategy_gen
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
              test_shrink_overflow \
-             test_shrink_square
+             test_shrink_square \
+             test_strategy_shrink
 
 # Tests that should FAIL via crash isolation (exit non-zero)
 TESTS_CRASH = test_crash_segfault \
@@ -39,12 +36,26 @@ TESTS_CRASH = test_crash_segfault \
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH)
 
-.PHONY: all clean test hegel-c-lib check-license
+.PHONY: help all clean test hegel-c-lib check-license
+
+help:
+	@echo "tests/selftest Makefile"
+	@echo ""
+	@echo "Targets:"
+	@echo "  help              Show this help (default)"
+	@echo "  all               Build Rust lib + all test binaries"
+	@echo "  test              Build, run all tests, check SPDX headers"
+	@echo "  hegel-c-lib       Build libhegel_c.a only"
+	@echo "  check-license     Verify SPDX headers on all source files"
+	@echo "  clean             Remove test binaries"
 
 all: hegel-c-lib $(ALL_TESTS)
 
 hegel-c-lib:
-	cd $(HEGEL_DIR)/rust-version && cargo build --release
+	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ]; then \
+		echo "Building libhegel_c.a..."; \
+		cd $(REPO_ROOT)/rust-version && cargo build --release; \
+	fi
 
 test_%: test_%.c hegel-c-lib
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
@@ -103,8 +114,8 @@ test: all check-license
 
 check-license:
 	@missing=0; \
-	for f in $(HEGEL_DIR)/hegel_c.h \
-	         $(HEGEL_DIR)/rust-version/src/lib.rs \
+	for f in $(REPO_ROOT)/hegel_c.h \
+	         $(REPO_ROOT)/rust-version/src/lib.rs \
 	         *.c Makefile; do \
 		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
 			echo "  MISSING: $$f"; \
