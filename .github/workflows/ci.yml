@@ -76,6 +76,33 @@ jobs:
       - name: Run from-hegel-rust test suite
         run: cd tests/from-hegel-rust && make test
 
+  mpi:
+    name: MPI tests (Debian 13 / OpenMPI 5)
+    needs: build
+    runs-on: ubuntu-latest
+    container: debian:13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y gcc make curl openmpi-bin libopenmpi-dev
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Download library artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libhegel_c
+          path: rust-version/target/release/
+
+      - name: Run MPI tests
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          cd tests/mpi && make test
+
   scotch:
     name: Scotch integration tests (Debian 13 / OpenMPI 5)
     needs: build
