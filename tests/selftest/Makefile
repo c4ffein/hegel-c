@@ -21,13 +21,16 @@ TESTS_PASS = test_pass_simple \
              test_gen_composed \
              test_result_api \
              test_suite_api \
-             test_strategy_gen
+             test_strategy_gen \
+             test_span_basic \
+             test_span_tree_json_passes
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
              test_shrink_overflow \
              test_shrink_square \
-             test_strategy_shrink
+             test_strategy_shrink \
+             test_span_tree_json_shrinks
 
 # Tests that should FAIL via crash isolation (exit non-zero)
 TESTS_CRASH = test_crash_segfault \
