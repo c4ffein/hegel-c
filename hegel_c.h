@@ -106,6 +106,59 @@ void          hegel_suite_free (hegel_suite * suite);
 */
 void hegel_note (hegel_testcase * tc, const char * msg);
 
+/* ---- Spans ----
+**
+** Spans group draws together so the shrinker can treat them as one
+** structural unit instead of as independent bytes.  Wrap the draws
+** that produce a single logical thing — a list element, a struct, a
+** oneof variant — between hegel_start_span and hegel_stop_span.
+**
+** Without spans, the shrinker can only delete or shrink individual
+** bytes; with spans, it can drop a whole list element, swap two
+** sibling subtrees, or minimize one variant without touching the others.
+** Spans nest; always pair start/stop.
+**
+** Example (manual list of structs):
+**   hegel_start_span(tc, HEGEL_SPAN_LIST);
+**   int n = hegel_draw_int(tc, 0, 10);
+**   for (int i = 0; i < n; i++) {
+**     hegel_start_span(tc, HEGEL_SPAN_LIST_ELEMENT);
+**     int x = hegel_draw_int(tc, 0, 100);
+**     int y = hegel_draw_int(tc, 0, 100);
+**     // ... use x, y ...
+**     hegel_stop_span(tc, 0);
+**   }
+**   hegel_stop_span(tc, 0);
+**
+** `label` identifies the kind of span.  Built-in labels mirror
+** hegeltest's internal labels (LIST, ONE_OF, etc.) so the server
+** treats them the same as native generators.  User code should use
+** values >= HEGEL_SPAN_USER to avoid colliding with built-ins. */
+
+#define HEGEL_SPAN_LIST          1
+#define HEGEL_SPAN_LIST_ELEMENT  2
+#define HEGEL_SPAN_SET           3
+#define HEGEL_SPAN_SET_ELEMENT   4
+#define HEGEL_SPAN_MAP           5
+#define HEGEL_SPAN_MAP_ENTRY     6
+#define HEGEL_SPAN_TUPLE         7
+#define HEGEL_SPAN_ONE_OF        8
+#define HEGEL_SPAN_OPTIONAL      9
+#define HEGEL_SPAN_FIXED_DICT   10
+#define HEGEL_SPAN_FLAT_MAP     11
+#define HEGEL_SPAN_FILTER       12
+#define HEGEL_SPAN_MAPPED       13
+#define HEGEL_SPAN_SAMPLED_FROM 14
+#define HEGEL_SPAN_ENUM_VARIANT 15
+#define HEGEL_SPAN_USER       1024  /* user labels start here */
+
+void hegel_start_span (hegel_testcase * tc, uint64_t label);
+
+/* End the current span.  Pass 0 for `discard` in normal use.
+** Pass non-zero only when the span turned out to be a dead end
+** (e.g. filtered out) so the shrinker can ignore its bytes. */
+void hegel_stop_span  (hegel_testcase * tc, int discard);
+
 /* ---- Assertions and assumptions ---- */
 
 /* If condition is 0, discard this test case (not a failure) */

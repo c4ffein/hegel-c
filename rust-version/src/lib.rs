@@ -54,6 +54,8 @@ const MSG_DRAW_DOUBLE: u8 = 9;  /* payload: min(8) + max(8)   ; response: val(8)
 const MSG_DRAW_FLOAT:  u8 = 10; /* payload: min(4) + max(4)   ; response: val(4)  */
 const MSG_DRAW_TEXT:   u8 = 11; /* payload: min(4) + max(4)   ; response: len(4) + bytes(len) */
 const MSG_DRAW_REGEX:  u8 = 12; /* payload: plen(4) + pat(plen) ; response: len(4) + bytes(len) */
+const MSG_START_SPAN:  u8 = 13; /* payload: label(8)           ; no response       */
+const MSG_STOP_SPAN:   u8 = 14; /* payload: discard(1)         ; no response       */
 
 
 /*
@@ -213,6 +215,17 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let bytes = val.as_bytes();
                 pipe_write_all(resp_wr, &(bytes.len() as u32).to_le_bytes());
                 pipe_write_all(resp_wr, bytes);
+            }
+            MSG_START_SPAN => {
+                let mut buf = [0u8; 8];
+                if !pipe_read_exact(req_rd, &mut buf) { return ChildMsg::Eof; }
+                let label = u64::from_le_bytes(buf);
+                tc.start_span(label);
+            }
+            MSG_STOP_SPAN => {
+                let mut buf = [0u8; 1];
+                if !pipe_read_exact(req_rd, &mut buf) { return ChildMsg::Eof; }
+                tc.stop_span(buf[0] != 0);
             }
             MSG_ASSUME => {
                 return ChildMsg::Assume;
@@ -875,6 +888,53 @@ pub unsafe extern "C-unwind" fn hegel_note(tc: *mut HegelTestCase, msg: *const c
     };
     let htc = unsafe { &*tc };
     htc.tc.note(&message);
+}
+
+/// Begin a span — group subsequent draws into one logical unit for shrinking.
+///
+/// Spans tell hegel "the draws between start_span and stop_span belong
+/// together." The shrinker can then operate on the span as a whole
+/// (delete it, minimize it, swap it) instead of treating each draw
+/// independently. Wrap the draws produced by a list element, struct,
+/// oneof variant, etc. — anywhere a *group* of draws describes one
+/// structural unit. Spans nest; always pair start_span/stop_span.
+///
+/// `label` identifies the *kind* of span (LIST, ONE_OF, etc.). Built-in
+/// labels are 1..15; user code should use values >= HEGEL_SPAN_USER (1024).
+///
+/// # Safety
+/// `tc` must be a valid pointer obtained from a hegel test callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn hegel_start_span(tc: *mut HegelTestCase, label: u64) {
+    if unsafe { IN_FORK_CHILD } {
+        let mut req = [0u8; 9];
+        req[0] = MSG_START_SPAN;
+        req[1..9].copy_from_slice(&label.to_le_bytes());
+        pipe_write_all(unsafe { FORK_REQ_WR }, &req);
+        return;
+    }
+    let htc = unsafe { &*tc };
+    htc.tc.start_span(label);
+}
+
+/// End the current span.  If `discard` is non-zero, the span and its
+/// bytes are marked as discarded — used by filter/assume style code to
+/// tell the shrinker "this group was a dead end, don't bother
+/// minimizing it."  For ordinary structural grouping, pass 0.
+///
+/// # Safety
+/// `tc` must be a valid pointer obtained from a hegel test callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn hegel_stop_span(tc: *mut HegelTestCase, discard: c_int) {
+    if unsafe { IN_FORK_CHILD } {
+        let mut req = [0u8; 2];
+        req[0] = MSG_STOP_SPAN;
+        req[1] = if discard != 0 { 1 } else { 0 };
+        pipe_write_all(unsafe { FORK_REQ_WR }, &req);
+        return;
+    }
+    let htc = unsafe { &*tc };
+    htc.tc.stop_span(discard != 0);
 }
 
 /// Assume a condition. If false, this test case is discarded (not a failure).
