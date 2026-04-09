@@ -11,7 +11,7 @@ hegel-c is a C binding for Hegel, a property-based testing framework. It provide
 - `hegel_c.h` — Public C API (opaque types, draw functions, generators, assertions, suite API)
 - `rust-version/src/lib.rs` — Rust FFI implementation, compiled to `libhegel_c.a`
 - `tests/selftest/` — 20 self-tests (PASS/FAIL/CRASH)
-- `tests/from-hegel-rust/` — 19 tests ported from hegel-rust
+- `tests/from-hegel-rust/` — 26 tests ported from hegel-rust
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI)
 - `docs/mpi-testing.md` — MPI integration guide
@@ -30,7 +30,7 @@ Optional: `mpicc`/OpenMPI for MPI tests, Scotch/PT-Scotch for IRL tests.
 make help                       # all targets and proxy commands
 
 make selftest-test              # 20 tests (13 PASS, 4 FAIL, 3 CRASH)
-make from-hegel-rust-test       # 19 tests (13 PASS, 6 SHRINK)
+make from-hegel-rust-test       # 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
 

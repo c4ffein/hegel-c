@@ -12,9 +12,7 @@ CFLAGS       = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
 LDFLAGS      = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
 # Tests that verify all examples satisfy a predicate (should PASS, exit 0)
-TESTS_PASS = test_integers_i32_bounds \
-             test_integers_i64_bounds \
-             test_integers_u64_bounds \
+TESTS_PASS = test_integers_bounds \
              test_floats_f32_bounds \
              test_floats_f64_bounds \
              test_combinators_filter \
@@ -23,6 +21,8 @@ TESTS_PASS = test_integers_i32_bounds \
              test_combinators_optional \
              test_combinators_flat_map \
              test_combinators_map \
+             test_combinators_sampled_from \
+             test_compose_dependent \
              test_lists_bounds \
              test_lists_mapped
 
@@ -120,7 +120,11 @@ check-license:
 	echo "All files have SPDX headers."
 
 report:
-	@echo "# hegel-rust → hegel-c Test Correspondence Report" > $(CURDIR)/report.md; \
+	@echo "<!-- SPDX-License-Identifier: MIT" > $(CURDIR)/report.md; \
+	echo "     Copyright (c) 2026 c4ffein" >> $(CURDIR)/report.md; \
+	echo "     Part of hegel-c — see hegel/LICENSE for terms. -->" >> $(CURDIR)/report.md; \
+	echo "" >> $(CURDIR)/report.md; \
+	echo "# hegel-rust → hegel-c Test Correspondence Report" >> $(CURDIR)/report.md; \
 	echo "" >> $(CURDIR)/report.md; \
 	echo "Generated: $$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $(CURDIR)/report.md; \
 	echo "" >> $(CURDIR)/report.md; \
@@ -171,7 +175,11 @@ verify:
 	fi; \
 	prompt=$$(cat $(CURDIR)/VERIFY_PROMPT.md); \
 	passed=0; failed=0; total=0; \
-	echo "# Equivalence Verification Report" > $(CURDIR)/verify-report.md; \
+	echo "<!-- SPDX-License-Identifier: MIT" > $(CURDIR)/verify-report.md; \
+	echo "     Copyright (c) 2026 c4ffein" >> $(CURDIR)/verify-report.md; \
+	echo "     Part of hegel-c — see hegel/LICENSE for terms. -->" >> $(CURDIR)/verify-report.md; \
+	echo "" >> $(CURDIR)/verify-report.md; \
+	echo "# Equivalence Verification Report" >> $(CURDIR)/verify-report.md; \
 	echo "" >> $(CURDIR)/verify-report.md; \
 	echo "Generated: $$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $(CURDIR)/verify-report.md; \
 	echo "" >> $(CURDIR)/verify-report.md; \

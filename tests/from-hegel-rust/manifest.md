@@ -8,9 +8,14 @@ Each line maps a Rust test to its C equivalent. Run `make report` to verify.
 
 ## Ported
 
-- [x] `test_integers.rs::test_i32` → `test_integers_i32_bounds.c`
-- [x] `test_integers.rs::test_i64` → `test_integers_i64_bounds.c`
-- [x] `test_integers.rs::test_u64` → `test_integers_u64_bounds.c`
+- [x] `test_integers.rs::test_i8` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_i16` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_i32` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_i64` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_u8` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_u16` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_u32` → `test_integers_bounds.c`
+- [x] `test_integers.rs::test_u64` → `test_integers_bounds.c`
 - [x] `test_combinators.rs::test_filter` → `test_combinators_filter.c`
 - [x] `test_combinators.rs::test_one_of_returns_value_from_one_generator` → `test_combinators_one_of.c`
 - [x] `test_combinators.rs::test_optional_respects_inner_generator_bounds` → `test_combinators_optional.c`
@@ -28,16 +33,14 @@ Each line maps a Rust test to its C equivalent. Run `make report` to verify.
 - [x] `test_collections.rs::test_vec_with_{max,min,min_and_max}_size` → `test_lists_bounds.c`
 - [x] `test_collections.rs::test_vec_with_mapped_elements` → `test_lists_mapped.c`
 
+- [x] `test_combinators.rs::test_sampled_from_returns_element_from_list` → `test_combinators_sampled_from.c`
+- [x] `test_compose.rs::test_compose_dependent_generation` → `test_compose_dependent.c`
+- [x] `test_compose.rs::test_compose_list_with_index` → `test_compose_dependent.c` (second test in same file)
+
 ## Not yet ported — portable
 
-- [ ] `test_integers.rs::test_i8` — needs i8 draw (hegel-c has no hegel_draw_i8)
-- [ ] `test_integers.rs::test_i16` — needs i16 draw
-- [ ] `test_integers.rs::test_u8` — needs u8 draw
-- [ ] `test_integers.rs::test_u16` — needs u16 draw
-- [ ] `test_integers.rs::test_u32` — needs u32 draw
 - [ ] `test_integers.rs::test_isize` — covered by i64
 - [ ] `test_integers.rs::test_usize` — covered by hegel_draw_usize
-- [ ] `test_combinators.rs::test_sampled_from_returns_element_from_list` — needs list generation + sampled_from
 - [ ] `test_combinators.rs::test_sampled_from_strings` — needs text draw + sampled_from
 - [ ] `test_combinators.rs::test_boxed_generator_clone` — Rust-specific (boxed), test draw range instead
 - [ ] `test_floats.rs::exclude_min/exclude_max` — hegel-c has no exclude_min/exclude_max option
@@ -45,7 +48,6 @@ Each line maps a Rust test to its C equivalent. Run `make report` to verify.
 - [ ] `test_shrink_quality/collections.rs::*` — needs list draw + shrink verification
 - [ ] `test_shrink_quality/strings.rs::*` — needs text draw + shrink verification
 - [ ] `test_shrink_quality/floats.rs::*` — needs float draw + shrink verification
-- [ ] `test_compose.rs` — dependent generation (multiple draws)
 - [ ] `test_validation.rs` — error handling for invalid generator configs
 - [ ] `test_arrays.rs` — fixed-size array generation
 

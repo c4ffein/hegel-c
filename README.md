@@ -14,7 +14,7 @@ Currently a mostly vibe-coded WiP duct-taped C library — your tests include a 
 | Suite | Tests | Command |
 |-------|-------|---------|
 | selftest | 20 (13 PASS, 4 FAIL, 3 CRASH) | `make selftest-test` |
-| from-hegel-rust | 19 (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
+| from-hegel-rust | 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
 | Scotch IRL | 2 (1 sequential, 1 PT-Scotch MPI) | `make scotch-test` |
 
@@ -25,7 +25,7 @@ MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [d
 - [x] Test suite API (`hegel_suite_new/add/run/free`) — run multiple tests sharing one server
 - [x] `hegel_note(tc, msg)` — debug output on final replay only
 - [x] Fix from-hegel-rust test mismatches — `find_any` edge cases, shrink boundary 101
-- [x] Port 19 hegel-rust tests — integers, floats, lists, combinators, shrink quality
+- [x] Port 26 hegel-rust tests — integers (i8–u64), floats, lists, combinators, compose, sampled_from, shrink quality
 - [x] Grammar-based strategy fuzzer — `test_strategy_gen` + `test_strategy_shrink` (shrinks to `/vert>0?b:b;`)
 - [x] CI integration — `.github/workflows/ci.yml` (selftest, from-hegel-rust, Scotch)
 - [x] PT-Scotch MPI tests — fork mode + `MPI_Comm_spawn` + `MPI_Intercomm_merge`, no mpiexec. [Full guide](docs/mpi-testing.md).
@@ -34,7 +34,7 @@ MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [d
 - [x] "Draw N:" trace — not a bug, only on final replay (`is_last_run`)
 
 ## TODO
-- [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need new draw types (i8/i16/u8/u16/u32) or features (exclude_min, NaN/inf).
+- [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
 - [ ] `hegel_target(tc, value, label)` — property-directed testing. Not in hegeltest 0.1.18 or 0.4.3, blocked upstream.
 - [ ] Pool hegel server across test binaries — hegeltest pools within a process, but separate binaries each pay ~1s. Suite API partially addresses this.
 - [ ] Parallel test execution
