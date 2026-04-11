@@ -24,11 +24,11 @@ TESTS_PASS = test_pass_simple \
              test_strategy_gen \
              test_span_basic \
              test_span_tree_json_passes \
-             test_gen_tree_json \
-             test_gen_variants \
-             test_gen_complex \
-             test_gen_nested_array \
-             test_gen_array_combos
+             test_gen_schema_recursive_tree_json_roundtrip \
+             test_gen_schema_union_variant_tagged_untagged \
+             test_gen_schema_array_of_variant_struct_pointers \
+             test_gen_schema_nested_array_of_arrays_matrix \
+             test_gen_schema_array_all_composition_patterns
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
