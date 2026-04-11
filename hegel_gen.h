@@ -82,6 +82,10 @@ typedef enum {
   HEGEL_SCH_STRUCT,          /* allocate struct, draw fields        */
   HEGEL_SCH_OPTIONAL_PTR,    /* draw bool; if true draw inner       */
   HEGEL_SCH_ARRAY,           /* draw len; malloc array; draw elems  */
+  HEGEL_SCH_ARRAY_INLINE,    /* array of inline structs (contiguous)*/
+  HEGEL_SCH_UNION,           /* tagged union: tag + inline fields   */
+  HEGEL_SCH_UNION_UNTAGGED,  /* tag-less union: tag in shape only   */
+  HEGEL_SCH_VARIANT,         /* tag + pointer to separate struct    */
   HEGEL_SCH_SELF             /* recursive ref (resolved by ctor)    */
 } hegel_schema_kind;
 
@@ -118,6 +122,24 @@ typedef struct hegel_schema {
       int               max_len;
     }                                                  array_def;
     struct {
+      size_t            len_offset;   /* where to write count        */
+      struct hegel_schema * elem;     /* element struct schema        */
+      size_t            elem_size;    /* sizeof one element           */
+      int               min_len;
+      int               max_len;
+    }                                                  array_inline_def;
+    struct {
+      size_t            tag_offset;   /* where to write the tag (or (size_t)-1 for untagged) */
+      int               n_cases;
+      struct hegel_schema *** cases;  /* cases[i] is a NULL-terminated field list */
+    }                                                  union_def;
+    struct {
+      size_t            tag_offset;
+      size_t            ptr_offset;   /* where to store the chosen struct ptr */
+      int               n_cases;
+      struct hegel_schema ** cases;   /* cases[i] is a STRUCT schema */
+    }                                                  variant_def;
+    struct {
       struct hegel_schema * target;
     }                                                  self_ref;
   };
@@ -132,7 +154,8 @@ typedef enum {
   HEGEL_SHAPE_TEXT,
   HEGEL_SHAPE_STRUCT,
   HEGEL_SHAPE_OPTIONAL,
-  HEGEL_SHAPE_ARRAY
+  HEGEL_SHAPE_ARRAY,
+  HEGEL_SHAPE_VARIANT         /* tag + inner shape of chosen variant */
 } hegel_shape_kind;
 
 typedef struct hegel_shape {
@@ -151,6 +174,10 @@ typedef struct hegel_shape {
       int               len;
       struct hegel_shape ** elems;
     }                                                  array_shape;
+    struct {
+      int               tag;
+      struct hegel_shape * inner;  /* shape of the chosen variant */
+    }                                                  variant_shape;
   };
 } hegel_shape;
 
@@ -358,6 +385,82 @@ hegel_schema_array_at (size_t ptr_offset, size_t len_offset,
 }
 
 static hegel_schema *
+hegel_schema_array_inline_at (size_t ptr_offset, size_t len_offset,
+                              hegel_schema * elem, size_t elem_size,
+                              int min_len, int max_len)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_ARRAY_INLINE;
+  s->offset = ptr_offset;
+  s->array_inline_def.len_offset = len_offset;
+  s->array_inline_def.elem = elem;
+  s->array_inline_def.elem_size = elem_size;
+  s->array_inline_def.min_len = min_len;
+  s->array_inline_def.max_len = max_len;
+  return (s);
+}
+
+/* Union constructors.  `cases` is an array of NULL-terminated field
+** lists (each case is a set of fields to fill into the parent struct).
+** Terminated by a NULL entry.
+**
+** For UNION: tag_offset is where to write the chosen tag.
+** For UNION_UNTAGGED: tag_offset is (size_t)-1 (tag lives in shape only). */
+static hegel_schema *
+hegel__union (size_t tag_offset, hegel_schema_kind kind,
+              hegel_schema *** case_list)
+{
+  int                 n;
+  hegel_schema *      s;
+
+  for (n = 0; case_list[n] != NULL; n ++) {}
+
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = kind;
+  s->offset = 0;
+  s->union_def.tag_offset = tag_offset;
+  s->union_def.n_cases = n;
+  s->union_def.cases = (hegel_schema ***) malloc (
+      (size_t) n * sizeof (hegel_schema **));
+  for (int i = 0; i < n; i ++) {
+    /* Deep-copy each case's field list — compound literals from
+    ** HEGEL_CASE live on the caller's stack and die on return. */
+    int nf;
+    for (nf = 0; case_list[i][nf] != NULL; nf ++) {}
+    s->union_def.cases[i] = (hegel_schema **) malloc (
+        (size_t) (nf + 1) * sizeof (hegel_schema *));
+    for (int j = 0; j <= nf; j ++)
+      s->union_def.cases[i][j] = case_list[i][j];
+  }
+  return (s);
+}
+
+/* Variant constructor.  `cases` is a NULL-terminated array of STRUCT
+** schemas — one per variant.  The chosen one gets allocated and its
+** pointer stored at ptr_offset. */
+static hegel_schema *
+hegel_schema_variant_v (size_t tag_offset, size_t ptr_offset,
+                        hegel_schema ** case_list)
+{
+  int                 n;
+  hegel_schema *      s;
+
+  for (n = 0; case_list[n] != NULL; n ++) {}
+
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_VARIANT;
+  s->offset = 0;
+  s->variant_def.tag_offset = tag_offset;
+  s->variant_def.ptr_offset = ptr_offset;
+  s->variant_def.n_cases = n;
+  s->variant_def.cases = (hegel_schema **) malloc (
+      (size_t) n * sizeof (hegel_schema *));
+  for (int i = 0; i < n; i ++)
+    s->variant_def.cases[i] = case_list[i];
+  return (s);
+}
+
+static hegel_schema *
 hegel_schema_self (void)
 {
   hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
@@ -382,9 +485,22 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
     case HEGEL_SCH_ARRAY:
       hegel__resolve_self (node->array_def.elem, target);
       break;
+    case HEGEL_SCH_ARRAY_INLINE:
+      hegel__resolve_self (node->array_inline_def.elem, target);
+      break;
     case HEGEL_SCH_STRUCT:
       for (int i = 0; i < node->struct_def.n_fields; i ++)
         hegel__resolve_self (node->struct_def.fields[i], target);
+      break;
+    case HEGEL_SCH_UNION:
+    case HEGEL_SCH_UNION_UNTAGGED:
+      for (int i = 0; i < node->union_def.n_cases; i ++)
+        for (int j = 0; node->union_def.cases[i][j] != NULL; j ++)
+          hegel__resolve_self (node->union_def.cases[i][j], target);
+      break;
+    case HEGEL_SCH_VARIANT:
+      for (int i = 0; i < node->variant_def.n_cases; i ++)
+        hegel__resolve_self (node->variant_def.cases[i], target);
       break;
     default:
       break;
@@ -508,6 +624,73 @@ hegel_schema_struct_v (size_t size, hegel_schema ** field_list)
 #define HEGEL_ARRAY(type, ptr_field, len_field, elem, lo, hi) \
   hegel_schema_array_at (offsetof (type, ptr_field),           \
       offsetof (type, len_field), (elem), (lo), (hi))
+
+#define HEGEL_ARRAY_INLINE(type, ptr_field, len_field, elem, elem_sz, lo, hi) \
+  hegel_schema_array_inline_at (offsetof (type, ptr_field),    \
+      offsetof (type, len_field), (elem), (elem_sz), (lo), (hi))
+
+/* Tagged union (inline data, tag written to struct):
+** HEGEL_UNION(Shape, tag,
+**     HEGEL_CASE(field1, field2, ..., NULL),
+**     HEGEL_CASE(field3, ..., NULL),
+**     NULL)  */
+#define HEGEL_CASE(...) (hegel_schema *[]){ __VA_ARGS__ }
+
+#define HEGEL_UNION(type, tag_field, ...) \
+  hegel__union (offsetof (type, tag_field), HEGEL_SCH_UNION, \
+      (hegel_schema **[]){ __VA_ARGS__ })
+
+/* Tag-less union (tag lives in shape tree only, not in struct): */
+#define HEGEL_UNION_UNTAGGED(...) \
+  hegel__union ((size_t) -1, HEGEL_SCH_UNION_UNTAGGED, \
+      (hegel_schema **[]){ __VA_ARGS__ })
+
+/* Variant (tag + pointer to separately allocated struct):
+** HEGEL_VARIANT(Shape, tag, value,
+**     struct_schema_A,
+**     struct_schema_B,
+**     NULL)  */
+#define HEGEL_VARIANT(type, tag_field, ptr_field, ...) \
+  hegel_schema_variant_v (offsetof (type, tag_field),  \
+      offsetof (type, ptr_field),                      \
+      (hegel_schema *[]){ __VA_ARGS__ })
+
+/* ================================================================
+** Shape accessors — read metadata from shape tree
+** ================================================================ */
+
+static int
+hegel_shape_tag (hegel_shape * s)
+{
+  if (s != NULL && s->kind == HEGEL_SHAPE_VARIANT)
+    return (s->variant_shape.tag);
+  return (-1);
+}
+
+static int
+hegel_shape_array_len (hegel_shape * s)
+{
+  if (s != NULL && s->kind == HEGEL_SHAPE_ARRAY)
+    return (s->array_shape.len);
+  return (0);
+}
+
+static int
+hegel_shape_is_some (hegel_shape * s)
+{
+  if (s != NULL && s->kind == HEGEL_SHAPE_OPTIONAL)
+    return (s->optional_shape.is_some);
+  return (0);
+}
+
+/* Access a specific field's shape from a struct shape (by index). */
+static hegel_shape *
+hegel_shape_field (hegel_shape * s, int index)
+{
+  if (s == NULL || s->kind != HEGEL_SHAPE_STRUCT) return (NULL);
+  if (index < 0 || index >= s->struct_shape.n_fields) return (NULL);
+  return (s->struct_shape.fields[index]);
+}
 
 /* ================================================================
 ** Draw
@@ -791,6 +974,151 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen, void * parent,
       return (shape);
     }
 
+    case HEGEL_SCH_ARRAY_INLINE: {
+      int             n;
+      size_t          esz;
+      hegel_schema *  elem;
+      void *          arr;
+
+      elem = gen->array_inline_def.elem;
+      if (elem->kind == HEGEL_SCH_SELF && elem->self_ref.target)
+        elem = elem->self_ref.target;
+      esz = gen->array_inline_def.elem_size;
+
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_ARRAY;
+
+      hegel_start_span (tc, HEGEL_SPAN_LIST);
+      n = hegel_draw_int (tc, gen->array_inline_def.min_len,
+                              gen->array_inline_def.max_len);
+      arr = calloc ((size_t) n + 1, esz);
+
+      shape->array_shape.len = n;
+      shape->array_shape.elems = (hegel_shape **) calloc (
+          (size_t) n + 1, sizeof (hegel_shape *));
+      shape->owned = arr;
+
+      *(void **) ((char *) parent + gen->offset) = arr;
+      *(int *) ((char *) parent + gen->array_inline_def.len_offset) = n;
+
+      for (int i = 0; i < n; i ++) {
+        void * slot = (char *) arr + (size_t) i * esz;
+        hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
+
+        /* Draw fields of elem schema into the slot (as if slot
+        ** is the parent struct for the element's fields). */
+        if (elem->kind == HEGEL_SCH_STRUCT) {
+          /* Inline struct: draw each field into slot. */
+          hegel_shape * es = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+          es->kind = HEGEL_SHAPE_STRUCT;
+          es->owned = NULL; /* slot is part of array alloc, not separate */
+          es->struct_shape.n_fields = elem->struct_def.n_fields;
+          es->struct_shape.fields = (hegel_shape **) calloc (
+              (size_t) elem->struct_def.n_fields, sizeof (hegel_shape *));
+          hegel_start_span (tc, HEGEL_SPAN_TUPLE);
+          for (int f = 0; f < elem->struct_def.n_fields; f ++)
+            es->struct_shape.fields[f] =
+                hegel__draw_field (tc, elem->struct_def.fields[f],
+                                   slot, depth - 1);
+          hegel_stop_span (tc, 0);
+          shape->array_shape.elems[i] = es;
+
+        } else if (elem->kind == HEGEL_SCH_UNION
+                || elem->kind == HEGEL_SCH_UNION_UNTAGGED) {
+          /* Inline union element — draw it into slot. */
+          shape->array_shape.elems[i] =
+              hegel__draw_field (tc, elem, slot, depth - 1);
+
+        } else {
+          /* Scalar element in inline array — shouldn't happen
+          ** (use HEGEL_ARRAY for scalar arrays), but handle it. */
+          shape->array_shape.elems[i] =
+              hegel__draw_field (tc, elem, slot, depth - 1);
+        }
+
+        hegel_stop_span (tc, 0);
+      }
+
+      hegel_stop_span (tc, 0);
+      return (shape);
+    }
+
+    case HEGEL_SCH_UNION:
+    case HEGEL_SCH_UNION_UNTAGGED: {
+      int             tag;
+      int             nc;
+      hegel_schema ** chosen_fields;
+
+      nc = gen->union_def.n_cases;
+
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_VARIANT;
+
+      hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
+      tag = hegel_draw_int (tc, 0, nc - 1);
+      shape->variant_shape.tag = tag;
+
+      /* Write tag to struct if tagged (not UNTAGGED). */
+      if (gen->kind == HEGEL_SCH_UNION)
+        *(int *) ((char *) parent + gen->union_def.tag_offset) = tag;
+
+      /* Draw the chosen case's fields into parent struct. */
+      chosen_fields = gen->union_def.cases[tag];
+      hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
+
+      /* Build a struct-like shape for the variant's fields. */
+      {
+        int nf;
+        for (nf = 0; chosen_fields[nf] != NULL; nf ++) {}
+        hegel_shape * vs = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+        vs->kind = HEGEL_SHAPE_STRUCT;
+        vs->owned = NULL; /* fields are inline in parent, not separate */
+        vs->struct_shape.n_fields = nf;
+        vs->struct_shape.fields = (hegel_shape **) calloc (
+            (size_t) nf, sizeof (hegel_shape *));
+        for (int i = 0; i < nf; i ++)
+          vs->struct_shape.fields[i] =
+              hegel__draw_field (tc, chosen_fields[i], parent, depth);
+        shape->variant_shape.inner = vs;
+      }
+
+      hegel_stop_span (tc, 0);
+      hegel_stop_span (tc, 0);
+      return (shape);
+    }
+
+    case HEGEL_SCH_VARIANT: {
+      int             tag;
+      int             nc;
+      hegel_schema *  chosen;
+
+      nc = gen->variant_def.n_cases;
+
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_VARIANT;
+
+      hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
+      tag = hegel_draw_int (tc, 0, nc - 1);
+      shape->variant_shape.tag = tag;
+
+      /* Write tag to struct. */
+      *(int *) ((char *) parent + gen->variant_def.tag_offset) = tag;
+
+      /* Allocate and draw the chosen variant struct. */
+      chosen = gen->variant_def.cases[tag];
+      hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
+      {
+        void * child;
+        shape->variant_shape.inner =
+            hegel__draw_struct (tc, chosen, &child, depth - 1);
+        *(void **) ((char *) parent + gen->variant_def.ptr_offset) = child;
+      }
+      hegel_stop_span (tc, 0);
+
+      hegel_stop_span (tc, 0);
+      return (shape);
+    }
+
     case HEGEL_SCH_SELF:
     case HEGEL_SCH_STRUCT:
       break;
@@ -856,6 +1184,9 @@ hegel_shape_free (hegel_shape * s)
       free (s->array_shape.elems);
       free (s->owned);
       break;
+    case HEGEL_SHAPE_VARIANT:
+      hegel_shape_free (s->variant_shape.inner);
+      break;
   }
 
   free (s);
@@ -879,6 +1210,24 @@ hegel_schema_free (hegel_schema * s)
       break;
     case HEGEL_SCH_ARRAY:
       hegel_schema_free (s->array_def.elem);
+      break;
+    case HEGEL_SCH_ARRAY_INLINE:
+      hegel_schema_free (s->array_inline_def.elem);
+      break;
+    case HEGEL_SCH_UNION:
+    case HEGEL_SCH_UNION_UNTAGGED:
+      for (i = 0; i < s->union_def.n_cases; i ++) {
+        int j;
+        for (j = 0; s->union_def.cases[i][j] != NULL; j ++)
+          hegel_schema_free (s->union_def.cases[i][j]);
+        free (s->union_def.cases[i]);
+      }
+      free (s->union_def.cases);
+      break;
+    case HEGEL_SCH_VARIANT:
+      for (i = 0; i < s->variant_def.n_cases; i ++)
+        hegel_schema_free (s->variant_def.cases[i]);
+      free (s->variant_def.cases);
       break;
     case HEGEL_SCH_SELF:
       break;

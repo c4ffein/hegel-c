@@ -23,7 +23,9 @@ TESTS_PASS = test_pass_simple \
              test_suite_api \
              test_strategy_gen \
              test_span_basic \
-             test_span_tree_json_passes
+             test_span_tree_json_passes \
+             test_gen_tree_json \
+             test_gen_variants
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
