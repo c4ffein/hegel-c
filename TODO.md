@@ -11,19 +11,56 @@ done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
 ### Point the library at real C code (Scotch, etc.)
 
-The schema API has been validated against hand-crafted test types
-(trees, tagged unions, matrices). What's still missing: generating
-data for a real C library's types and running its real functions.
+**Status: two real-world Scotch demos done 2026-04-12.**
 
-`inspiration/scotch/` is in the tree. Writing a schema for something
-like `SCOTCH_Graph` and testing one of its functions would prove
-that the API is adequate for existing C codebases that weren't
-designed around our conventions. It will likely expose gaps —
-things like embedded structs by value, fixed-size arrays, arbitrary
-alignment requirements — that our synthetic tests don't hit.
+1. **`tests/irl/scotch/test_graph_part_schema.c`** — schema-API
+   version of `SCOTCH_graphPart` testing.  Logical
+   `(nvert, edges[], npart)` graph generated via
+   `hegel_schema_struct` + `HEGEL_ARRAY_INLINE`, CSR built from
+   it in a C helper, stronger assertions than the primitive-draw
+   version (empty-partition check, load-balance bound).
+   Real-world demo: "you can write property tests for an
+   existing C library with this."
 
-This is the "does it survive contact with the real world" test.
-Next-session priority.
+2. **`tests/irl/scotch/test_graph_order_shrink.c`** — reducer
+   demo.  Re-discovers the
+   [`hgraphOrderCp` off-by-`ordenum` bug](https://github.com/c4ffein/scotch/blob/ff403d445b36ee1723ff53d2478d368b21a3341f/REPORTS/BUG_REPORT.md)
+   from a random schema, then shrinks to the theoretical minimum
+   (3 vertices, 1 K₂ pair, 1 isolated vertex).  Wired into the
+   Makefile as `TESTS_SHRINK` with parsed-output assertion that
+   `nvert <= 5`.  Shrink demo: "integrated shrinking
+   lands near the theoretical minimum on a real bug."  See
+   [`docs/shrinking.md`](docs/shrinking.md) for the worked
+   walkthrough.
+
+**Gaps surfaced** (workarounds in the test files):
+
+1. **No sibling-dependent field bounds.** Edge endpoints should
+   be bounded by the sibling `nvert`, but schema only supports
+   constant integer bounds.  Worked around by drawing in
+   `[0, MAX_VERT-1]` and clamping `u % nvert` at build time.
+
+2. **No structural invariants across array elements.** The CSR
+   must be dedup'd, symmetric, and self-loop-free.  Done in a
+   C helper after drawing.
+
+Still TODO: write schemas for types that stress the gaps our
+synthetic tests haven't hit — embedded struct by value, fixed-
+size arrays, packed/aligned layouts.  Those are the gaps that'll
+matter for "does the API handle arbitrary foreign C code".
+
+### Review-readiness packet
+
+| Item | Status |
+|---|---|
+| Fix `HEGEL_ARRAY_INLINE` fork-mode orphan leak | done — see "Known bugs" below |
+| Real-world demo: schema-API on actual Scotch | done — `test_graph_part_schema.c` |
+| Shrinker demo: reducer on a real Scotch bug | done — `test_graph_order_shrink.c` + `docs/shrinking.md` |
+| Health-check failure path coverage in CI | done — `TESTS_HEALTH` selftests (filter_too_much, large_base_example, single + suite versions) |
+| Embedded-systems demo | **TODO** — pick a target (Modbus / ring buffer / MQTT-SN / reviewer's choice), build 2–3 schemas, host-compiled |
+| `docs/review-framing.md` (one-page packet) | **TODO** — per-reviewer specific questions |
+| `HEGEL_SELF` rename / `OPTIONAL_SELF` alias | deferred — cosmetic, not a rejection issue |
+| `hegel_draw_regex` fullmatch fix | deferred — existing WARNING in `hegel_gen.h` is sufficient for review; defer to reviewer feedback on the right fix |
 
 ### Named shape accessors
 
@@ -49,6 +86,24 @@ Big ergonomic payoff.
 catalog, but there's no "here's your first 5-minute test" walkthrough.
 For a library that might get adopted by strangers, a focused
 getting-started doc is worth 30 minutes of writing time.
+
+### Missing from Go
+
+1. Named "batteries-included" generators. Go ships Binary, Dates, Datetimes, Emails, URLs, Domains, IPAddresses().IPv4()/IPv6().
+C has none. Binary(min, max) is the biggest one for a C library — people test serializers, binary formats, wire protocols, MPI
+buffers. You have hegel_schema_text ([a-z] only) but no raw-byte generator. If hegel-c wants "official" status, parity on at
+least binary is table stakes.
+
+2. Float control. Go has .Min().Max().ExcludeMin().ExcludeMax().AllowNaN(false).AllowInfinity(false). C has
+hegel_schema_float_range(lo, hi) — inclusive only, no NaN/Inf opt-out. For numerical code (Scotch-adjacent, scientific C), NaN
+handling is where bugs live. This is a real gap, not an aesthetic one.
+
+3. Options beyond n. Go has WithTestCases, SuppressHealthCheck(FilterTooMuch | TooSlow | ...). C has hegel_run_test_n and
+nothing else. The filter health check in particular is load-bearing — if a user's HEGEL_FILTER_INT is too strict, there's
+currently no escape hatch.
+
+4. FromRegex(pattern, fullmatch). Go exposes the fullmatch flag. You already know about the C footgun (hegel_draw_regex is
+contains-match), it's in TODO and memory. Go solved it by just plumbing the flag through.
 
 ## API polish
 
@@ -102,6 +157,51 @@ wants to pass through existing data).
 scenario appears.
 
 ## Known bugs / gotchas
+
+### Fork-mode orphan leak (FIXED 2026-04-12)
+
+**Symptom (now fixed):** schemas using `HEGEL_ARRAY_INLINE`, and in
+principle any test where the draw sequence was long enough for
+hegel's engine to discard mid-generation, caused `hegel_run_test_n`
+to silently spawn extra orphan fork children. Roughly 10% of forks
+ended up reparented to init, ran the test body to completion with
+garbage draw values, and silently swallowed any assertion failures.
+
+**Root cause:** `tc.draw()` inside `parent_serve` can panic with
+hegeltest's `__HEGEL_STOP_TEST` sentinel when the engine decides to
+abort a test case mid-generation. The original `run_forked` let
+that panic propagate up directly, never reaching the `waitpid`
+line. The child stayed alive, blocked on a pipe read that nobody
+was answering. When the main process eventually exited, the
+child's pipe got EOF, the child-side `pipe_read_exact` silently
+returned `false`, the draw functions ignored that return and
+yielded zeros, and the child finished running its test body with
+garbage inputs as an orphan.
+
+**Fix (in `rust-version/src/lib.rs`):**
+
+1. `run_forked` now wraps `parent_serve` in `catch_unwind`,
+   unconditionally closes the parent's pipe ends and `waitpid`s
+   the child, then drops `tc` and re-raises the panic via
+   `resume_unwind`. The child is always reaped before any panic
+   propagates up to hegel's engine.
+
+2. The child-side `hegel_draw_*` functions (`int`, `i64`, `u64`,
+   `usize`, `float`, `double`, `text`, `regex`) now check
+   `pipe_read_exact`'s return value and call `child_abandoned()`
+   (= `_exit(0)`) on read failure, instead of silently returning
+   zeros from a dead pipe.
+
+**Verification:**
+- 1000 / 1000 cases across 20 runs of the minimal reproducer:
+  0 orphans, 0 out-of-range draws.
+- All 36 selftest, 19 from-hegel-rust, and 4 Scotch tests pass
+  (selftest grew by 4 `TESTS_HEALTH` regression tests covering
+  the `parent_serve` panic propagation paths; Scotch grew by 1
+  `TESTS_SHRINK` reducer demo).
+- Reproducer kept at
+  `tests/irl/scotch/test_array_inline_orphan_repro.c` as a
+  hand-runnable regression demo.
 
 ### `hegel_draw_regex` fullmatch semantics
 
@@ -174,11 +274,6 @@ has 7 sub-tests covering optional-int pointer, map/filter/flat_map
 for int/i64/double, one-of-scalar (small-OR-large distributions),
 bool, and regex.
 
-### Stray files
-
-- Check for leftover `temp` file at repo root — scratch pad from
-  an early session, not used anywhere.
-
 ## Infrastructure
 
 ### Pool Hegel server across test binaries
@@ -200,3 +295,20 @@ would meaningfully cut CI time.
 
 See `tests/from-hegel-rust/manifest.md`. Remaining ones need
 features we don't have (`exclude_min`, NaN/inf) or are Rust-specific.
+
+### Direct CI coverage for the orphan-leak fix
+
+The four `TESTS_HEALTH` selftests added 2026-04-12 cover the
+`parent_serve` panic propagation paths (filter_too_much and
+large_base_example), which is *indirect* coverage for the orphan
+fix — a regression that breaks the `catch_unwind` would cascade
+into health-check test failures or hangs.  But there is no test
+that *directly* asserts "no orphan processes appeared during
+this run."
+
+The hand-runnable `tests/irl/scotch/test_array_inline_orphan_repro.c`
+does the orphan check via `grep -c 'ppid=1 '` on stderr after a
+`sleep 1`, but it's not wired into any Makefile target.  Future
+work: bash-wrap the repro into a Makefile target that asserts
+zero orphans, add to selftest CI.  Cheap (~30 min) and would
+catch the most subtle regressions.
