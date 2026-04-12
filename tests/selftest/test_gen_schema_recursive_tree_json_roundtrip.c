@@ -170,7 +170,7 @@ static Tree * json_to_tree (const char * json) {
 
 /* This is the whole point: define the schema ONCE, draw from it.
 ** Compare this to the ~50 lines of hand-rolled gen_tree(). */
-static hegel_schema * tree_schema;
+static hegel_schema_t tree_schema;
 
 static
 void
@@ -180,8 +180,7 @@ init_schema (void)
       HEGEL_INT  (Tree, val, -1000, 1000),
       HEGEL_OPTIONAL (Tree, label, hegel_schema_text (0, 8)),
       HEGEL_SELF (Tree, left),
-      HEGEL_SELF (Tree, right),
-      NULL);
+      HEGEL_SELF (Tree, right));
 }
 
 static
@@ -221,7 +220,7 @@ typedef struct Bag {
   int                 tag;
 } Bag;
 
-static hegel_schema * bag_schema;
+static hegel_schema_t bag_schema;
 
 static
 void
@@ -230,8 +229,7 @@ init_bag_schema (void)
   bag_schema = hegel_schema_struct (sizeof (Bag),
       HEGEL_ARRAY (Bag, items, n_items,
                    hegel_schema_int_range (0, 100), 0, 10),
-      HEGEL_INT (Bag, tag, 0, 3),
-      NULL);
+      HEGEL_INT (Bag, tag, 0, 3));
 }
 
 static
@@ -269,7 +267,7 @@ typedef struct Sensor {
   double              latitude;
 } Sensor;
 
-static hegel_schema * sensor_schema;
+static hegel_schema_t sensor_schema;
 
 static
 void
@@ -281,8 +279,7 @@ init_sensor_schema (void)
       HEGEL_U32 (Sensor, serial),
       HEGEL_I64 (Sensor, timestamp),
       HEGEL_FLOAT  (Sensor, voltage, 0.0, 5.0),
-      HEGEL_DOUBLE (Sensor, latitude, -90.0, 90.0),
-      NULL);
+      HEGEL_DOUBLE (Sensor, latitude, -90.0, 90.0));
 }
 
 static

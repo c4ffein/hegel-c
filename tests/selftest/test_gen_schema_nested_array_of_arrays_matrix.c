@@ -37,21 +37,19 @@ typedef struct {
 
 /* ---- Schema ---- */
 
-static hegel_schema * matrix_schema;
+static hegel_schema_t matrix_schema;
 
 static
 void
 init_schema (void)
 {
-  hegel_schema * row = hegel_schema_struct (sizeof (Row),
+  hegel_schema_t row = hegel_schema_struct (sizeof (Row),
       HEGEL_ARRAY (Row, values, n_values,
-                   hegel_schema_int_range (0, 99), 1, 6),
-      NULL);
+                   hegel_schema_int_range (0, 99), 1, 6));
 
   matrix_schema = hegel_schema_struct (sizeof (Matrix),
       HEGEL_ARRAY_INLINE (Matrix, rows, n_rows,
-                          row, sizeof (Row), 1, 4),
-      NULL);
+                          row, sizeof (Row), 1, 4));
 }
 
 /* ---- Test ---- */

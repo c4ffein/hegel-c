@@ -26,7 +26,7 @@
 
 typedef struct { int * vals; int n; } ScalarBag;
 
-static hegel_schema * scalar_bag_s;
+static hegel_schema_t scalar_bag_s;
 
 static void test_scalar_array (hegel_testcase * tc) {
   ScalarBag * b;
@@ -43,7 +43,7 @@ static void test_scalar_array (hegel_testcase * tc) {
 typedef struct { int x; int y; } Pt;
 typedef struct { Pt ** pts; int n; } PtrBag;
 
-static hegel_schema * ptr_bag_s;
+static hegel_schema_t ptr_bag_s;
 
 static void test_ptr_array (hegel_testcase * tc) {
   PtrBag * b;
@@ -64,7 +64,7 @@ static void test_ptr_array (hegel_testcase * tc) {
 typedef struct { uint8_t r; uint8_t g; uint8_t b; } Color;
 typedef struct { Color * colors; int n; } Palette;
 
-static hegel_schema * palette_s;
+static hegel_schema_t palette_s;
 
 static void test_inline_array (hegel_testcase * tc) {
   Palette * p;
@@ -86,7 +86,7 @@ static void test_inline_array (hegel_testcase * tc) {
 typedef struct { int * data; int n_data; } Chunk;
 typedef struct { Chunk * chunks; int n_chunks; } ChunkList;
 
-static hegel_schema * chunklist_s;
+static hegel_schema_t chunklist_s;
 
 static void test_inline_of_array (hegel_testcase * tc) {
   ChunkList * cl;
@@ -110,7 +110,7 @@ static void test_inline_of_array (hegel_testcase * tc) {
 typedef struct { Color * pixels; int n_pixels; } Sprite;
 typedef struct { Sprite ** sprites; int n_sprites; } Scene;
 
-static hegel_schema * scene_s;
+static hegel_schema_t scene_s;
 
 static void test_ptr_of_inline (hegel_testcase * tc) {
   Scene * sc;
@@ -136,38 +136,34 @@ static void test_ptr_of_inline (hegel_testcase * tc) {
 /* ---- Runner ---- */
 
 int main (void) {
-  hegel_schema * pt_s = hegel_schema_struct (sizeof (Pt),
-      HEGEL_INT (Pt, x, -10, 10), HEGEL_INT (Pt, y, -10, 10), NULL);
-  hegel_schema * color_s = hegel_schema_struct (sizeof (Color),
-      HEGEL_U8 (Color, r), HEGEL_U8 (Color, g), HEGEL_U8 (Color, b), NULL);
+  hegel_schema_t pt_s = hegel_schema_struct (sizeof (Pt),
+      HEGEL_INT (Pt, x, -10, 10), HEGEL_INT (Pt, y, -10, 10));
+  hegel_schema_t color_s = hegel_schema_struct (sizeof (Color),
+      HEGEL_U8 (Color, r), HEGEL_U8 (Color, g), HEGEL_U8 (Color, b));
+  /* color_s is used in two parents (palette_s + sprite_s).  Add one
+  ** extra reference so ownership transfer works for both. */
+  hegel_schema_ref (color_s);
 
   scalar_bag_s = hegel_schema_struct (sizeof (ScalarBag),
-      HEGEL_ARRAY (ScalarBag, vals, n, hegel_schema_int_range (-50, 50), 0, 8),
-      NULL);
+      HEGEL_ARRAY (ScalarBag, vals, n, hegel_schema_int_range (-50, 50), 0, 8));
 
   ptr_bag_s = hegel_schema_struct (sizeof (PtrBag),
-      HEGEL_ARRAY (PtrBag, pts, n, pt_s, 0, 6),
-      NULL);
+      HEGEL_ARRAY (PtrBag, pts, n, pt_s, 0, 6));
 
   palette_s = hegel_schema_struct (sizeof (Palette),
-      HEGEL_ARRAY_INLINE (Palette, colors, n, color_s, sizeof (Color), 1, 5),
-      NULL);
+      HEGEL_ARRAY_INLINE (Palette, colors, n, color_s, sizeof (Color), 1, 5));
 
-  hegel_schema * chunk_s = hegel_schema_struct (sizeof (Chunk),
-      HEGEL_ARRAY (Chunk, data, n_data, hegel_schema_int_range (0, 9), 0, 4),
-      NULL);
+  hegel_schema_t chunk_s = hegel_schema_struct (sizeof (Chunk),
+      HEGEL_ARRAY (Chunk, data, n_data, hegel_schema_int_range (0, 9), 0, 4));
   chunklist_s = hegel_schema_struct (sizeof (ChunkList),
       HEGEL_ARRAY_INLINE (ChunkList, chunks, n_chunks,
-                          chunk_s, sizeof (Chunk), 1, 3),
-      NULL);
+                          chunk_s, sizeof (Chunk), 1, 3));
 
-  hegel_schema * sprite_s = hegel_schema_struct (sizeof (Sprite),
+  hegel_schema_t sprite_s = hegel_schema_struct (sizeof (Sprite),
       HEGEL_ARRAY_INLINE (Sprite, pixels, n_pixels,
-                          color_s, sizeof (Color), 1, 4),
-      NULL);
+                          color_s, sizeof (Color), 1, 4));
   scene_s = hegel_schema_struct (sizeof (Scene),
-      HEGEL_ARRAY (Scene, sprites, n_sprites, sprite_s, 1, 3),
-      NULL);
+      HEGEL_ARRAY (Scene, sprites, n_sprites, sprite_s, 1, 3));
 
   printf ("  scalar array...\n");
   hegel_run_test (test_scalar_array);
