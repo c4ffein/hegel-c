@@ -203,6 +203,22 @@ garbage inputs as an orphan.
   `tests/irl/scotch/test_array_inline_orphan_repro.c` as a
   hand-runnable regression demo.
 
+**Follow-up to verify (low priority, not blocking):**
+The fix calls `drop(tc)` between `catch_unwind` and
+`resume_unwind` in `run_forked` (`rust-version/src/lib.rs`
+~line 358).  My read is that it's safe because we're in
+normal control flow at that point — `catch_unwind` has
+suspended the unwind, and `resume_unwind` only restarts it
+later.  The original code's "drop tc BEFORE panicking"
+comment is honored because we're not yet panicking when we
+drop.  Empirically, the 750/750 orphan stress test exercises
+this exact code path on every overflow case and shows no
+issue.  But sanity-check against hegeltest's `TestCase::drop`
+semantics if anything weird shows up — the original concern
+was a double-panic abort if drop talks to the hegel server
+during unwind, which catch_unwind should defuse but is worth
+spot-checking.
+
 ### `hegel_draw_regex` fullmatch semantics
 
 `hegel_draw_regex` wraps hegeltest's `from_regex()` without
