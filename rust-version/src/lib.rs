@@ -136,9 +136,30 @@ enum ChildMsg {
     Eof, /* child crashed or exited without a message */
 }
 
+/// Optional verbose tracing.  When `HEGEL_VERBOSE_TRACE=1` is set
+/// in the environment, hegel-c prints each draw and each case
+/// boundary to stderr from the parent process.  Useful for
+/// watching the shrinker narrow down on a failing case — every
+/// shrink attempt is one cluster of `[hegel] draw_*` lines bracketed
+/// by `[hegel] case_start` / `[hegel] case_end`.
+///
+/// Off by default — opting in adds one line per primitive draw,
+/// which can be a lot for schema-API tests with array fields.
+fn verbose_trace_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("HEGEL_VERBOSE_TRACE").is_ok())
+}
+
+/// Monotonic case counter for verbose-trace output.
+fn next_trace_case_id() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    N.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+
 /// Parent: loop reading draw requests from the child, forwarding
 /// them to hegel via `tc.draw()`, and sending results back.
 fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
+    let trace = verbose_trace_enabled();
     loop {
         let mut tag = [0u8; 1];
         if !pipe_read_exact(req_rd, &mut tag) {
@@ -153,6 +174,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_val = c_int::from_le_bytes(buf[4..8].try_into().unwrap());
                 let val: c_int = tc.draw(
                     gs::integers::<c_int>().min_value(min_val).max_value(max_val));
+                if trace { eprintln!("[hegel]   draw_int({},{}) -> {}", min_val, max_val, val); }
                 pipe_write_all(resp_wr, &val.to_le_bytes());
             }
             MSG_DRAW_I64 => {
@@ -162,6 +184,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_val = i64::from_le_bytes(buf[8..16].try_into().unwrap());
                 let val: i64 = tc.draw(
                     gs::integers::<i64>().min_value(min_val).max_value(max_val));
+                if trace { eprintln!("[hegel]   draw_i64({},{}) -> {}", min_val, max_val, val); }
                 pipe_write_all(resp_wr, &val.to_le_bytes());
             }
             MSG_DRAW_U64 => {
@@ -171,6 +194,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_val = u64::from_le_bytes(buf[8..16].try_into().unwrap());
                 let val: u64 = tc.draw(
                     gs::integers::<u64>().min_value(min_val).max_value(max_val));
+                if trace { eprintln!("[hegel]   draw_u64({},{}) -> {}", min_val, max_val, val); }
                 pipe_write_all(resp_wr, &val.to_le_bytes());
             }
             MSG_DRAW_USIZE => {
@@ -180,6 +204,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_val = usize::from_le_bytes(buf[8..16].try_into().unwrap());
                 let val: usize = tc.draw(
                     gs::integers::<usize>().min_value(min_val).max_value(max_val));
+                if trace { eprintln!("[hegel]   draw_usize({},{}) -> {}", min_val, max_val, val); }
                 pipe_write_all(resp_wr, &val.to_le_bytes());
             }
             MSG_DRAW_DOUBLE => {
@@ -189,6 +214,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_val = f64::from_le_bytes(buf[8..16].try_into().unwrap());
                 let val: f64 = tc.draw(
                     gs::floats::<f64>().min_value(min_val).max_value(max_val));
+                if trace { eprintln!("[hegel]   draw_double({},{}) -> {}", min_val, max_val, val); }
                 pipe_write_all(resp_wr, &val.to_le_bytes());
             }
             MSG_DRAW_FLOAT => {
@@ -198,6 +224,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_val = f32::from_le_bytes(buf[4..8].try_into().unwrap());
                 let val: f32 = tc.draw(
                     gs::floats::<f32>().min_value(min_val).max_value(max_val));
+                if trace { eprintln!("[hegel]   draw_float({},{}) -> {}", min_val, max_val, val); }
                 pipe_write_all(resp_wr, &val.to_le_bytes());
             }
             MSG_DRAW_TEXT => {
@@ -207,6 +234,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let max_size = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
                 let val: String = tc.draw(
                     gs::text().min_size(min_size).max_size(max_size));
+                if trace { eprintln!("[hegel]   draw_text({},{}) -> {:?}", min_size, max_size, val); }
                 let bytes = val.as_bytes();
                 pipe_write_all(resp_wr, &(bytes.len() as u32).to_le_bytes());
                 pipe_write_all(resp_wr, bytes);
@@ -221,6 +249,7 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 }
                 let pattern = String::from_utf8_lossy(&pat_buf);
                 let val: String = tc.draw(gs::from_regex(&pattern));
+                if trace { eprintln!("[hegel]   draw_regex({:?}) -> {:?}", pattern, val); }
                 let bytes = val.as_bytes();
                 pipe_write_all(resp_wr, &(bytes.len() as u32).to_le_bytes());
                 pipe_write_all(resp_wr, bytes);
@@ -229,11 +258,13 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let mut buf = [0u8; 8];
                 if !pipe_read_exact(req_rd, &mut buf) { return ChildMsg::Eof; }
                 let label = u64::from_le_bytes(buf);
+                if trace { eprintln!("[hegel]   start_span({})", label); }
                 tc.start_span(label);
             }
             MSG_STOP_SPAN => {
                 let mut buf = [0u8; 1];
                 if !pipe_read_exact(req_rd, &mut buf) { return ChildMsg::Eof; }
+                if trace { eprintln!("[hegel]   stop_span(discard={})", buf[0] != 0); }
                 tc.stop_span(buf[0] != 0);
             }
             MSG_ASSUME => {
@@ -266,6 +297,14 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
 /// and waits for the child. If the child crashes, the parent reports
 /// it as a panic — which hegel catches and shrinks.
 fn run_forked(test_fn: CTestFn, tc: TestCase) {
+    let trace_id = if verbose_trace_enabled() {
+        let id = next_trace_case_id();
+        eprintln!("[hegel] case_start #{}", id);
+        Some(id)
+    } else {
+        None
+    };
+
     call_case_setup();
 
     /* Ignore SIGPIPE — a crashed child can close the pipe mid-write. */
@@ -362,6 +401,21 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
     let result = match serve_result {
         Ok(r) => r,
         Err(panic_info) => {
+            if let Some(id) = trace_id {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.as_str()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s
+                } else {
+                    "<panic>"
+                };
+                let kind = if msg.contains("__HEGEL_STOP_TEST") || msg.contains("__HEGEL_ASSUME_FAIL") {
+                    "discard"
+                } else {
+                    "panic"
+                };
+                eprintln!("[hegel] case_end #{} {} ({:.60})", id, kind, msg);
+            }
             /* Child is reaped and pipes are closed; drop tc before
             ** re-raising so hegel's engine handles the discard cleanly
             ** (dropping TestCase talks to the hegel server). */
@@ -369,6 +423,16 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
             std::panic::resume_unwind(panic_info);
         }
     };
+
+    if let Some(id) = trace_id {
+        let kind = match &result {
+            ChildMsg::Ok => "ok",
+            ChildMsg::Fail(_) => "fail",
+            ChildMsg::Assume => "assume",
+            ChildMsg::Eof => "eof",
+        };
+        eprintln!("[hegel] case_end #{} {}", id, kind);
+    }
 
     /* Handle assume before dropping tc — tc.assume() panics with a
     ** sentinel type that hegel recognizes as "discard this test case". */

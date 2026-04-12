@@ -331,6 +331,112 @@ HEGEL_ASSERT (bad < 0, "process(xs[%d]) failed", bad);
 This makes it easier for the shrinker to home in on the *first*
 failing element across all replay variants.
 
+## Watching the shrinker work (verbose mode)
+
+By default, hegel-c is silent during generation and shrinking —
+only the final replay's output reaches stderr. That's the right
+default for CI, but it makes it impossible to *watch* the shrinker
+narrow in on the minimum, which is useful both for debugging and
+for understanding what hegel is doing.
+
+Set `HEGEL_VERBOSE_TRACE=1` in the environment to print every
+primitive draw and every test-case boundary to stderr:
+
+```bash
+HEGEL_VERBOSE_TRACE=1 ./tests/irl/scotch/test_graph_order_shrink 2>shrink.log
+```
+
+The output looks like this (one cluster per test case):
+
+```
+[hegel] case_start #5
+[hegel]   start_span(7)
+[hegel]   draw_i64(3,20) -> 14
+[hegel]   start_span(1)
+[hegel]   draw_int(0,30) -> 7
+[hegel]   start_span(2)
+[hegel]   start_span(7)
+[hegel]   draw_i64(0,19) -> 13
+[hegel]   draw_i64(0,19) -> 16
+[hegel]   stop_span(discard=false)
+[hegel]   stop_span(discard=false)
+[hegel]   ... (more draws) ...
+[hegel]   stop_span(discard=false)
+[hegel]   stop_span(discard=false)
+[hegel] case_end #5 ok
+```
+
+Each case is bracketed by `case_start #N` / `case_end #N <kind>`,
+where `kind` is one of:
+
+- `ok` — test passed for this input
+- `fail` — test failed via `HEGEL_ASSERT` / `hegel_fail`
+- `assume` — test discarded via `hegel_assume(false)`
+- `discard (__HEGEL_STOP_TEST)` — engine cut the case short
+  (overflow, byte budget exhausted)
+- `discard (__HEGEL_ASSUME_FAIL)` — engine-internal discard
+- `eof` — child crashed (SIGSEGV, etc.) or exited unexpectedly
+- `panic (...)` — uncategorized panic
+
+The shrinker's behavior is visible in the pattern: during the
+generation phase you'll see varied input shapes; once a case
+fails, subsequent cases are micro-variations of the failing input
+as hegel tries to find something smaller.
+
+Cost: one stderr line per primitive draw. For schema-API tests
+with array fields, that's ~10–500 lines per test case, so a
+1000-case run can produce ~50k–500k lines. Pipe to `grep`, a
+file, or a pager rather than dumping it all to your terminal.
+
+### Three useful invocations
+
+Full trace to a file (one line per primitive draw — large):
+
+```bash
+HEGEL_VERBOSE_TRACE=1 ./tests/irl/scotch/test_graph_order_shrink 2>shrink.log
+```
+
+Just the case results (one line per case — readable, ideal for
+scanning the run):
+
+```bash
+HEGEL_VERBOSE_TRACE=1 ./tests/irl/scotch/test_graph_order_shrink 2>&1 \
+    | grep '^\[hegel\] case_end'
+```
+
+Watch the shrinker progress live, plus the final `MINIMAL` line
+(the `--line-buffered` flag is what makes it stream rather than
+batch):
+
+```bash
+HEGEL_VERBOSE_TRACE=1 ./tests/irl/scotch/test_graph_order_shrink 2>&1 \
+    | grep --line-buffered 'case_end\|MINIMAL'
+```
+
+A typical scan of the case-end summary looks like:
+
+```
+[hegel] case_end #1 ok
+[hegel] case_end #2 ok
+[hegel] case_end #3 discard (__HEGEL_STOP_TEST)
+... (generation phase, mix of ok and discard) ...
+[hegel] case_end #25 fail        <- shrinker activates
+[hegel] case_end #26 fail
+[hegel] case_end #27 fail
+[hegel] case_end #28 ok          <- variant that no longer triggers
+[hegel] case_end #29 fail        <- smaller failing variant found
+... (alternating fail/ok as the shrinker probes) ...
+[hegel] case_end #106 eof        <- final replay
+```
+
+The pattern of `fail`/`ok` after the first failure tells you the
+shrinker is working — it's trying smaller byte sequences and
+keeping the ones that still fail.
+
+The trace is library-level — every test built against
+`libhegel_c.a` gets it for free, no per-test instrumentation
+needed.
+
 ## Reading the shrunken trace
 
 A typical hegel-c failure with `hegel_note` looks like:
