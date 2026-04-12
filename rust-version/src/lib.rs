@@ -119,6 +119,15 @@ fn pipe_read_exact(fd: c_int, buf: &mut [u8]) -> bool {
     true
 }
 
+/// Called from inside a forked child when its pipe to the parent is
+/// dead (parent panicked, closed pipes, or died).  Exit cleanly so
+/// the parent's waitpid reaps us promptly.  We do NOT attempt to run
+/// any more of the test — every draw would return garbage and the
+/// test body could do something unpredictable with it.
+fn child_abandoned() -> ! {
+    unsafe { libc::_exit(0) };
+}
+
 /// Result from serving the child's requests.
 enum ChildMsg {
     Ok,
@@ -330,7 +339,17 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
     /* Take tc back — safe because child has its own copy via fork. */
     let tc = ManuallyDrop::into_inner(tc);
 
-    let result = parent_serve(&tc, req_rd, resp_wr);
+    /* parent_serve can panic if hegel's tc.draw() aborts the test case
+    ** (e.g. __HEGEL_STOP_TEST sentinel when the engine decides to discard
+    ** mid-generation). If we let that panic propagate freely, the child
+    ** is left blocked on a read waiting for a response that never comes,
+    ** and we never waitpid it. Catch the panic here, unconditionally
+    ** reap the child and close the pipes, then re-raise.
+    **
+    ** Closing the parent's pipe ends unblocks the child: its next
+    ** hegel_draw_* call sees pipe EOF and _exit(0)s itself (see the
+    ** IN_FORK_CHILD branch in hegel_draw_int and siblings). */
+    let serve_result = catch_unwind(AssertUnwindSafe(|| parent_serve(&tc, req_rd, resp_wr)));
 
     unsafe {
         libc::close(req_rd);
@@ -339,6 +358,17 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
 
     let mut status: c_int = 0;
     unsafe { libc::waitpid(pid, &mut status, 0); }
+
+    let result = match serve_result {
+        Ok(r) => r,
+        Err(panic_info) => {
+            /* Child is reaped and pipes are closed; drop tc before
+            ** re-raising so hegel's engine handles the discard cleanly
+            ** (dropping TestCase talks to the hegel server). */
+            drop(tc);
+            std::panic::resume_unwind(panic_info);
+        }
+    };
 
     /* Handle assume before dropping tc — tc.assume() panics with a
     ** sentinel type that hegel recognizes as "discard this test case". */
@@ -647,7 +677,7 @@ pub unsafe extern "C-unwind" fn hegel_draw_int(
         req[5..9].copy_from_slice(&max_val.to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut resp = [0u8; 4];
-        pipe_read_exact(fd_r, &mut resp);
+        if !pipe_read_exact(fd_r, &mut resp) { child_abandoned(); }
         return c_int::from_le_bytes(resp);
     }
     let htc = unsafe { &*tc };
@@ -673,7 +703,7 @@ pub unsafe extern "C-unwind" fn hegel_draw_i64(
         req[9..17].copy_from_slice(&max_val.to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut resp = [0u8; 8];
-        pipe_read_exact(fd_r, &mut resp);
+        if !pipe_read_exact(fd_r, &mut resp) { child_abandoned(); }
         return i64::from_le_bytes(resp);
     }
     let htc = unsafe { &*tc };
@@ -699,7 +729,7 @@ pub unsafe extern "C-unwind" fn hegel_draw_u64(
         req[9..17].copy_from_slice(&max_val.to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut resp = [0u8; 8];
-        pipe_read_exact(fd_r, &mut resp);
+        if !pipe_read_exact(fd_r, &mut resp) { child_abandoned(); }
         return u64::from_le_bytes(resp);
     }
     let htc = unsafe { &*tc };
@@ -725,7 +755,7 @@ pub unsafe extern "C-unwind" fn hegel_draw_usize(
         req[9..17].copy_from_slice(&max_val.to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut resp = [0u8; 8];
-        pipe_read_exact(fd_r, &mut resp);
+        if !pipe_read_exact(fd_r, &mut resp) { child_abandoned(); }
         return usize::from_le_bytes(resp);
     }
     let htc = unsafe { &*tc };
@@ -751,7 +781,7 @@ pub unsafe extern "C-unwind" fn hegel_draw_double(
         req[9..17].copy_from_slice(&max_val.to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut resp = [0u8; 8];
-        pipe_read_exact(fd_r, &mut resp);
+        if !pipe_read_exact(fd_r, &mut resp) { child_abandoned(); }
         return f64::from_le_bytes(resp);
     }
     let htc = unsafe { &*tc };
@@ -777,7 +807,7 @@ pub unsafe extern "C-unwind" fn hegel_draw_float(
         req[5..9].copy_from_slice(&max_val.to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut resp = [0u8; 4];
-        pipe_read_exact(fd_r, &mut resp);
+        if !pipe_read_exact(fd_r, &mut resp) { child_abandoned(); }
         return f32::from_le_bytes(resp);
     }
     let htc = unsafe { &*tc };
@@ -808,10 +838,10 @@ pub unsafe extern "C-unwind" fn hegel_draw_text(
         req[5..9].copy_from_slice(&(max_size as u32).to_le_bytes());
         pipe_write_all(fd_w, &req);
         let mut len_buf = [0u8; 4];
-        pipe_read_exact(fd_r, &mut len_buf);
+        if !pipe_read_exact(fd_r, &mut len_buf) { child_abandoned(); }
         let len = u32::from_le_bytes(len_buf) as usize;
         let mut str_buf = vec![0u8; len];
-        if len > 0 { pipe_read_exact(fd_r, &mut str_buf); }
+        if len > 0 && !pipe_read_exact(fd_r, &mut str_buf) { child_abandoned(); }
         str_buf
     } else {
         let htc = unsafe { &*tc };
@@ -853,10 +883,10 @@ pub unsafe extern "C-unwind" fn hegel_draw_regex(
         pipe_write_all(fd_w, &header);
         pipe_write_all(fd_w, pat_bytes);
         let mut len_buf = [0u8; 4];
-        pipe_read_exact(fd_r, &mut len_buf);
+        if !pipe_read_exact(fd_r, &mut len_buf) { child_abandoned(); }
         let len = u32::from_le_bytes(len_buf) as usize;
         let mut str_buf = vec![0u8; len];
-        if len > 0 { pipe_read_exact(fd_r, &mut str_buf); }
+        if len > 0 && !pipe_read_exact(fd_r, &mut str_buf) { child_abandoned(); }
         str_buf
     } else {
         let htc = unsafe { &*tc };
