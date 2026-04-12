@@ -46,7 +46,21 @@ TESTS_CRASH = test_crash_segfault \
               test_crash_abort \
               test_crash_stackoverflow
 
-ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH)
+# Tests that should fail via a HEGEL HEALTH-CHECK panic (e.g.
+# filter_too_much, large_base_example) — must exit non-zero AND
+# emit a recognizable "Health check failure" message to stderr.
+# Stricter than the plain TESTS_FAIL category because we also
+# check the message is visible to the user.
+#
+# The _suite variants additionally verify that the suite ran a
+# passing test BEFORE the failing one (via a "ran_passes_first
+# ok" marker the test prints).
+TESTS_HEALTH = test_filter_too_much \
+               test_filter_too_much_suite \
+               test_overflow_too_much \
+               test_overflow_too_much_suite
+
+ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)
 
 .PHONY: help all clean test hegel-c-lib check-license
 
@@ -118,6 +132,28 @@ test: all check-license
 		else \
 			echo "FAIL — expected non-zero exit but got 0"; \
 			errors=$$((errors + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "==== HEALTH-CHECK tests (must exit non-zero AND emit a recognizable message) ===="; \
+	for t in $(TESTS_HEALTH); do \
+		total=$$((total + 1)); \
+		printf "  %-30s" "$$t"; \
+		output=$$(cd $(REPO_ROOT) && timeout 30 $(CURDIR)/$$t 2>&1); \
+		rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			echo "FAIL — expected non-zero exit but got 0"; \
+			errors=$$((errors + 1)); \
+		elif ! echo "$$output" | grep -q "Health check failure"; then \
+			echo "FAIL — exit $$rc but no 'Health check failure' in stderr"; \
+			errors=$$((errors + 1)); \
+		elif echo "$$t" | grep -q "_suite$$" \
+			&& ! echo "$$output" | grep -q "ran_passes_first ok"; then \
+			echo "FAIL — suite did not reach passes_first marker"; \
+			errors=$$((errors + 1)); \
+		else \
+			echo "OK (exit $$rc, message visible)"; \
+			passed=$$((passed + 1)); \
 		fi; \
 	done; \
 	echo ""; \

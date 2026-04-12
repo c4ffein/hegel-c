@@ -27,12 +27,18 @@ LDFLAGS      = -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lscotch -lscotcherr -lz
 LDFLAGS_MPI  = -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lptscotch -lscotch -lptscotcherr -lscotcherr -lz -lm -lpthread -ldl -lrt
 
 # Sequential Scotch tests
-TESTS_PASS = test_graph_part
+TESTS_PASS = test_graph_part test_graph_part_schema
+
+# Reducer-quality demos: tests that are EXPECTED to fail and that
+# we additionally check shrunk to a small minimal counterexample.
+# Each binary must (a) exit non-zero and (b) emit a hegel_note line
+# starting with "MINIMAL nvert=N nedges=M ..." where N is small.
+TESTS_SHRINK = test_graph_order_shrink
 
 # PT-Scotch (MPI) tests — use MPI_Comm_spawn, no mpiexec
 TESTS_MPI  = test_dgraph_part
 
-ALL_TESTS = $(TESTS_PASS) $(TESTS_MPI)
+ALL_TESTS = $(TESTS_PASS) $(TESTS_SHRINK) $(TESTS_MPI)
 
 .PHONY: help all clean test test-local test-deb _run-tests hegel-c-lib check-license
 
@@ -60,6 +66,17 @@ hegel-c-lib:
 
 test_graph_part: test_graph_part.c hegel-c-lib
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_graph_part_schema: test_graph_part_schema.c hegel-c-lib
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_graph_order_shrink: test_graph_order_shrink.c hegel-c-lib
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+# Standalone investigation binary — not in TESTS_PASS.
+# Reproduces a fork-mode orphan bug; see the header of the .c file.
+test_array_inline_orphan_repro: test_array_inline_orphan_repro.c hegel-c-lib
+	$(CC) $(CFLAGS) -o $@ $< -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
 test_dgraph_part: test_dgraph_part.c hegel-c-lib
 	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS_MPI)
@@ -93,6 +110,33 @@ _run-tests: all check-license
 			echo "FAIL (exit $$rc)"; \
 			echo "$$output"; \
 			errors=$$((errors + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "==== Scotch reducer-quality tests (must shrink to small counterexample) ===="; \
+	for t in $(TESTS_SHRINK); do \
+		total=$$((total + 1)); \
+		printf "  %-35s" "$$t"; \
+		output=$$(cd $(REPO_ROOT) && timeout 120 $(CURDIR)/$$t 2>&1); \
+		rc=$$?; \
+		if [ $$rc -eq 0 ]; then \
+			echo "FAIL — expected non-zero exit but got 0"; \
+			errors=$$((errors + 1)); \
+		else \
+			minimal=$$(echo "$$output" | grep -oE 'MINIMAL nvert=[0-9]+ nedges=[0-9]+ edges=\[[^]]*\]' | tail -1); \
+			if [ -z "$$minimal" ]; then \
+				echo "FAIL — exit $$rc but no MINIMAL line in stderr"; \
+				errors=$$((errors + 1)); \
+			else \
+				nvert=$$(echo "$$minimal" | sed -n 's/MINIMAL nvert=\([0-9]*\).*/\1/p'); \
+				if [ "$$nvert" -gt 5 ]; then \
+					echo "FAIL — shrunk to nvert=$$nvert (expected <= 5): $$minimal"; \
+					errors=$$((errors + 1)); \
+				else \
+					echo "OK (shrunk to $$minimal)"; \
+					passed=$$((passed + 1)); \
+				fi; \
+			fi; \
 		fi; \
 	done; \
 	echo ""; \
