@@ -51,6 +51,7 @@ int main (void) {
 
 - **[docs/schema-api.md](docs/schema-api.md)** — schema system reference (constructors, macros, refcounting, draw/free)
 - **[docs/patterns.md](docs/patterns.md)** — pattern catalog mapping C memory layouts to schema tests
+- **[docs/shrinking.md](docs/shrinking.md)** — integrated shrinking explained, with a worked example finding a real bug in Scotch and shrinking to the theoretical minimum
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
 - **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
 - **[TODO.md](TODO.md)** — deferred items
@@ -59,30 +60,16 @@ int main (void) {
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 32 (24 PASS, 5 FAIL, 3 CRASH) | `make selftest-test` |
+| selftest | 36 (24 PASS, 5 FAIL, 3 CRASH, 4 HEALTH) | `make selftest-test` |
 | from-hegel-rust | 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
-| Scotch IRL | 2 (1 sequential, 1 PT-Scotch MPI) | `make scotch-test` |
+| Scotch IRL | 4 (2 sequential, 1 reducer demo, 1 PT-Scotch MPI) | `make scotch-test` |
 
 MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [docs/mpi-testing.md](docs/mpi-testing.md).
 
-The selftest suite doubles as example code — 9 of the 32 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
+The selftest suite doubles as example code — 9 of the 36 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
 
-## Done
-- [x] `hegel_run_test_result()` / `_n()` — return 0/1 instead of `exit(1)`, enables multi-test binaries
-- [x] Test suite API (`hegel_suite_new/add/run/free`) — run multiple tests sharing one server
-- [x] `hegel_note(tc, msg)` — debug output on final replay only
-- [x] Fix from-hegel-rust test mismatches — `find_any` edge cases, shrink boundary 101
-- [x] Port 26 hegel-rust tests — integers (i8–u64), floats, lists, combinators, compose, sampled_from, shrink quality
-- [x] Grammar-based strategy fuzzer — `test_strategy_gen` + `test_strategy_shrink` (shrinks to `/vert>0?b:b;`)
-- [x] CI integration — `.github/workflows/ci.yml` (selftest, from-hegel-rust, Scotch)
-- [x] PT-Scotch MPI tests — fork mode + `MPI_Comm_spawn` + `MPI_Intercomm_merge`, no mpiexec. [Full guide](docs/mpi-testing.md).
-- [x] Scotch IRL tests — sequential `SCOTCH_graphPart` + distributed `SCOTCH_dgraphPart`
-- [x] Selftest three-layer pattern rewrite (all tests follow it)
-- [x] "Draw N:" trace — not a bug, only on final replay (`is_last_run`)
-- [x] Spans primitive (`hegel_start_span` / `hegel_stop_span`) — structural shrinking hints
-- [x] Schema / shape API (`hegel_gen.h` + `hegel_gen.c`) — declarative struct generation with refcounting, span emission, automatic cleanup. Zero-cost `hegel_schema_t` newtype wrapper. See [docs/schema-api.md](docs/schema-api.md).
-- [x] 9 schema pattern tests covering all common C polymorphism idioms + full functional combinator coverage (map / filter / flat_map for int/i64/double, one_of scalar, bool, regex). Feature parity with the legacy `hegel_gen_*` combinator API. See [docs/patterns.md](docs/patterns.md). ASAN-clean.
+The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part_schema.c`](tests/irl/scotch/test_graph_part_schema.c) shows the schema API generating graphs for `SCOTCH_graphPart`; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from a random schema and shrinks to a 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
 
 ## TODO
 - [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
@@ -90,7 +77,7 @@ The selftest suite doubles as example code — 9 of the 32 tests are focused sch
 - [ ] Pool hegel server across test binaries — hegeltest pools within a process, but separate binaries each pay ~1s. Suite API partially addresses this.
 - [ ] Parallel test execution
 - [ ] Verify Hegel's database replay of failing cases across runs with fork mode
-- [ ] More Scotch IRL tests — strategy string fuzzing against real parser, graph ordering, mesh partitioning
+- [ ] More Scotch IRL tests — strategy string fuzzing against real parser, mesh partitioning
 - [ ] More IRL targets beyond Scotch in `tests/irl/`
 - [ ] Real C implementation (pure C wire protocol, no Rust bridge)
   - [ ] Compare with Rust bridge using PBT
@@ -127,11 +114,12 @@ int main() { hegel_run_test(testSquare); return 0; }
 
 Layer 3 (the Makefile) knows this test should exit non-zero — hegel should catch the overflow.
 
-Four categories:
+Five categories:
 - **PASS tests**: function is correct, hegel should find no bug, exit 0
 - **FAIL tests**: function has a known bug, hegel should find it, exit non-zero
 - **CRASH tests**: function segfaults/aborts on specific inputs, fork isolation should catch it, exit non-zero
 - **CRASH+FAIL tests**: function either crash or fail depending on the inputs, the reducer should still work
+- **HEALTH tests**: schema is deliberately pathological (e.g. `HEGEL_FILTER_INT` with a ~99.9999% rejection rate, or `HEGEL_ARRAY_INLINE` with a minimum size that overflows the byte budget). The Hypothesis-side health checks must fire and reach the C user as a non-zero exit plus a recognizable `"Health check failure"` message in stderr. Covers both `filter_too_much` and `large_base_example`, single + suite variants.
 
 ## Benchmarking
 
