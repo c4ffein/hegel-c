@@ -2,19 +2,30 @@
 
 ## Project overview
 
-hegel-c is a C binding for Hegel, a property-based testing framework. It provides a pure C API (`hegel_c.h`) backed by a Rust FFI bridge (`rust-version/src/lib.rs`) that connects to the Hegel server (a Rust/Python service). C tests include the header, link against a static `.a`, and never see Rust.
+hegel-c is a C binding for Hegel, a property-based testing framework. It provides a pure C API backed by a Rust FFI bridge that connects to the Hegel server (a Rust/Python service). C tests include the headers, link against a static `.a`, and never see Rust.
 
-**Status**: Work in progress. Author: c4ffein. License: MIT.
+**Two layers of public API:**
+- `hegel_c.h` — primitive draws, spans, asserts. The FFI boundary.
+- `hegel_gen.h` — higher-level schema/shape system for describing and generating C structs declaratively. Pure C, uses `hegel_c.h` as its backend. Compiled via the `cc` crate in `rust-version/build.rs` and linked into `libhegel_c.a`.
+
+Most new code should use the schema API — it handles allocation, span annotation, ownership tracking, and cleanup automatically. The primitive API is still there for simple scalar tests or when you need finer control.
+
+**Status**: Work in progress. V0 schema API done. Author: c4ffein. License: MIT.
 
 ## Architecture
 
-- `hegel_c.h` — Public C API (opaque types, draw functions, generators, assertions, suite API)
-- `rust-version/src/lib.rs` — Rust FFI implementation, compiled to `libhegel_c.a`
-- `tests/selftest/` — 20 self-tests (PASS/FAIL/CRASH)
+- `hegel_c.h` — Public C API (opaque types, draw functions, old combinator generators, assertions, suite API, spans)
+- `hegel_gen.h` / `hegel_gen.c` — Schema system (declarations + pure-C implementation). See `docs/schema-api.md` and `docs/patterns.md`.
+- `rust-version/src/lib.rs` — Rust FFI implementation (primitives), compiled to `libhegel_c.a`
+- `rust-version/build.rs` — cc-crate build script that also compiles `hegel_gen.c` into `libhegel_c.a`
+- `tests/selftest/` — 32 self-tests (PASS/FAIL/CRASH) including 9 schema pattern tests
 - `tests/from-hegel-rust/` — 26 tests ported from hegel-rust
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI)
+- `docs/schema-api.md` — schema system reference
+- `docs/patterns.md` — pattern catalog (tests as documentation)
 - `docs/mpi-testing.md` — MPI integration guide
+- `TODO.md` — deferred items
 
 Two execution modes:
 - **Fork mode** (default): each test case runs in a forked child; parent serves draw requests via pipe IPC. Crash-safe.
@@ -29,7 +40,7 @@ Optional: `mpicc`/OpenMPI for MPI tests, Scotch/PT-Scotch for IRL tests.
 ```bash
 make help                       # all targets and proxy commands
 
-make selftest-test              # 20 tests (13 PASS, 4 FAIL, 3 CRASH)
+make selftest-test              # 32 tests (24 PASS, 5 FAIL, 3 CRASH)
 make from-hegel-rust-test       # 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
@@ -43,17 +54,70 @@ For standalone compilation: `gcc -O2 -I. -funwind-tables -fexceptions -o test te
 
 ## C API summary
 
-**Runners:**
+**Runners (from `hegel_c.h`):**
 - `hegel_run_test(fn)` / `_n(fn, n)` — fork mode, `exit(1)` on failure
 - `hegel_run_test_result(fn)` / `_n(fn, n)` — fork mode, returns 0/1 (no exit)
 - `hegel_run_test_nofork(fn)` / `_n(fn, n)` — no fork, no crash isolation
 - `hegel_suite_new/add/run/free` — multi-test runner sharing one server
 
-**Draws:** `hegel_draw_int`, `_i64`, `_u64`, `_usize`, `_float`, `_double`, `_text`, `_regex`
+**Primitive draws:** `hegel_draw_int`, `_i64`, `_u64`, `_usize`, `_float`, `_double`, `_text`, `_regex`
 
-**Generators:** `hegel_gen_int`, `_i64`, `_u64`, `_float`, `_double`, `_bool`, `_text`, `_regex`, `_one_of`, `_sampled_from`, `_optional`, `_map_*`, `_filter_*`, `_flat_map_*`
+**Spans:** `hegel_start_span(tc, label)`, `hegel_stop_span(tc, discard)` — structural shrinking hints. Users rarely call these directly; the schema API emits them automatically.
+
+**Legacy combinator generators:** `hegel_gen_int`, `_i64`, `_u64`, `_float`, `_double`, `_bool`, `_text`, `_regex`, `_one_of`, `_sampled_from`, `_optional`, `_map_*`, `_filter_*`, `_flat_map_*`. These predate the schema API and overlap with it; prefer `hegel_gen.h` for new code.
 
 **Other:** `hegel_note(tc, msg)` (debug on final replay), `hegel_assume(tc, cond)`, `hegel_fail(msg)`, `HEGEL_ASSERT(cond, fmt, ...)`
+
+## Schema API (`hegel_gen.h`)
+
+The schema system lets tests describe C structs declaratively and get generation/allocation/cleanup/spans for free.
+
+**Three-layer architecture:**
+1. **Schema tree** (`hegel_schema_t`) — user-built description of the type, reference-counted
+2. **Shape tree** (`hegel_shape *`) — per-run metadata, built on draw, owns the value memory
+3. **Value memory** — the actual C struct passed to the tested function
+
+**Wrapper type:** `hegel_schema_t` is a newtype struct `{ hegel_schema * _raw; }` — distinct C type from raw pointers, zero runtime cost. Users never touch `_raw`. Detailed rationale is in the `hegel_gen.h` header comment.
+
+**Ownership:** starts at refcount=1, passing to a parent transfers the reference (no bump). For sharing across multiple parents, explicitly call `hegel_schema_ref(s)` before each extra use. `hegel_schema_free` decrements; actual free at zero.
+
+**Constructors (all return `hegel_schema_t`):**
+- Integers: `hegel_schema_i8` through `u64`, plus `int` / `long` / `_range` variants
+- Floats: `hegel_schema_float` / `_range`, `hegel_schema_double` / `_range`
+- Text: `hegel_schema_text(min_len, max_len)`
+- `hegel_schema_struct(size, fields...)` — variadic, H_END-terminated internally
+- `hegel_schema_self()` — recursive reference
+
+**Macros (the user-facing surface):**
+- `HEGEL_INT(T, f, lo, hi)` / `HEGEL_INT(T, f)` (full range) — arg-count overloaded; same for `_I8`/`_U8`/`_I16`/…/`_DOUBLE`
+- `HEGEL_TEXT(T, f, lo, hi)` — always-present string field
+- `HEGEL_OPTIONAL(T, f, inner)` — 50/50 nullable pointer
+- `HEGEL_SELF(T, f)` — optional recursive pointer (expands to `HEGEL_OPTIONAL` + `hegel_schema_self()`)
+- `HEGEL_ARRAY(T, ptr_f, len_f, elem, lo, hi)` — malloc'd array, separate ptr+count fields
+- `HEGEL_ARRAY_INLINE(T, ptr_f, len_f, elem, elem_sz, lo, hi)` — contiguous inline struct/union array
+- `HEGEL_UNION(T, tag_f, cases...)` — tagged union, writes tag to struct
+- `HEGEL_UNION_UNTAGGED(cases...)` — tag only in shape tree
+- `HEGEL_VARIANT(T, tag_f, ptr_f, cases...)` — tag + pointer to separately allocated variant struct
+- `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing "pick one struct, allocate, return ptr"; used as `HEGEL_ARRAY` elem or inside `HEGEL_OPTIONAL`
+- `HEGEL_CASE(fields...)` — used inside `HEGEL_UNION*` macros
+- `HEGEL_MAP_INT(T, f, source, fn, ctx)` — functional map: draw source, apply fn, store result
+- `HEGEL_FILTER_INT(T, f, source, pred, ctx)` — keep only values matching pred (uses `hegel_assume` to discard)
+- `HEGEL_FLAT_MAP_INT(T, f, source, fn, ctx)` — dependent: draw source, callback returns a fresh schema, draw from that
+
+Variadic macros do **not** take a trailing `NULL` — the H_END sentinel is appended internally.
+
+**Draw / free:**
+- `hegel_shape *hegel_schema_draw(tc, schema, (void**)&ptr)` — allocates, fills, returns shape
+- `hegel_shape_free(sh)` — walks shape tree, frees value memory + shape
+- `hegel_schema_free(schema)` — refcount-decrement, free schema at zero
+
+**Shape accessors** (for untagged unions, parallel-length patterns):
+- `hegel_shape_tag(sh)` — variant index
+- `hegel_shape_array_len(sh)` — array length
+- `hegel_shape_is_some(sh)` — optional present/absent
+- `hegel_shape_field(sh, i)` — positional struct field access (TODO: named accessors)
+
+**See:** `docs/schema-api.md` for the full reference, `docs/patterns.md` for a catalog of C memory layouts with links to the test files that demonstrate each.
 
 ## Selftest three-layer pattern
 
@@ -83,9 +147,9 @@ Markdown files use `<!-- SPDX-License-Identifier: MIT ... -->`. Enforced by `che
 
 ## Key dependencies
 
-- **Rust**: `hegeltest = "0.4"` (resolves to 0.4.3), `libc = "0.2"`
+- **Rust**: `hegeltest = "0.4"` (resolves to 0.4.3), `libc = "0.2"`, `cc = "1.0"` (build-dependency for compiling `hegel_gen.c`)
 - **C linking**: `-lhegel_c -lpthread -lm -ldl` (add `-lscotch -lscotcherr -lz -lrt` for Scotch tests)
-- Rust lib compiled as `staticlib` with `panic = "unwind"`
+- Rust lib compiled as `staticlib` with `panic = "unwind"`; `hegel_gen.c` is compiled via `cc::Build` in `rust-version/build.rs` and archived into the same `libhegel_c.a`
 
 ## hegeltest version and API gaps
 
