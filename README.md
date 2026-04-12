@@ -1,24 +1,72 @@
 # Hegel C binding
 
-Currently a mostly vibe-coded WiP duct-taped C library — your tests include a .h, link a .a, never see Rust.
-- The current implementation is Rust because we rely on the main lib that talks to the Hegel server (which is a Rust/Python service).
+A property-based testing library for C, built on top of [Hegel](https://github.com/DRMacIver/hegel) — your tests include a header, link a `.a`, and get integrated shrinking + rich structured-data generation with no Python / Rust visible at the source level.
+
+## Two API layers
+
+**Primitive API** (`hegel_c.h`) — scalar draws, assertions, spans, test runners. For simple tests that hand-roll everything.
+
+**Schema API** (`hegel_gen.h`) — describe your C struct declaratively and get generation, allocation, span-based structural shrinking, and cleanup for free. Typed in terms of `hegel_schema_t` (a zero-cost newtype wrapper). See [docs/schema-api.md](docs/schema-api.md) for the reference and [docs/patterns.md](docs/patterns.md) for a catalog mapping common C memory layouts to the test files that demonstrate each one.
+
+Small example:
+```c
+typedef struct Tree {
+  int val;
+  char *label;
+  struct Tree *left, *right;
+} Tree;
+
+static hegel_schema_t tree_schema;
+
+static void test_roundtrip (hegel_testcase *tc) {
+  Tree *t;
+  hegel_shape *sh = hegel_schema_draw (tc, tree_schema, (void **) &t);
+  HEGEL_ASSERT (tree_to_json (t) && json_to_tree (tree_to_json (t)), "...");
+  hegel_shape_free (sh);
+}
+
+int main (void) {
+  tree_schema = hegel_schema_struct (sizeof (Tree),
+      HEGEL_INT      (Tree, val, -1000, 1000),
+      HEGEL_OPTIONAL (Tree, label, hegel_schema_text (0, 8)),
+      HEGEL_SELF     (Tree, left),
+      HEGEL_SELF     (Tree, right));
+  hegel_run_test (test_roundtrip);
+  hegel_schema_free (tree_schema);
+  return 0;
+}
+```
+
+## Implementation notes
+
+- The current implementation is Rust because we rely on the [hegeltest](https://crates.io/crates/hegeltest) crate that talks to the Hegel server (Rust/Python service). `rust-version/build.rs` also compiles the pure-C `hegel_gen.c` into the same `libhegel_c.a`.
 - The alternative would be reimplementing the Hegel wire protocol in pure C.
 - This will only be done once there is a sufficient test suite to verify consistency between these 2 options.
-- While the Rust bridge was the fast path to get everything working, it will be kept - we want both:
-  - a future pure C implem connecting to the worker through the socket
-  - a version as close to the the official Rust implementation as possible
-    - if the Hegel team ever release a low-level C header for FFI bindings, we'll adapt to it, still providing a nice standard layer to make it as adapted to a C codebase as possible
+- While the Rust bridge was the fast path to get everything working, it will be kept — we want both:
+  - a future pure C implementation connecting to the worker through the socket
+  - a version as close to the official Rust implementation as possible
+    - if the Hegel team ever releases a low-level C header for FFI bindings, we'll adapt to it, still providing a nice standard layer to make it as adapted to a C codebase as possible
+
+## Documentation
+
+- **[docs/schema-api.md](docs/schema-api.md)** — schema system reference (constructors, macros, refcounting, draw/free)
+- **[docs/patterns.md](docs/patterns.md)** — pattern catalog mapping C memory layouts to schema tests
+- **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
+- **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
+- **[TODO.md](TODO.md)** — deferred items
 
 ## Test suites
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 20 (13 PASS, 4 FAIL, 3 CRASH) | `make selftest-test` |
+| selftest | 32 (24 PASS, 5 FAIL, 3 CRASH) | `make selftest-test` |
 | from-hegel-rust | 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
 | Scotch IRL | 2 (1 sequential, 1 PT-Scotch MPI) | `make scotch-test` |
 
 MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [docs/mpi-testing.md](docs/mpi-testing.md).
+
+The selftest suite doubles as example code — 9 of the 32 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
 
 ## Done
 - [x] `hegel_run_test_result()` / `_n()` — return 0/1 instead of `exit(1)`, enables multi-test binaries
@@ -30,8 +78,11 @@ MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [d
 - [x] CI integration — `.github/workflows/ci.yml` (selftest, from-hegel-rust, Scotch)
 - [x] PT-Scotch MPI tests — fork mode + `MPI_Comm_spawn` + `MPI_Intercomm_merge`, no mpiexec. [Full guide](docs/mpi-testing.md).
 - [x] Scotch IRL tests — sequential `SCOTCH_graphPart` + distributed `SCOTCH_dgraphPart`
-- [x] Selftest three-layer pattern rewrite (all 20 tests follow it)
+- [x] Selftest three-layer pattern rewrite (all tests follow it)
 - [x] "Draw N:" trace — not a bug, only on final replay (`is_last_run`)
+- [x] Spans primitive (`hegel_start_span` / `hegel_stop_span`) — structural shrinking hints
+- [x] Schema / shape API (`hegel_gen.h` + `hegel_gen.c`) — declarative struct generation with refcounting, span emission, automatic cleanup. Zero-cost `hegel_schema_t` newtype wrapper. See [docs/schema-api.md](docs/schema-api.md).
+- [x] 9 schema pattern tests covering all common C polymorphism idioms + full functional combinator coverage (map / filter / flat_map for int/i64/double, one_of scalar, bool, regex). Feature parity with the legacy `hegel_gen_*` combinator API. See [docs/patterns.md](docs/patterns.md). ASAN-clean.
 
 ## TODO
 - [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
