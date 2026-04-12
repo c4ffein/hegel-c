@@ -1,6 +1,6 @@
 # Hegel C binding
 
-A property-based testing library for C, built on top of [Hegel](https://github.com/DRMacIver/hegel) — your tests include a header, link a `.a`, and get integrated shrinking + rich structured-data generation with no Python / Rust visible at the source level.
+A property-based testing library for C, built on top of [Hegel](https://github.com/hegeldev/hegel-cpre) — your tests include a header, link a `.a`, and get integrated shrinking + rich structured-data generation with no Python / Rust visible at the source level.
 
 ## Two API layers
 
