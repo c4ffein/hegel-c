@@ -28,7 +28,11 @@ TESTS_PASS = test_pass_simple \
              test_gen_schema_union_variant_tagged_untagged \
              test_gen_schema_array_of_variant_struct_pointers \
              test_gen_schema_nested_array_of_arrays_matrix \
-             test_gen_schema_array_all_composition_patterns
+             test_gen_schema_array_all_composition_patterns \
+             test_gen_schema_array_inline_of_tagged_unions \
+             test_gen_schema_array_of_raw_struct_pointers_by_kind \
+             test_gen_schema_array_inline_of_bare_unions_common_prefix \
+             test_gen_schema_functional_combinators
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \

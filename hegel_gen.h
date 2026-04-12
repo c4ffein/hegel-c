@@ -59,6 +59,7 @@ typedef enum {
   HEGEL_SCH_INTEGER,
   HEGEL_SCH_FLOAT,
   HEGEL_SCH_TEXT,
+  HEGEL_SCH_REGEX,           /* text constrained by a regex pattern  */
   HEGEL_SCH_STRUCT,
   HEGEL_SCH_OPTIONAL_PTR,
   HEGEL_SCH_ARRAY,
@@ -66,10 +67,28 @@ typedef enum {
   HEGEL_SCH_UNION,
   HEGEL_SCH_UNION_UNTAGGED,
   HEGEL_SCH_VARIANT,
+  HEGEL_SCH_ONE_OF_STRUCT,
+  HEGEL_SCH_MAP_INT,
+  HEGEL_SCH_FILTER_INT,
+  HEGEL_SCH_FLAT_MAP_INT,
+  HEGEL_SCH_MAP_I64,
+  HEGEL_SCH_FILTER_I64,
+  HEGEL_SCH_FLAT_MAP_I64,
+  HEGEL_SCH_MAP_DOUBLE,
+  HEGEL_SCH_FILTER_DOUBLE,
+  HEGEL_SCH_FLAT_MAP_DOUBLE,
+  HEGEL_SCH_ONE_OF_SCALAR,   /* pick one of several scalar schemas   */
   HEGEL_SCH_SELF
 } hegel_schema_kind;
 
-typedef struct hegel_schema {
+/* Forward declaration + typedef so hegel_schema_t (the user-facing
+** wrapper) can be defined before the struct body.  The full body is
+** below; functions taking `hegel_schema_t` in function pointer types
+** inside the struct need the wrapper type to be visible first. */
+typedef struct hegel_schema hegel_schema;
+typedef struct { hegel_schema * _raw; } hegel_schema_t;
+
+struct hegel_schema {
   hegel_schema_kind       kind;
   size_t                  offset;
   int                     refcount;
@@ -121,10 +140,69 @@ typedef struct hegel_schema {
       struct hegel_schema ** cases;
     }                                                  variant_def;
     struct {
+      struct hegel_schema * source;
+      int (*fn)(int value, void *ctx);
+      void *  ctx;
+    }                                                  map_int_def;
+    struct {
+      struct hegel_schema * source;
+      int (*pred)(int value, void *ctx);
+      void *  ctx;
+    }                                                  filter_int_def;
+    struct {
+      struct hegel_schema * source;
+      /* Callback returns a fresh schema that produces an int.
+      ** The returned schema is consumed (freed) after each draw. */
+      hegel_schema_t (*fn)(int value, void *ctx);
+      void *  ctx;
+    }                                                  flat_map_int_def;
+    struct {
+      struct hegel_schema * source;
+      int64_t (*fn)(int64_t value, void *ctx);
+      void *  ctx;
+    }                                                  map_i64_def;
+    struct {
+      struct hegel_schema * source;
+      int (*pred)(int64_t value, void *ctx);
+      void *  ctx;
+    }                                                  filter_i64_def;
+    struct {
+      struct hegel_schema * source;
+      hegel_schema_t (*fn)(int64_t value, void *ctx);
+      void *  ctx;
+    }                                                  flat_map_i64_def;
+    struct {
+      struct hegel_schema * source;
+      double (*fn)(double value, void *ctx);
+      void *  ctx;
+    }                                                  map_double_def;
+    struct {
+      struct hegel_schema * source;
+      int (*pred)(double value, void *ctx);
+      void *  ctx;
+    }                                                  filter_double_def;
+    struct {
+      struct hegel_schema * source;
+      hegel_schema_t (*fn)(double value, void *ctx);
+      void *  ctx;
+    }                                                  flat_map_double_def;
+    struct {
+      /* Pick one of several scalar schemas.  All cases must be
+      ** INTEGER or FLOAT; at draw time we dispatch on the chosen
+      ** case's kind/width.  The user is responsible for making
+      ** sure all cases write to the same C type (e.g., all int). */
+      int               n_cases;
+      struct hegel_schema ** cases;
+    }                                                  one_of_scalar_def;
+    struct {
+      char *            pattern;   /* malloc'd copy */
+      int               capacity;  /* output buffer size */
+    }                                                  regex_def;
+    struct {
       struct hegel_schema * target;
     }                                                  self_ref;
   };
-} hegel_schema;
+};
 
 /* ================================================================
 ** User-facing: hegel_schema_t wrapper
@@ -168,9 +246,12 @@ typedef struct hegel_schema {
 ** isn't a valid `hegel_schema_t`.  So we define `H_END` as an explicit
 ** `hegel_schema_t` sentinel with `_raw == NULL`, and the macros append
 ** it automatically.  Users never write trailing `NULL`.
+**
+** (The actual typedef for `hegel_schema_t` is above, forward-declared
+** before the `hegel_schema` struct body so it can be used in function
+** pointer types inside the struct — e.g., the flat_map callback
+** returns a `hegel_schema_t`.)
 */
-
-typedef struct { hegel_schema * _raw; } hegel_schema_t;
 
 #define H_END ((hegel_schema_t){ NULL })
 
@@ -319,6 +400,156 @@ hegel_schema_t hegel__union (size_t tag_offset, hegel_schema_kind kind,
 
 hegel_schema_t hegel_schema_variant_v (size_t tag_offset, size_t ptr_offset,
                                        hegel_schema_t * case_list);
+
+/* Pick one of several STRUCT schemas, allocate it, and produce a
+** pointer to it.  Unlike HEGEL_VARIANT, this does NOT write anything
+** to a parent struct — it's a standalone pointer-producing schema,
+** useful as an ARRAY element or inside HEGEL_OPTIONAL.
+**
+** Use case: "array of pointers to different-size structs" where the
+** tag lives inside each pointed-to struct (not in a wrapper).  The
+** generator picks a variant per element, allocates it, stores the
+** raw pointer in the array slot. */
+hegel_schema_t hegel_schema_one_of_struct_v (hegel_schema_t * case_list);
+
+#define HEGEL_ONE_OF_STRUCT(...) \
+  hegel_schema_one_of_struct_v ((hegel_schema_t[]){ __VA_ARGS__, H_END })
+
+/* ================================================================
+** Functional combinators — map / filter / flat_map (for int source)
+** ================================================================
+**
+** These take a source schema (must be INTEGER kind) and a callback.
+** The result is itself a field schema — you place it in a struct
+** via HEGEL_INT-style macros, or use it directly.
+**
+** map:      draw source, apply fn, write result at offset
+** filter:   draw source, call pred, assume(0) to discard if false
+** flat_map: draw source, call fn to build a fresh schema, draw
+**           from that, write result at offset.  The returned schema
+**           must also be an INTEGER schema.  It's freed after each
+**           draw, so the callback builds it fresh every time.
+**
+** The source schema's reference is transferred to the combinator
+** (normal ownership semantics).  The callback's ctx must outlive
+** the combinator. */
+
+hegel_schema_t hegel_schema_map_int (
+    hegel_schema_t source,
+    int (*fn)(int value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_filter_int (
+    hegel_schema_t source,
+    int (*pred)(int value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_flat_map_int (
+    hegel_schema_t source,
+    hegel_schema_t (*fn)(int value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_map_i64 (
+    hegel_schema_t source,
+    int64_t (*fn)(int64_t value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_filter_i64 (
+    hegel_schema_t source,
+    int (*pred)(int64_t value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_flat_map_i64 (
+    hegel_schema_t source,
+    hegel_schema_t (*fn)(int64_t value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_map_double (
+    hegel_schema_t source,
+    double (*fn)(double value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_filter_double (
+    hegel_schema_t source,
+    int (*pred)(double value, void *ctx),
+    void *ctx);
+
+hegel_schema_t hegel_schema_flat_map_double (
+    hegel_schema_t source,
+    hegel_schema_t (*fn)(double value, void *ctx),
+    void *ctx);
+
+/* Convenience macros to attach a map/filter/flat_map schema to a
+** struct field at a given offset.  For each int / i64 / double. */
+#define HEGEL_MAP_INT(type, field, source, fn, ctx) \
+  hegel__at (hegel_schema_map_int ((source), (fn), (ctx)), \
+             offsetof (type, field))
+#define HEGEL_FILTER_INT(type, field, source, pred, ctx) \
+  hegel__at (hegel_schema_filter_int ((source), (pred), (ctx)), \
+             offsetof (type, field))
+#define HEGEL_FLAT_MAP_INT(type, field, source, fn, ctx) \
+  hegel__at (hegel_schema_flat_map_int ((source), (fn), (ctx)), \
+             offsetof (type, field))
+
+#define HEGEL_MAP_I64(type, field, source, fn, ctx) \
+  hegel__at (hegel_schema_map_i64 ((source), (fn), (ctx)), \
+             offsetof (type, field))
+#define HEGEL_FILTER_I64(type, field, source, pred, ctx) \
+  hegel__at (hegel_schema_filter_i64 ((source), (pred), (ctx)), \
+             offsetof (type, field))
+#define HEGEL_FLAT_MAP_I64(type, field, source, fn, ctx) \
+  hegel__at (hegel_schema_flat_map_i64 ((source), (fn), (ctx)), \
+             offsetof (type, field))
+
+#define HEGEL_MAP_DOUBLE(type, field, source, fn, ctx) \
+  hegel__at (hegel_schema_map_double ((source), (fn), (ctx)), \
+             offsetof (type, field))
+#define HEGEL_FILTER_DOUBLE(type, field, source, pred, ctx) \
+  hegel__at (hegel_schema_filter_double ((source), (pred), (ctx)), \
+             offsetof (type, field))
+#define HEGEL_FLAT_MAP_DOUBLE(type, field, source, fn, ctx) \
+  hegel__at (hegel_schema_flat_map_double ((source), (fn), (ctx)), \
+             offsetof (type, field))
+
+/* One-of for scalar schemas.  Picks one of several integer/float
+** schemas and draws from it.  All cases must produce the same C
+** type at the target field (user's responsibility).  Use when you
+** want e.g. "a small int OR a huge int" (distributions that don't
+** fit a single range). */
+hegel_schema_t hegel_schema_one_of_scalar_v (hegel_schema_t * case_list);
+
+#define HEGEL_ONE_OF_INT(type, field, ...) \
+  hegel__at (hegel_schema_one_of_scalar_v ( \
+      (hegel_schema_t[]){ __VA_ARGS__, H_END }), \
+      offsetof (type, field))
+#define HEGEL_ONE_OF_I64(type, field, ...) \
+  hegel__at (hegel_schema_one_of_scalar_v ( \
+      (hegel_schema_t[]){ __VA_ARGS__, H_END }), \
+      offsetof (type, field))
+#define HEGEL_ONE_OF_DOUBLE(type, field, ...) \
+  hegel__at (hegel_schema_one_of_scalar_v ( \
+      (hegel_schema_t[]){ __VA_ARGS__, H_END }), \
+      offsetof (type, field))
+
+/* Boolean — a 1-byte unsigned int in [0, 1].  Matches C's `bool` /
+** `_Bool` (stdbool.h) which is 1 byte.  User's field should be
+** `bool` or `_Bool`. */
+#define HEGEL_BOOL(type, field) \
+  hegel_schema_u8_range_at (offsetof (type, field), 0, 1)
+
+/* Regex-generated text.  Produces a malloc'd string at a `char *`
+** field, generated by hegel_draw_regex.
+**
+** WARNING: the underlying primitive uses hegeltest's "contains a
+** match" semantics, not full-match.  For permissive patterns
+** (matching the empty string), the generator returns ARBITRARY
+** bytes including control characters, quotes, and non-ASCII.
+** See TODO.md. */
+hegel_schema_t hegel_schema_regex (const char * pattern, int capacity);
+
+#define HEGEL_REGEX(type, field, pattern, capacity) \
+  hegel__at (hegel_schema_regex ((pattern), (capacity)), \
+             offsetof (type, field))
 
 hegel_schema_t hegel_schema_self (void);
 

@@ -315,6 +315,204 @@ hegel_schema_self (void)
   return (hegel_schema_t){s};
 }
 
+/* One-of-struct: pick one of several STRUCT schemas.  No parent
+** offsets — this is a standalone pointer-producing generator. */
+hegel_schema_t
+hegel_schema_one_of_struct_v (hegel_schema_t * case_list)
+{
+  int                 n;
+  hegel_schema *      s;
+
+  /* case_list is H_END-terminated */
+  for (n = 0; case_list[n]._raw != NULL; n ++) {}
+
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_ONE_OF_STRUCT;
+  s->offset = 0;
+  s->refcount = 1;
+  /* Reuse the variant_def union member — offsets unused. */
+  s->variant_def.tag_offset = (size_t) -1;
+  s->variant_def.ptr_offset = (size_t) -1;
+  s->variant_def.n_cases = n;
+  s->variant_def.cases = (hegel_schema **) malloc (
+      (size_t) n * sizeof (hegel_schema *));
+  for (int i = 0; i < n; i ++)
+    s->variant_def.cases[i] = case_list[i]._raw;  /* unwrap + transfer */
+  return (hegel_schema_t){s};
+}
+
+/* ---- Functional combinators: map / filter / flat_map (int) ---- */
+
+hegel_schema_t
+hegel_schema_map_int (hegel_schema_t source,
+                      int (*fn)(int, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_MAP_INT;
+  s->offset = 0;
+  s->refcount = 1;
+  s->map_int_def.source = source._raw;   /* ownership transferred */
+  s->map_int_def.fn = fn;
+  s->map_int_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_filter_int (hegel_schema_t source,
+                         int (*pred)(int, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_FILTER_INT;
+  s->offset = 0;
+  s->refcount = 1;
+  s->filter_int_def.source = source._raw;
+  s->filter_int_def.pred = pred;
+  s->filter_int_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_flat_map_int (hegel_schema_t source,
+                           hegel_schema_t (*fn)(int, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_FLAT_MAP_INT;
+  s->offset = 0;
+  s->refcount = 1;
+  s->flat_map_int_def.source = source._raw;
+  s->flat_map_int_def.fn = fn;
+  s->flat_map_int_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+/* ---- i64 combinators (same shape as int, different callback types) ---- */
+
+hegel_schema_t
+hegel_schema_map_i64 (hegel_schema_t source,
+                      int64_t (*fn)(int64_t, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_MAP_I64;
+  s->offset = 0;
+  s->refcount = 1;
+  s->map_i64_def.source = source._raw;
+  s->map_i64_def.fn = fn;
+  s->map_i64_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_filter_i64 (hegel_schema_t source,
+                         int (*pred)(int64_t, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_FILTER_I64;
+  s->offset = 0;
+  s->refcount = 1;
+  s->filter_i64_def.source = source._raw;
+  s->filter_i64_def.pred = pred;
+  s->filter_i64_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_flat_map_i64 (hegel_schema_t source,
+                           hegel_schema_t (*fn)(int64_t, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_FLAT_MAP_I64;
+  s->offset = 0;
+  s->refcount = 1;
+  s->flat_map_i64_def.source = source._raw;
+  s->flat_map_i64_def.fn = fn;
+  s->flat_map_i64_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+/* ---- double combinators ---- */
+
+hegel_schema_t
+hegel_schema_map_double (hegel_schema_t source,
+                         double (*fn)(double, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_MAP_DOUBLE;
+  s->offset = 0;
+  s->refcount = 1;
+  s->map_double_def.source = source._raw;
+  s->map_double_def.fn = fn;
+  s->map_double_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_filter_double (hegel_schema_t source,
+                            int (*pred)(double, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_FILTER_DOUBLE;
+  s->offset = 0;
+  s->refcount = 1;
+  s->filter_double_def.source = source._raw;
+  s->filter_double_def.pred = pred;
+  s->filter_double_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_flat_map_double (hegel_schema_t source,
+                              hegel_schema_t (*fn)(double, void *), void *ctx)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_FLAT_MAP_DOUBLE;
+  s->offset = 0;
+  s->refcount = 1;
+  s->flat_map_double_def.source = source._raw;
+  s->flat_map_double_def.fn = fn;
+  s->flat_map_double_def.ctx = ctx;
+  return (hegel_schema_t){s};
+}
+
+/* ---- One-of for scalar schemas ---- */
+
+hegel_schema_t
+hegel_schema_one_of_scalar_v (hegel_schema_t * case_list)
+{
+  int                 n;
+  hegel_schema *      s;
+
+  for (n = 0; case_list[n]._raw != NULL; n ++) {}
+
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_ONE_OF_SCALAR;
+  s->offset = 0;
+  s->refcount = 1;
+  s->one_of_scalar_def.n_cases = n;
+  s->one_of_scalar_def.cases = (hegel_schema **) malloc (
+      (size_t) n * sizeof (hegel_schema *));
+  for (int i = 0; i < n; i ++)
+    s->one_of_scalar_def.cases[i] = case_list[i]._raw;
+  return (hegel_schema_t){s};
+}
+
+/* ---- Regex-generated text ---- */
+
+hegel_schema_t
+hegel_schema_regex (const char * pattern, int capacity)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_REGEX;
+  s->offset = 0;
+  s->refcount = 1;
+  {
+    size_t plen = strlen (pattern);
+    s->regex_def.pattern = (char *) malloc (plen + 1);
+    memcpy (s->regex_def.pattern, pattern, plen + 1);
+  }
+  s->regex_def.capacity = capacity;
+  return (hegel_schema_t){s};
+}
+
 /* ---- SELF resolution ---- */
 
 static void
@@ -345,8 +543,40 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
           hegel__resolve_self (node->union_def.cases[i][j], target);
       break;
     case HEGEL_SCH_VARIANT:
+    case HEGEL_SCH_ONE_OF_STRUCT:
       for (int i = 0; i < node->variant_def.n_cases; i ++)
         hegel__resolve_self (node->variant_def.cases[i], target);
+      break;
+    case HEGEL_SCH_MAP_INT:
+      hegel__resolve_self (node->map_int_def.source, target);
+      break;
+    case HEGEL_SCH_FILTER_INT:
+      hegel__resolve_self (node->filter_int_def.source, target);
+      break;
+    case HEGEL_SCH_FLAT_MAP_INT:
+      hegel__resolve_self (node->flat_map_int_def.source, target);
+      break;
+    case HEGEL_SCH_MAP_I64:
+      hegel__resolve_self (node->map_i64_def.source, target);
+      break;
+    case HEGEL_SCH_FILTER_I64:
+      hegel__resolve_self (node->filter_i64_def.source, target);
+      break;
+    case HEGEL_SCH_FLAT_MAP_I64:
+      hegel__resolve_self (node->flat_map_i64_def.source, target);
+      break;
+    case HEGEL_SCH_MAP_DOUBLE:
+      hegel__resolve_self (node->map_double_def.source, target);
+      break;
+    case HEGEL_SCH_FILTER_DOUBLE:
+      hegel__resolve_self (node->filter_double_def.source, target);
+      break;
+    case HEGEL_SCH_FLAT_MAP_DOUBLE:
+      hegel__resolve_self (node->flat_map_double_def.source, target);
+      break;
+    case HEGEL_SCH_ONE_OF_SCALAR:
+      for (int i = 0; i < node->one_of_scalar_def.n_cases; i ++)
+        hegel__resolve_self (node->one_of_scalar_def.cases[i], target);
       break;
     default:
       break;
@@ -564,6 +794,31 @@ hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
       return (shape);
     }
 
+    case HEGEL_SCH_ONE_OF_STRUCT: {
+      /* Pick a variant, allocate the chosen struct, return the ptr.
+      ** No parent writes — this is the whole point of this schema kind. */
+      int nc = actual->variant_def.n_cases;
+      hegel_schema * chosen;
+      void * child;
+      hegel_shape * inner;
+
+      hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
+      int tag = hegel_draw_int (tc, 0, nc - 1);
+      chosen = actual->variant_def.cases[tag];
+
+      hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
+      inner = hegel__draw_struct (tc, chosen, &child, depth - 1);
+      hegel_stop_span (tc, 0);
+      hegel_stop_span (tc, 0);
+
+      *out = child;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_VARIANT;
+      shape->variant_shape.tag = tag;
+      shape->variant_shape.inner = inner;
+      return (shape);
+    }
+
     default:
       *out = NULL;
       return (NULL);
@@ -576,15 +831,16 @@ static size_t
 hegel__elem_size (hegel_schema * elem)
 {
   switch (elem->kind) {
-    case HEGEL_SCH_INTEGER:  return ((size_t) elem->integer.width);
-    case HEGEL_SCH_FLOAT:    return ((size_t) elem->fp.width);
-    case HEGEL_SCH_TEXT:     return (sizeof (char *));
-    case HEGEL_SCH_STRUCT:   return (sizeof (void *));
+    case HEGEL_SCH_INTEGER:       return ((size_t) elem->integer.width);
+    case HEGEL_SCH_FLOAT:         return ((size_t) elem->fp.width);
+    case HEGEL_SCH_TEXT:          return (sizeof (char *));
+    case HEGEL_SCH_STRUCT:        return (sizeof (void *));
+    case HEGEL_SCH_ONE_OF_STRUCT: return (sizeof (void *));
     case HEGEL_SCH_SELF:
       if (elem->self_ref.target != NULL)
         return (sizeof (void *));
       return (sizeof (int));
-    default:                 return (sizeof (int));
+    default:                      return (sizeof (int));
   }
 }
 
@@ -735,6 +991,13 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen, void * parent,
           void * child;
           shape->array_shape.elems[i] =
               hegel__draw_struct (tc, elem, &child, depth - 1);
+          ((void **) arr)[i] = child;
+
+        } else if (elem->kind == HEGEL_SCH_ONE_OF_STRUCT) {
+          /* Pick a struct schema per element, allocate, store ptr. */
+          void * child;
+          shape->array_shape.elems[i] =
+              hegel__draw_alloc (tc, elem, &child, depth);
           ((void **) arr)[i] = child;
         }
 
@@ -890,8 +1153,186 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen, void * parent,
       return (shape);
     }
 
+    case HEGEL_SCH_MAP_INT: {
+      /* Draw source into a temp int, apply fn, write result at offset. */
+      hegel_schema * src = gen->map_int_def.source;
+      int raw;
+      hegel__draw_integer_into (tc, src, &raw);
+      int mapped = gen->map_int_def.fn (raw, gen->map_int_def.ctx);
+      *(int *) ((char *) parent + gen->offset) = mapped;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_FILTER_INT: {
+      /* Draw source, call pred, assume(0) to discard if pred fails.
+      ** hegel_assume internally calls the testcase's assume which
+      ** triggers a filter_too_much health check after 50 discards —
+      ** use filter sparingly for narrow predicates. */
+      hegel_schema * src = gen->filter_int_def.source;
+      int raw;
+      hegel__draw_integer_into (tc, src, &raw);
+      if (! gen->filter_int_def.pred (raw, gen->filter_int_def.ctx)) {
+        hegel_assume (tc, 0);   /* discards the whole test case */
+      }
+      *(int *) ((char *) parent + gen->offset) = raw;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_FLAT_MAP_INT: {
+      /* Draw source, pass to callback to get a fresh schema,
+      ** draw from that schema (must be INTEGER), write result,
+      ** free the temporary schema. */
+      hegel_schema * src = gen->flat_map_int_def.source;
+      int raw;
+      hegel__draw_integer_into (tc, src, &raw);
+      hegel_schema_t next = gen->flat_map_int_def.fn (raw,
+          gen->flat_map_int_def.ctx);
+      if (next._raw != NULL
+          && next._raw->kind == HEGEL_SCH_INTEGER) {
+        int result;
+        hegel__draw_integer_into (tc, next._raw, &result);
+        *(int *) ((char *) parent + gen->offset) = result;
+      } else {
+        /* Callback returned a non-INTEGER schema or NULL — this is
+        ** a user error but we fail gracefully by writing 0. */
+        *(int *) ((char *) parent + gen->offset) = 0;
+      }
+      /* Free the temporary schema returned by the callback. */
+      hegel_schema_free (next);
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_MAP_I64: {
+      hegel_schema * src = gen->map_i64_def.source;
+      int64_t raw;
+      hegel__draw_integer_into (tc, src, &raw);
+      int64_t mapped = gen->map_i64_def.fn (raw, gen->map_i64_def.ctx);
+      *(int64_t *) ((char *) parent + gen->offset) = mapped;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_FILTER_I64: {
+      hegel_schema * src = gen->filter_i64_def.source;
+      int64_t raw;
+      hegel__draw_integer_into (tc, src, &raw);
+      if (! gen->filter_i64_def.pred (raw, gen->filter_i64_def.ctx))
+        hegel_assume (tc, 0);
+      *(int64_t *) ((char *) parent + gen->offset) = raw;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_FLAT_MAP_I64: {
+      hegel_schema * src = gen->flat_map_i64_def.source;
+      int64_t raw;
+      hegel__draw_integer_into (tc, src, &raw);
+      hegel_schema_t next = gen->flat_map_i64_def.fn (raw,
+          gen->flat_map_i64_def.ctx);
+      if (next._raw != NULL
+          && next._raw->kind == HEGEL_SCH_INTEGER) {
+        int64_t result;
+        hegel__draw_integer_into (tc, next._raw, &result);
+        *(int64_t *) ((char *) parent + gen->offset) = result;
+      } else {
+        *(int64_t *) ((char *) parent + gen->offset) = 0;
+      }
+      hegel_schema_free (next);
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_MAP_DOUBLE: {
+      hegel_schema * src = gen->map_double_def.source;
+      double raw;
+      hegel__draw_fp_into (tc, src, &raw);
+      double mapped = gen->map_double_def.fn (raw, gen->map_double_def.ctx);
+      *(double *) ((char *) parent + gen->offset) = mapped;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_FILTER_DOUBLE: {
+      hegel_schema * src = gen->filter_double_def.source;
+      double raw;
+      hegel__draw_fp_into (tc, src, &raw);
+      if (! gen->filter_double_def.pred (raw, gen->filter_double_def.ctx))
+        hegel_assume (tc, 0);
+      *(double *) ((char *) parent + gen->offset) = raw;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_FLAT_MAP_DOUBLE: {
+      hegel_schema * src = gen->flat_map_double_def.source;
+      double raw;
+      hegel__draw_fp_into (tc, src, &raw);
+      hegel_schema_t next = gen->flat_map_double_def.fn (raw,
+          gen->flat_map_double_def.ctx);
+      if (next._raw != NULL
+          && next._raw->kind == HEGEL_SCH_FLOAT) {
+        double result;
+        hegel__draw_fp_into (tc, next._raw, &result);
+        *(double *) ((char *) parent + gen->offset) = result;
+      } else {
+        *(double *) ((char *) parent + gen->offset) = 0.0;
+      }
+      hegel_schema_free (next);
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_ONE_OF_SCALAR: {
+      /* Pick one of the case schemas, dispatch on its kind. */
+      int nc = gen->one_of_scalar_def.n_cases;
+      hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
+      int choice = hegel_draw_int (tc, 0, nc - 1);
+      hegel_schema * chosen = gen->one_of_scalar_def.cases[choice];
+      hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
+      if (chosen->kind == HEGEL_SCH_INTEGER) {
+        hegel__draw_integer_into (tc, chosen,
+            (char *) parent + gen->offset);
+      } else if (chosen->kind == HEGEL_SCH_FLOAT) {
+        hegel__draw_fp_into (tc, chosen,
+            (char *) parent + gen->offset);
+      }
+      hegel_stop_span (tc, 0);
+      hegel_stop_span (tc, 0);
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      return (shape);
+    }
+
+    case HEGEL_SCH_REGEX: {
+      /* Allocate a buffer, call hegel_draw_regex, store the pointer. */
+      char * buf = (char *) malloc ((size_t) gen->regex_def.capacity);
+      hegel_draw_regex (tc, gen->regex_def.pattern, buf,
+                        gen->regex_def.capacity);
+      *(char **) ((char *) parent + gen->offset) = buf;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_TEXT;
+      shape->owned = buf;
+      return (shape);
+    }
+
     case HEGEL_SCH_SELF:
     case HEGEL_SCH_STRUCT:
+    case HEGEL_SCH_ONE_OF_STRUCT:
+      /* ONE_OF_STRUCT can't be used directly as a struct field —
+      ** use HEGEL_VARIANT for that.  It's only for use as an ARRAY
+      ** element or inside HEGEL_OPTIONAL (handled via draw_alloc). */
       break;
   }
 
@@ -1000,9 +1441,45 @@ hegel__schema_free_raw (hegel_schema * s)
       free (s->union_def.cases);
       break;
     case HEGEL_SCH_VARIANT:
+    case HEGEL_SCH_ONE_OF_STRUCT:
       for (i = 0; i < s->variant_def.n_cases; i ++)
         hegel__schema_free_raw (s->variant_def.cases[i]);
       free (s->variant_def.cases);
+      break;
+    case HEGEL_SCH_MAP_INT:
+      hegel__schema_free_raw (s->map_int_def.source);
+      break;
+    case HEGEL_SCH_FILTER_INT:
+      hegel__schema_free_raw (s->filter_int_def.source);
+      break;
+    case HEGEL_SCH_FLAT_MAP_INT:
+      hegel__schema_free_raw (s->flat_map_int_def.source);
+      break;
+    case HEGEL_SCH_MAP_I64:
+      hegel__schema_free_raw (s->map_i64_def.source);
+      break;
+    case HEGEL_SCH_FILTER_I64:
+      hegel__schema_free_raw (s->filter_i64_def.source);
+      break;
+    case HEGEL_SCH_FLAT_MAP_I64:
+      hegel__schema_free_raw (s->flat_map_i64_def.source);
+      break;
+    case HEGEL_SCH_MAP_DOUBLE:
+      hegel__schema_free_raw (s->map_double_def.source);
+      break;
+    case HEGEL_SCH_FILTER_DOUBLE:
+      hegel__schema_free_raw (s->filter_double_def.source);
+      break;
+    case HEGEL_SCH_FLAT_MAP_DOUBLE:
+      hegel__schema_free_raw (s->flat_map_double_def.source);
+      break;
+    case HEGEL_SCH_ONE_OF_SCALAR:
+      for (i = 0; i < s->one_of_scalar_def.n_cases; i ++)
+        hegel__schema_free_raw (s->one_of_scalar_def.cases[i]);
+      free (s->one_of_scalar_def.cases);
+      break;
+    case HEGEL_SCH_REGEX:
+      free (s->regex_def.pattern);
       break;
     case HEGEL_SCH_SELF:
       break;
