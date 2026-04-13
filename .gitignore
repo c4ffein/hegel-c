@@ -12,3 +12,5 @@ tests/irl/*/test_*
 !tests/irl/*/test_*.c
 tests/mpi/test_*
 !tests/mpi/test_*.c
+tests/bench/test_*
+!tests/bench/test_*.c
