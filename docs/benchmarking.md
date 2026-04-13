@@ -27,8 +27,16 @@ overhead rather than user code:
    `hegel_run_test_nofork` sequentially (the hegeltest server is a
    process-wide singleton either way, so startup is amortized on
    both sides).
+3. **Direct-Rust bench** (`tests/bench/rust_direct/src/main.rs`) —
+   the same shape as the single-test bench (N cases, two `i32`
+   draws, trivial assert) but written in Rust against the
+   `hegeltest` crate directly, with no C code, no FFI, no fork.
+   Used as an oracle: "is hegel-c actually slower than calling
+   hegeltest natively from Rust?"  If the C nofork number matches
+   this one, the whole C/FFI layer is free and the only cost worth
+   talking about is fork-mode IPC.
 
-Both bench bodies do `hegel_draw_int(tc, 0, 100)` once or twice
+Both C bench bodies do `hegel_draw_int(tc, 0, 100)` once or twice
 per case and an assert that can never fail.  That's intentional —
 we're measuring framework cost, not user-code cost.
 
@@ -65,14 +73,68 @@ quiet bare-metal box, so treat them as ballpark — order of
 magnitude is reliable, the second digit is not.  Reproducing on a
 quiet machine should narrow the band considerably.
 
+### Re-run later the same day, with rust_direct (2026-04-13)
+
+Same machine, same binaries, same 5 iters + 1 warmup, `taskset -c 0`.
+Ambient load was lower this time (load average ~17, same order
+as the prior run but with fewer spikes), and stddevs came in much
+tighter.
+
+| Variant                  | Mean  | Stddev | Cases/s† |
+|--------------------------|-------|--------|----------|
+| single fork              | 4.66s | 0.07s  | ~215     |
+| single nofork            | 3.67s | 0.08s  | ~273     |
+| **rust_direct (N=1000)** | 3.72s | 0.07s  | ~269     |
+| suite fork               | 3.89s | 0.09s  | —        |
+| suite nofork             | 2.92s | 0.04s  | —        |
+
+† End-to-end including server spawn; not steady-state.
+
+Per-case fork overhead on this re-run = (4.66 − 3.67) / 1000 ≈
+**1.0 ms/case** — roughly half the 2.2 ms/case figure from the
+earlier run.  The earlier nofork stddev (0.90s, ~23% of the mean)
+was clearly being pulled by an outlier slow run; the tighter re-run
+is the better point estimate.
+
+### Discrepancy analysis: C vs direct Rust
+
+The key finding from adding `rust_direct` to the comparison: **the
+entire C header + Rust FFI layer is free.**  C nofork (3.67s) and
+direct Rust against hegeltest (3.72s) are indistinguishable — the
+50 ms gap is well inside the noise floor (stddevs ~70–80 ms each).
+
+Breaking it down:
+
+| Path                                     | Mean (1000 cases) | vs rust_direct |
+|------------------------------------------|-------------------|----------------|
+| Rust → hegeltest (no C, no FFI, no fork) | 3.72s             | baseline       |
+| C → FFI → hegeltest, no fork             | 3.67s             | −50 ms (noise) |
+| C → FFI → fork/pipe → parent → hegeltest | 4.66s             | +940 ms        |
+
+Interpretation: if you'd rather eliminate hegel-c entirely and
+write your property in Rust, you will save approximately nothing
+as long as you stay in nofork mode.  The only wall-clock cost that
+shows up in the comparison is fork-mode IPC — and fork mode is the
+reason you use hegel-c in the first place (crash isolation around
+the C-under-test).  Rust users don't pay that cost because they
+don't need it; C users who turn it off recover it.
+
+The C nofork run coming in *very slightly* faster than direct Rust
+is almost certainly noise, but if it's real it'd be the
+`hegel_run_test_nofork` path skipping the Rust test-harness
+wrapper (`Hegel::new(...).run()` on the Rust side sets up a
+`Settings` builder and a closure trampoline the C side doesn't
+use).  Not worth chasing — the interesting digit is "zero
+overhead," not the sign of the sub-noise delta.
+
 ## Interpretation
 
 The prior estimate baked into the old README was "~50–100 µs per
 fork".  The *actual* per-case cost of fork mode on this workload
-is ~2 ms — roughly 20–40× the fork cost alone.  That extra cost
-isn't the `fork(2)` syscall itself; it's the pipe-IPC round-trip
-between the forked child and the parent, which proxies every
-`hegel_draw_*` call.  (See
+is ~1–2 ms (the two runs above bracket this) — roughly 10–40×
+the fork cost alone.  That extra cost isn't the `fork(2)` syscall
+itself; it's the pipe-IPC round-trip between the forked child and
+the parent, which proxies every `hegel_draw_*` call.  (See
 [`design_rust_bridge.md`](design_rust_bridge.md) for why the
 parent proxies in the first place — short version: the Hegel
 server connection is stateful and sequential, so a child holding
@@ -133,6 +195,18 @@ Variables:
 expose a case-count override, so the suite bench uses hegeltest's
 default on both sides to keep the comparison apples-to-apples.
 
+The direct-Rust oracle is not wired into the Makefile; build and
+run it by hand:
+
+```bash
+cd tests/bench/rust_direct && cargo build --release
+taskset -c 0 ./target/release/bench_direct 1000    # N = 1000 cases
+```
+
+It shares the hegeltest server spawn with any other hegel-c binary
+in the same process tree, so wall-clock comparisons are fair as
+long as you run each binary fresh from a clean shell.
+
 ## Running this on your own property
 
 If you want to know how fork mode feels on the real test you
@@ -176,3 +250,8 @@ These are all open questions and would be good future work:
 - Cross-binding comparison (hegel-rust vs hegel-go vs hegel-c on
   the same property)
 - Effect of the `catch_unwind` orphan-leak fix on total throughput
+- rust_direct at larger N (steady-state cases/s once startup is
+  amortized — single-point sampling at N=5000/10000 earlier in
+  the session pointed at ~475–550 cases/s end-to-end, marginal
+  ~645 cases/s, but we haven't captured that with proper iters
+  and stddev yet)

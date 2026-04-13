@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein — see hegel/LICENSE for terms.
+
+[package]
+name = "bench_direct"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[dependencies]
+hegeltest = "=0.4.3"
+
+[profile.release]
+panic = "unwind"
