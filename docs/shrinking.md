@@ -376,6 +376,10 @@ where `kind` is one of:
   (overflow, byte budget exhausted)
 - `discard (__HEGEL_ASSUME_FAIL)` — engine-internal discard
 - `eof` — child crashed (SIGSEGV, etc.) or exited unexpectedly
+  (see [`design_rust_bridge.md`](design_rust_bridge.md) for the
+  fork-per-case architecture that makes this recoverable and
+  explains how draws flow between the child and the parent-owned
+  server connection)
 - `panic (...)` — uncategorized panic
 
 The shrinker's behavior is visible in the pattern: during the

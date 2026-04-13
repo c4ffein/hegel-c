@@ -245,6 +245,39 @@ itself by producing a `"` character from `[a-z]{0,8}`.
 
 ## Cleanup
 
+### Extract or generalize `graph_gen.h` / `scotch_helpers.h`
+
+Currently these live in `tests/irl/scotch/` as test-harness
+helpers — CSR graph builders, strategy string generators, Scotch
+error-code decoders.  They're Scotch-specific in their current
+form, which is why they're sitting in the test harness rather
+than in hegel-c proper.
+
+But the *patterns* they encode are general:
+
+- CSR construction from a logical `(nvert, edges[])` list is a
+  reusable pattern anyone wiring a graph-library test would
+  need — maps cleanly to a `hegel_gen.h`-level helper that
+  takes a schema-drawn logical graph and produces a canonical
+  CSR.
+- The strategy string generator is a focused example of
+  building a valid DSL string from a schema — useful as a
+  pattern reference even if the specific DSL is Scotch's.
+- Symmetry / dedup / self-loop-free post-processing is a
+  recurring "structural invariant across array elements"
+  pattern that came up as a schema-layer gap in the V0
+  milestone.
+
+Decision to make: extract into hegel-c as library helpers, keep
+them Scotch-specific but document the patterns in
+`docs/patterns.md`, or leave alone entirely.  Leaning toward
+documenting the patterns first (cheap) and only extracting once
+a second IRL target hits the same needs and we can see the real
+shape of the abstraction.
+
+Was previously listed as a "design decision" in the README; it's
+really an open cleanup task, not a settled choice.
+
 ### Relationship between the legacy `hegel_gen_*` combinator API and the schema API
 
 **Feature parity is complete.** Everything the legacy

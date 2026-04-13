@@ -43,15 +43,15 @@ int main (void) {
 }
 ```
 
-## Implementation notes
+## Design decisions
 
-- The current implementation is Rust because we rely on the [hegeltest](https://crates.io/crates/hegeltest) crate that talks to the Hegel server (Rust/Python service). `rust-version/build.rs` also compiles the pure-C `hegel_gen.c` into the same `libhegel_c.a`.
-- The alternative would be reimplementing the Hegel wire protocol in pure C.
-- This will only be done once there is a sufficient test suite to verify consistency between these 2 options.
-- While the Rust bridge was the fast path to get everything working, it will be kept — we want both:
-  - a future pure C implementation connecting to the worker through the socket
-  - a version as close to the official Rust implementation as possible
-    - if the Hegel team ever releases a low-level C header for FFI bindings, we'll adapt to it, still providing a nice standard layer to make it as adapted to a C codebase as possible
+- **Pure C public API, no C++.** A separate C++ Hegel binding is WIP by the Hegel team. This lib stays pure C at the surface.
+- **Rust bridge under the hood for now.** We build on the [hegeltest](https://crates.io/crates/hegeltest) crate to inherit integrated shrinking and protocol tracking for free. A pure C build (reimplementing the Hegel wire protocol directly) is planned as a second option — see [`docs/design_rust_bridge.md`](docs/design_rust_bridge.md) for the why, the fork-per-case + parent-proxied IPC reasoning, and the `catch_unwind` orphan-leak fix rationale.
+  - `rust-version/build.rs` also compiles the pure-C `hegel_gen.c` into the same `libhegel_c.a`.
+- **A pure C version will be built.** This version will have no dependancy to the existing Rust lib.
+  - This will only be done once there is a sufficient test suite to verify consistency between these 2 options.
+  - The Rust bridge will be kept, and both implementations will still be tested one against another.
+  - If the Hegel team ever releases a low-level C header for FFI bindings, we'll adapt to it, still providing a nice standard layer to make it as adapted to a C codebase as possible.
 
 ## Documentation
 
@@ -59,6 +59,8 @@ int main (void) {
 - **[docs/patterns.md](docs/patterns.md)** — pattern catalog mapping C memory layouts to schema tests
 - **[docs/shrinking.md](docs/shrinking.md)** — integrated shrinking explained, with a worked example finding a real bug in Scotch and shrinking to the theoretical minimum
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
+- **[docs/benchmarking.md](docs/benchmarking.md)** — fork vs nofork overhead, methodology and measured numbers
+- **[docs/design_rust_bridge.md](docs/design_rust_bridge.md)** — design decisions for the current Rust-bridge build (FFI boundary, IPC protocol, orphan-leak fix)
 - **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
 - **[TODO.md](TODO.md)** — deferred items
 
@@ -66,14 +68,14 @@ int main (void) {
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 36 (24 PASS, 5 FAIL, 3 CRASH, 4 HEALTH) | `make selftest-test` |
+| selftest | 44 (28 PASS, 9 FAIL, 3 CRASH, 4 HEALTH) | `make selftest-test` |
 | from-hegel-rust | 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
 | Scotch IRL | 4 (2 sequential, 1 reducer demo, 1 PT-Scotch MPI) | `make scotch-test` |
 
 MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [docs/mpi-testing.md](docs/mpi-testing.md).
 
-The selftest suite doubles as example code — 9 of the 36 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
+The selftest suite doubles as example code — 11 of the 44 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
 
 The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part_schema.c`](tests/irl/scotch/test_graph_part_schema.c) shows the schema API generating graphs for `SCOTCH_graphPart`; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from a random schema and shrinks to a 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
 
@@ -87,10 +89,7 @@ The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part
 - [ ] More IRL targets beyond Scotch in `tests/irl/`
 - [ ] Real C implementation (pure C wire protocol, no Rust bridge)
   - [ ] Compare with Rust bridge using PBT
-
-## Design decisions
-- **Pure C, no C++.** A separate C++ Hegel binding is WIP by the Hegel team. This lib stays pure C.
-- **`graph_gen.h` / `scotch_helpers.h` stay in the Scotch test harness**, not in hegel-c. They're Scotch-specific. But they contain patterns (CSR builders, strategy generators) worth generalizing later.
+- [ ] Clean up `graph_gen.h` / `scotch_helpers.h` — currently in the Scotch test harness, contain general patterns (CSR builders, strategy generators) worth extracting or generalizing. See `TODO.md`.
 
 ## Selftest pattern
 
@@ -129,56 +128,6 @@ Five categories:
 
 ## Benchmarking
 
-### Fork vs nofork (this project)
-
-```
-make bench
-```
-
-Runs each of `test_graph_part` (simple) and `test_stress_10k` (heavy) in
-both fork and nofork modes, 5 times each. Typical results:
-
-| Test           | Fork    | Nofork  | Overhead |
-|----------------|---------|---------|----------|
-| graph_part     | ~6.7s   | ~5.6s   | ~18%     |
-| stress_10k     | ~2.6s   | ~2.5s   | ~2%      |
-
-The overhead is dominated by Hegel's server startup (~1s), not fork itself.
-For tests where the actual work is non-trivial, fork overhead is negligible.
-
-### How to add your own bench tests
-
-Add the test name to `BENCH_TESTS` in the Makefile:
-
-```makefile
-BENCH_TESTS = test_graph_part test_stress_10k test_your_new_test
-```
-
-### Benchmarking against other codebases
-
-To benchmark Hegel's C binding on a different C library:
-
-1. **Write a test** that follows the pattern in `test_graph_part.c`:
-   - `#include "hegel_c.h"`
-   - A test function `void myTest(hegel_testcase *tc)` that uses `hegel_draw_*` and `HEGEL_ASSERT`
-   - `main()` calls `hegel_run_test(myTest)`
-
-2. **Link against** `-lhegel_c` (from `hegel/rust-version/target/release/`) plus your library
-
-3. **Run both modes:**
-   ```bash
-   # Fork mode (default)
-   gcc -O2 -I/path/to/hegel -o test_fork my_test.c -L/path/to/hegel_c -lhegel_c -lpthread -lm -ldl
-   time ./test_fork
-
-   # Nofork mode
-   gcc -O2 -DHEGEL_BENCH_NOFORK -I/path/to/hegel -o test_nofork my_test.c -L/path/to/hegel_c -lhegel_c -lpthread -lm -ldl
-   time ./test_nofork
-   ```
-
-4. **What to compare:**
-   - Per-run wall time (includes Hegel server startup, ~1s fixed cost)
-   - For apples-to-apples, use `hegel_run_test_n` with large N (e.g., 1000) so
-     the server startup is amortized and you're measuring per-case fork overhead
-   - The fork overhead per case is ~50-100µs on Linux (COW page table copy).
-     If your test case does >1ms of work, fork is free.
+Run `make bench-bench` for fork-vs-nofork numbers on the author's machine.
+See [`docs/benchmarking.md`](docs/benchmarking.md) for the methodology,
+current measurements, and instructions for benchmarking your own property.

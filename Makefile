@@ -8,7 +8,7 @@ GITHUB_REPOS = hegeldev/hegel-rust \
 
 GITLAB_REPOS = scotch/scotch
 
-.PHONY: help inspiration clean-inspiration selftest-% from-hegel-rust-% scotch-% mpi-%
+.PHONY: help inspiration clean-inspiration selftest-% from-hegel-rust-% scotch-% mpi-% bench-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -23,6 +23,7 @@ help:
 	@echo "  from-hegel-rust-<target>      Run <target> in tests/from-hegel-rust/"
 	@echo "  scotch-<target>               Run <target> in tests/irl/scotch/"
 	@echo "  mpi-<target>                  Run <target> in tests/mpi/"
+	@echo "  bench-<target>                Run <target> in tests/bench/"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make selftest-test            Run selftest suite"
@@ -32,12 +33,14 @@ help:
 	@echo "  make scotch-test-local        Run Scotch tests with inspiration/scotch (built from source)"
 	@echo "  make scotch-test-deb          Run Scotch tests with system libscotch-dev (CI)"
 	@echo "  make mpi-test                 Run MPI tests (requires mpicc/mpiexec)"
+	@echo "  make bench-bench              Run fork-vs-nofork benchmarks (see docs/benchmarking.md)"
 	@echo ""
 	@echo "Sub-Makefile help:"
 	@echo "  make selftest-help"
 	@echo "  make from-hegel-rust-help"
 	@echo "  make scotch-help"
 	@echo "  make mpi-help"
+	@echo "  make bench-help"
 
 inspiration:
 	@mkdir -p $(INSPIRATION_DIR)
@@ -76,3 +79,6 @@ scotch-%:
 
 mpi-%:
 	$(MAKE) -C tests/mpi $*
+
+bench-%:
+	$(MAKE) -C tests/bench $*
