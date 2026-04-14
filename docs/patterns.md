@@ -31,11 +31,11 @@ typedef struct Tree {
 
 **Schema:**
 ```c
-tree_schema = hegel_schema_struct (sizeof (Tree),
-    HEGEL_INT      (Tree, val, -1000, 1000),
-    HEGEL_OPTIONAL (Tree, label, hegel_schema_text (0, 8)),
-    HEGEL_SELF     (Tree, left),
-    HEGEL_SELF     (Tree, right));
+tree_schema = HEGEL_STRUCT (Tree,
+    HEGEL_INT      (-1000, 1000),
+    HEGEL_OPTIONAL (hegel_schema_text (0, 8)),
+    HEGEL_SELF     (),
+    HEGEL_SELF     ());
 ```
 
 **Test:** [`test_gen_schema_recursive_tree_json_roundtrip.c`](../tests/selftest/test_gen_schema_recursive_tree_json_roundtrip.c)
@@ -62,11 +62,11 @@ typedef struct {
 
 **Schema:**
 ```c
-shape_schema = hegel_schema_struct (sizeof (Shape),
-    HEGEL_UNION (Shape, tag,
-        HEGEL_CASE (HEGEL_DOUBLE (Shape, u.circle.radius, 0.1, 100.0)),
-        HEGEL_CASE (HEGEL_DOUBLE (Shape, u.rect.width, 0.1, 100.0),
-                    HEGEL_DOUBLE (Shape, u.rect.height, 0.1, 100.0))));
+shape_schema = HEGEL_STRUCT (Shape,
+    HEGEL_UNION (
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                    HEGEL_DOUBLE (0.1, 100.0))));
 ```
 
 **Test:** [`test_gen_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_gen_schema_union_variant_tagged_untagged.c) (Test 1)
@@ -89,11 +89,11 @@ typedef union {
 
 **Schema:**
 ```c
-raw_shape_schema = hegel_schema_struct (sizeof (RawShape),
+raw_shape_schema = HEGEL_STRUCT (RawShape,
     HEGEL_UNION_UNTAGGED (
-        HEGEL_CASE (HEGEL_DOUBLE (RawShape, circle.radius, 0.1, 100.0)),
-        HEGEL_CASE (HEGEL_DOUBLE (RawShape, rect.width, 0.1, 100.0),
-                    HEGEL_DOUBLE (RawShape, rect.height, 0.1, 100.0))));
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                    HEGEL_DOUBLE (0.1, 100.0))));
 ```
 
 ```c
@@ -125,14 +125,14 @@ typedef struct {
 
 **Schema:**
 ```c
-hegel_schema_t circle_s = hegel_schema_struct (sizeof (Circle),
-    HEGEL_DOUBLE (Circle, radius, 0.1, 100.0));
-hegel_schema_t rect_s   = hegel_schema_struct (sizeof (Rect),
-    HEGEL_DOUBLE (Rect, width, 0.1, 100.0),
-    HEGEL_DOUBLE (Rect, height, 0.1, 100.0));
+hegel_schema_t circle_s = HEGEL_STRUCT (Circle,
+    HEGEL_DOUBLE (0.1, 100.0));
+hegel_schema_t rect_s   = HEGEL_STRUCT (Rect,
+    HEGEL_DOUBLE (0.1, 100.0),
+    HEGEL_DOUBLE (0.1, 100.0));
 
-shapevar_schema = hegel_schema_struct (sizeof (ShapeVar),
-    HEGEL_VARIANT (ShapeVar, tag, value, circle_s, rect_s));
+shapevar_schema = HEGEL_STRUCT (ShapeVar,
+    HEGEL_VARIANT (circle_s, rect_s));
 ```
 
 **Test:** [`test_gen_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_gen_schema_union_variant_tagged_untagged.c) (Test 3)
@@ -155,9 +155,8 @@ typedef struct {
 
 **Schema:**
 ```c
-bag_schema = hegel_schema_struct (sizeof (Bag),
-    HEGEL_ARRAY (Bag, items, n_items,
-                 hegel_schema_int_range (0, 100), 0, 10));
+bag_schema = HEGEL_STRUCT (Bag,
+    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10));
 ```
 
 **Tests:**
@@ -179,12 +178,11 @@ typedef struct { Color *colors; int n; }        Palette;
 
 **Schema:**
 ```c
-hegel_schema_t color_s = hegel_schema_struct (sizeof (Color),
-    HEGEL_U8 (Color, r), HEGEL_U8 (Color, g), HEGEL_U8 (Color, b));
+hegel_schema_t color_s = HEGEL_STRUCT (Color,
+    HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());
 
-palette_s = hegel_schema_struct (sizeof (Palette),
-    HEGEL_ARRAY_INLINE (Palette, colors, n,
-                        color_s, sizeof (Color), 1, 5));
+palette_s = HEGEL_STRUCT (Palette,
+    HEGEL_ARRAY_INLINE (color_s, sizeof (Color), 1, 5));
 ```
 
 **Test:** [`test_gen_schema_array_all_composition_patterns.c`](../tests/selftest/test_gen_schema_array_all_composition_patterns.c) (`Palette` + others)
@@ -213,14 +211,13 @@ typedef struct { Shape *shapes; int n_shapes; } Gallery;
 
 **Schema:**
 ```c
-hegel_schema_t shape_union = HEGEL_UNION (Shape, tag,
-    HEGEL_CASE (HEGEL_DOUBLE (Shape, u.circle.radius, 0.1, 100.0)),
-    HEGEL_CASE (HEGEL_DOUBLE (Shape, u.rect.width, 0.1, 100.0),
-                HEGEL_DOUBLE (Shape, u.rect.height, 0.1, 100.0)));
+hegel_schema_t shape_union = hegel_schema_of (HEGEL_UNION (
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                HEGEL_DOUBLE (0.1, 100.0))));
 
-gallery_schema = hegel_schema_struct (sizeof (Gallery),
-    HEGEL_ARRAY_INLINE (Gallery, shapes, n_shapes,
-                        shape_union, sizeof (Shape), 1, 6));
+gallery_schema = HEGEL_STRUCT (Gallery,
+    HEGEL_ARRAY_INLINE (shape_union, sizeof (Shape), 1, 6));
 ```
 
 **Test:** [`test_gen_schema_array_inline_of_tagged_unions.c`](../tests/selftest/test_gen_schema_array_inline_of_tagged_unions.c)
@@ -251,14 +248,14 @@ VM terms, Scheme cell tagging).
 
 **Schema:**
 ```c
-hegel_schema_t bare_shape = HEGEL_UNION_UNTAGGED (
-    HEGEL_CASE (HEGEL_INT    (BareShape, circle.tag, 17, 17),
-                HEGEL_DOUBLE (BareShape, circle.radius, 0.1, 100.0)),
-    HEGEL_CASE (HEGEL_INT    (BareShape, rect.tag, 29, 29),
-                HEGEL_DOUBLE (BareShape, rect.width, 0.1, 100.0),
-                HEGEL_DOUBLE (BareShape, rect.height, 0.1, 100.0)),
-    HEGEL_CASE (HEGEL_INT    (BareShape, timestamp.tag, 42, 42),
-                HEGEL_I64    (BareShape, timestamp.millis, 0, 1000000000)));
+hegel_schema_t bare_shape = hegel_schema_of (HEGEL_UNION_UNTAGGED (
+    HEGEL_CASE (HEGEL_INT    (17, 17),
+                HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_INT    (29, 29),
+                HEGEL_DOUBLE (0.1, 100.0),
+                HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_INT    (42, 42),
+                HEGEL_I64    (0, 1000000000))));
 ```
 
 **Test:** [`test_gen_schema_array_inline_of_bare_unions_common_prefix.c`](../tests/selftest/test_gen_schema_array_inline_of_bare_unions_common_prefix.c)
@@ -288,21 +285,20 @@ typedef struct { Elem *items; int n_items; } Collection;
 
 **Schema:**
 ```c
-hegel_schema_t type_a = hegel_schema_struct (sizeof (TypeA),
-    HEGEL_INT (TypeA, tag, 3, 3),          /* constant */
-    HEGEL_INT (TypeA, value, -1000, 1000));
+hegel_schema_t type_a = HEGEL_STRUCT (TypeA,
+    HEGEL_INT (3, 3),          /* constant */
+    HEGEL_INT (-1000, 1000));
 
-hegel_schema_t type_b = hegel_schema_struct (sizeof (TypeB),
-    HEGEL_INT (TypeB, tag, 5, 5),          /* constant */
-    HEGEL_TEXT (TypeB, name, 1, 10),
-    HEGEL_U8 (TypeB, byte));
+hegel_schema_t type_b = HEGEL_STRUCT (TypeB,
+    HEGEL_INT (5, 5),          /* constant */
+    HEGEL_TEXT (1, 10),
+    HEGEL_U8 ());
 
-hegel_schema_t elem_schema = hegel_schema_struct (sizeof (Elem),
-    HEGEL_VARIANT (Elem, which, ptr, type_a, type_b));
+hegel_schema_t elem_schema = HEGEL_STRUCT (Elem,
+    HEGEL_VARIANT (type_a, type_b));
 
-coll_schema = hegel_schema_struct (sizeof (Collection),
-    HEGEL_ARRAY_INLINE (Collection, items, n_items,
-                        elem_schema, sizeof (Elem), 1, 5));
+coll_schema = HEGEL_STRUCT (Collection,
+    HEGEL_ARRAY_INLINE (elem_schema, sizeof (Elem), 1, 5));
 ```
 
 **Test:** [`test_gen_schema_array_of_variant_struct_pointers.c`](../tests/selftest/test_gen_schema_array_of_variant_struct_pointers.c)
@@ -333,8 +329,8 @@ typedef struct {
 ```c
 hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 
-coll_schema = hegel_schema_struct (sizeof (RawCollection),
-    HEGEL_ARRAY (RawCollection, items, n_items, one_of, 1, 6));
+coll_schema = HEGEL_STRUCT (RawCollection,
+    HEGEL_ARRAY (one_of, 1, 6));
 ```
 
 **Test:** [`test_gen_schema_array_of_raw_struct_pointers_by_kind.c`](../tests/selftest/test_gen_schema_array_of_raw_struct_pointers_by_kind.c)
@@ -357,13 +353,11 @@ typedef struct { Row *rows;   int n_rows; }   Matrix;
 
 **Schema:**
 ```c
-hegel_schema_t row = hegel_schema_struct (sizeof (Row),
-    HEGEL_ARRAY (Row, values, n_values,
-                 hegel_schema_int_range (0, 99), 1, 6));
+hegel_schema_t row = HEGEL_STRUCT (Row,
+    HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6));
 
-matrix_schema = hegel_schema_struct (sizeof (Matrix),
-    HEGEL_ARRAY_INLINE (Matrix, rows, n_rows,
-                        row, sizeof (Row), 1, 4));
+matrix_schema = HEGEL_STRUCT (Matrix,
+    HEGEL_ARRAY_INLINE (row, sizeof (Row), 1, 4));
 ```
 
 **Test:** [`test_gen_schema_nested_array_of_arrays_matrix.c`](../tests/selftest/test_gen_schema_nested_array_of_arrays_matrix.c)
@@ -414,22 +408,16 @@ hegel_schema_t dep_fn (int n, void *ctx) {
 }
 
 /* map: field is always a perfect square in [0, 10000] */
-hegel_schema_struct (sizeof (SquaredThing),
-    HEGEL_MAP_INT (SquaredThing, square,
-                   hegel_schema_int_range (0, 100),
-                   square_fn, NULL));
+HEGEL_STRUCT (SquaredThing,
+    HEGEL_MAP_INT (hegel_schema_int_range (0, 100), square_fn, NULL));
 
 /* filter: field is always even */
-hegel_schema_struct (sizeof (EvenThing),
-    HEGEL_FILTER_INT (EvenThing, even_val,
-                      hegel_schema_int_range (0, 100),
-                      is_even, NULL));
+HEGEL_STRUCT (EvenThing,
+    HEGEL_FILTER_INT (hegel_schema_int_range (0, 100), is_even, NULL));
 
 /* flat_map: dependent — range of second draw depends on first */
-hegel_schema_struct (sizeof (DepThing),
-    HEGEL_FLAT_MAP_INT (DepThing, dependent,
-                        hegel_schema_int_range (1, 10),
-                        dep_fn, NULL));
+HEGEL_STRUCT (DepThing,
+    HEGEL_FLAT_MAP_INT (hegel_schema_int_range (1, 10), dep_fn, NULL));
 ```
 
 **Test:** [`test_gen_schema_functional_combinators.c`](../tests/selftest/test_gen_schema_functional_combinators.c)

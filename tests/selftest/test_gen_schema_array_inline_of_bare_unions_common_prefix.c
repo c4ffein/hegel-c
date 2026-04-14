@@ -65,19 +65,17 @@ init_schema (void)
   **
   ** Tag values are arbitrary here — picking weird numbers to prove
   ** they're not just "variant index". */
-  hegel_schema_t bare_shape = HEGEL_UNION_UNTAGGED (
-      HEGEL_CASE (HEGEL_INT    (BareShape, circle.tag, 17, 17),
-                  HEGEL_DOUBLE (BareShape, circle.radius, 0.1, 100.0)),
-      HEGEL_CASE (HEGEL_INT    (BareShape, rect.tag, 29, 29),
-                  HEGEL_DOUBLE (BareShape, rect.width,  0.1, 100.0),
-                  HEGEL_DOUBLE (BareShape, rect.height, 0.1, 100.0)),
-      HEGEL_CASE (HEGEL_INT    (BareShape, timestamp.tag, 42, 42),
-                  HEGEL_I64    (BareShape, timestamp.millis,
-                                0, 1000000000)));
+  hegel_schema_t bare_shape = hegel_schema_of (HEGEL_UNION_UNTAGGED (
+      HEGEL_CASE (HEGEL_INT    (17, 17),
+                  HEGEL_DOUBLE (0.1, 100.0)),
+      HEGEL_CASE (HEGEL_INT    (29, 29),
+                  HEGEL_DOUBLE (0.1, 100.0),
+                  HEGEL_DOUBLE (0.1, 100.0)),
+      HEGEL_CASE (HEGEL_INT    (42, 42),
+                  HEGEL_I64    (0, 1000000000))));
 
-  stream_schema = hegel_schema_struct (sizeof (Stream),
-      HEGEL_ARRAY_INLINE (Stream, shapes, n_shapes,
-                          bare_shape, sizeof (BareShape), 1, 6));
+  stream_schema = HEGEL_STRUCT (Stream,
+      HEGEL_ARRAY_INLINE (bare_shape, sizeof (BareShape), 1, 6));
 }
 
 /* ---- Test ---- */

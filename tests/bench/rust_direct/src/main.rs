@@ -7,16 +7,30 @@
 // Shape matches tests/bench/test_bench_single.c: N cases, two i32
 // draws per case, trivial assertion that can never fail.
 //
-// Usage: bench_direct [N]   (default N = 1000)
+// Usage: bench_direct N
+//
+// N is required — no default.  A missing or unparsable N is a hard
+// error, because a silent fallback would make it too easy to think
+// you benched 10000 cases when you actually benched the default.
 
 use hegel::generators as gs;
 use hegel::{Hegel, Settings, TestCase};
 
 fn main() {
-    let n: u64 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1000);
+    let mut args = std::env::args();
+    let prog = args.next().unwrap_or_else(|| "bench_direct".to_string());
+    let Some(n_arg) = args.next() else {
+        eprintln!("{}: usage: {} N", prog, prog);
+        std::process::exit(2);
+    };
+    let n: u64 = n_arg.parse().unwrap_or_else(|e| {
+        eprintln!("{}: invalid N {:?}: {}", prog, n_arg, e);
+        std::process::exit(2);
+    });
+    if args.next().is_some() {
+        eprintln!("{}: usage: {} N", prog, prog);
+        std::process::exit(2);
+    }
 
     Hegel::new(|tc: TestCase| {
         let x: i32 = tc.draw(gs::integers::<i32>().min_value(0).max_value(100));

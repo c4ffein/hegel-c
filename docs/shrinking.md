@@ -117,11 +117,9 @@ about graphs — not the CSR representation Scotch wants.
 ### Step 2: declare the schema
 
 ```c
-graph_schema = hegel_schema_struct (sizeof (Graph),
-    HEGEL_INT (Graph, nvert, 3, 20),
-    HEGEL_ARRAY_INLINE (Graph, edges, nedges,
-                        edge_schema, sizeof (EdgePair),
-                        0, 30));
+graph_schema = HEGEL_STRUCT (Graph,
+    HEGEL_INT (3, 20),
+    HEGEL_ARRAY_INLINE (edge_schema, sizeof (EdgePair), 0, 30));
 ```
 
 The schema generates graphs with 3–20 vertices and 0–30 edges.
@@ -229,10 +227,10 @@ matter are:
 ### 1. Make the schema small at the boundary, not the body
 
 Bound the schema's value ranges as tightly as the property allows.
-`HEGEL_INT(T, x, 0, 1000000)` shrinks fine, but the *minimum* it
+`HEGEL_INT(0, 1000000)` shrinks fine, but the *minimum* it
 can shrink to is `0`, `1`, etc., based on byte-stream simplicity
 order. If your property only cares about whether `x` is even, use
-`HEGEL_INT(T, x, 0, 1)` and post-multiply — the minimum you'll see
+`HEGEL_INT(0, 1)` and post-multiply — the minimum you'll see
 in the shrunken case is much closer to what's interesting.
 
 For our Scotch test: `nvert ∈ [3, 20]` instead of `[3, 1000]`.

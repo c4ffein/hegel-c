@@ -176,11 +176,11 @@ static
 void
 init_schema (void)
 {
-  tree_schema = hegel_schema_struct (sizeof (Tree),
-      HEGEL_INT  (Tree, val, -1000, 1000),
-      HEGEL_OPTIONAL (Tree, label, hegel_schema_text (0, 8)),
-      HEGEL_SELF (Tree, left),
-      HEGEL_SELF (Tree, right));
+  tree_schema = HEGEL_STRUCT (Tree,
+      HEGEL_INT  (-1000, 1000),
+      HEGEL_OPTIONAL (hegel_schema_text (0, 8)),
+      HEGEL_SELF (),
+      HEGEL_SELF ());
 }
 
 static
@@ -226,10 +226,9 @@ static
 void
 init_bag_schema (void)
 {
-  bag_schema = hegel_schema_struct (sizeof (Bag),
-      HEGEL_ARRAY (Bag, items, n_items,
-                   hegel_schema_int_range (0, 100), 0, 10),
-      HEGEL_INT (Bag, tag, 0, 3));
+  bag_schema = HEGEL_STRUCT (Bag,
+      HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10),
+      HEGEL_INT (0, 3));
 }
 
 static
@@ -273,13 +272,13 @@ static
 void
 init_sensor_schema (void)
 {
-  sensor_schema = hegel_schema_struct (sizeof (Sensor),
-      HEGEL_U8  (Sensor, id),
-      HEGEL_I16 (Sensor, temp, -400, 850),
-      HEGEL_U32 (Sensor, serial),
-      HEGEL_I64 (Sensor, timestamp),
-      HEGEL_FLOAT  (Sensor, voltage, 0.0, 5.0),
-      HEGEL_DOUBLE (Sensor, latitude, -90.0, 90.0));
+  sensor_schema = HEGEL_STRUCT (Sensor,
+      HEGEL_U8  (),
+      HEGEL_I16 (-400, 850),
+      HEGEL_U32 (),
+      HEGEL_I64 (),
+      HEGEL_FLOAT  (0.0, 5.0),
+      HEGEL_DOUBLE (-90.0, 90.0));
 }
 
 static

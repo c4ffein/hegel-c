@@ -73,14 +73,12 @@ main (void)
 {
   hegel_schema_t      elem;
 
-  elem = hegel_schema_struct (sizeof (Elem),
-      HEGEL_INT (Elem, x, 0, 49),
-      HEGEL_INT (Elem, y, 0, 49));
-  thing_schema = hegel_schema_struct (sizeof (Thing),
-      HEGEL_INT (Thing, a, 0, 50),
-      HEGEL_ARRAY_INLINE (Thing, items, n_items,
-                          elem, sizeof (Elem),
-                          5000, 10000));
+  elem = HEGEL_STRUCT (Elem,
+      HEGEL_INT (0, 49),
+      HEGEL_INT (0, 49));
+  thing_schema = HEGEL_STRUCT (Thing,
+      HEGEL_INT (0, 50),
+      HEGEL_ARRAY_INLINE (elem, sizeof (Elem), 5000, 10000));
   hegel_run_test_n (test_huge_array, 20);
   /* Should not reach here — health check should panic out. */
   hegel_schema_free (thing_schema);

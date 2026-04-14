@@ -77,14 +77,12 @@ main (void)
   hegel_suite *       s;
   int                 rc;
 
-  elem = hegel_schema_struct (sizeof (Elem),
-      HEGEL_INT (Elem, x, 0, 49),
-      HEGEL_INT (Elem, y, 0, 49));
-  thing_schema = hegel_schema_struct (sizeof (Thing),
-      HEGEL_INT (Thing, a, 0, 50),
-      HEGEL_ARRAY_INLINE (Thing, items, n_items,
-                          elem, sizeof (Elem),
-                          5000, 10000));
+  elem = HEGEL_STRUCT (Elem,
+      HEGEL_INT (0, 49),
+      HEGEL_INT (0, 49));
+  thing_schema = HEGEL_STRUCT (Thing,
+      HEGEL_INT (0, 50),
+      HEGEL_ARRAY_INLINE (elem, sizeof (Elem), 5000, 10000));
 
   s = hegel_suite_new ();
   hegel_suite_add (s, "test_passes_first", test_passes_first);

@@ -39,11 +39,11 @@ typedef struct {
 static hegel_schema_t shape_schema;
 
 static void init_shape_schema (void) {
-  shape_schema = hegel_schema_struct (sizeof (Shape),
-      HEGEL_UNION (Shape, tag,
-          HEGEL_CASE (HEGEL_DOUBLE (Shape, u.circle.radius, 0.1, 100.0)),
-          HEGEL_CASE (HEGEL_DOUBLE (Shape, u.rect.width, 0.1, 100.0),
-                      HEGEL_DOUBLE (Shape, u.rect.height, 0.1, 100.0))));
+  shape_schema = HEGEL_STRUCT (Shape,
+      HEGEL_UNION (
+          HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+          HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                      HEGEL_DOUBLE (0.1, 100.0))));
 }
 
 static void test_union_tagged (hegel_testcase * tc) {
@@ -81,11 +81,11 @@ typedef union {
 static hegel_schema_t raw_shape_schema;
 
 static void init_raw_shape_schema (void) {
-  raw_shape_schema = hegel_schema_struct (sizeof (RawShape),
+  raw_shape_schema = HEGEL_STRUCT (RawShape,
       HEGEL_UNION_UNTAGGED (
-          HEGEL_CASE (HEGEL_DOUBLE (RawShape, circle.radius, 0.1, 100.0)),
-          HEGEL_CASE (HEGEL_DOUBLE (RawShape, rect.width, 0.1, 100.0),
-                      HEGEL_DOUBLE (RawShape, rect.height, 0.1, 100.0))));
+          HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+          HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                      HEGEL_DOUBLE (0.1, 100.0))));
 }
 
 static void test_union_untagged (hegel_testcase * tc) {
@@ -121,13 +121,13 @@ typedef struct {
 static hegel_schema_t shapevar_schema;
 
 static void init_shapevar_schema (void) {
-  hegel_schema_t circle_s = hegel_schema_struct (sizeof (Circle),
-      HEGEL_DOUBLE (Circle, radius, 0.1, 100.0));
-  hegel_schema_t rect_s = hegel_schema_struct (sizeof (Rect),
-      HEGEL_DOUBLE (Rect, width, 0.1, 100.0),
-      HEGEL_DOUBLE (Rect, height, 0.1, 100.0));
-  shapevar_schema = hegel_schema_struct (sizeof (ShapeVar),
-      HEGEL_VARIANT (ShapeVar, tag, value, circle_s, rect_s));
+  hegel_schema_t circle_s = HEGEL_STRUCT (Circle,
+      HEGEL_DOUBLE (0.1, 100.0));
+  hegel_schema_t rect_s = HEGEL_STRUCT (Rect,
+      HEGEL_DOUBLE (0.1, 100.0),
+      HEGEL_DOUBLE (0.1, 100.0));
+  shapevar_schema = HEGEL_STRUCT (ShapeVar,
+      HEGEL_VARIANT (circle_s, rect_s));
 }
 
 static void test_variant (hegel_testcase * tc) {
@@ -167,12 +167,11 @@ typedef struct {
 static hegel_schema_t path_schema;
 
 static void init_path_schema (void) {
-  hegel_schema_t point_s = hegel_schema_struct (sizeof (Point),
-      HEGEL_INT (Point, x, -100, 100),
-      HEGEL_INT (Point, y, -100, 100));
-  path_schema = hegel_schema_struct (sizeof (Path),
-      HEGEL_ARRAY_INLINE (Path, points, n_points,
-                          point_s, sizeof (Point), 1, 8));
+  hegel_schema_t point_s = HEGEL_STRUCT (Point,
+      HEGEL_INT (-100, 100),
+      HEGEL_INT (-100, 100));
+  path_schema = HEGEL_STRUCT (Path,
+      HEGEL_ARRAY_INLINE (point_s, sizeof (Point), 1, 8));
 }
 
 static void test_array_inline (hegel_testcase * tc) {

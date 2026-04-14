@@ -48,21 +48,20 @@ typedef struct {
 static hegel_schema_t coll_schema;
 
 static void init_schema (void) {
-  hegel_schema_t type_a = hegel_schema_struct (sizeof (TypeA),
-      HEGEL_INT (TypeA, tag, 3, 3),          /* constant: always 3 */
-      HEGEL_INT (TypeA, value, -1000, 1000));
+  hegel_schema_t type_a = HEGEL_STRUCT (TypeA,
+      HEGEL_INT (3, 3),                      /* constant: always 3 */
+      HEGEL_INT (-1000, 1000));
 
-  hegel_schema_t type_b = hegel_schema_struct (sizeof (TypeB),
-      HEGEL_INT (TypeB, tag, 5, 5),          /* constant: always 5 */
-      HEGEL_TEXT (TypeB, name, 1, 10),
-      HEGEL_U8  (TypeB, byte));
+  hegel_schema_t type_b = HEGEL_STRUCT (TypeB,
+      HEGEL_INT (5, 5),                      /* constant: always 5 */
+      HEGEL_TEXT (1, 10),
+      HEGEL_U8 ());
 
-  hegel_schema_t elem_schema = hegel_schema_struct (sizeof (Elem),
-      HEGEL_VARIANT (Elem, which, ptr, type_a, type_b));
+  hegel_schema_t elem_schema = HEGEL_STRUCT (Elem,
+      HEGEL_VARIANT (type_a, type_b));
 
-  coll_schema = hegel_schema_struct (sizeof (Collection),
-      HEGEL_ARRAY_INLINE (Collection, items, n_items,
-                          elem_schema, sizeof (Elem), 1, 5));
+  coll_schema = HEGEL_STRUCT (Collection,
+      HEGEL_ARRAY_INLINE (elem_schema, sizeof (Elem), 1, 5));
 }
 
 /* ---- Test ---- */

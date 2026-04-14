@@ -64,15 +64,14 @@ static
 void
 init_schemas (void)
 {
-  hegel_schema_t edge = hegel_schema_struct (sizeof (EdgePair),
-      HEGEL_INT (EdgePair, u, 0, MAX_VERT - 1),
-      HEGEL_INT (EdgePair, v, 0, MAX_VERT - 1));
+  hegel_schema_t edge = HEGEL_STRUCT (EdgePair,
+      HEGEL_INT (0, MAX_VERT - 1),
+      HEGEL_INT (0, MAX_VERT - 1));
 
-  graph_schema = hegel_schema_struct (sizeof (Graph),
-      HEGEL_INT (Graph, nvert, 3, MAX_VERT),
-      HEGEL_ARRAY_INLINE (Graph, edges, nedges,
-                          edge, sizeof (EdgePair), 0, MAX_EDGES),
-      HEGEL_INT (Graph, npart, 2, 8));
+  graph_schema = HEGEL_STRUCT (Graph,
+      HEGEL_INT (3, MAX_VERT),
+      HEGEL_ARRAY_INLINE (edge, sizeof (EdgePair), 0, MAX_EDGES),
+      HEGEL_INT (2, 8));
 }
 
 /* Build a valid undirected CSR from the logical graph:

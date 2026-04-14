@@ -81,30 +81,35 @@ The schema system lets tests describe C structs declaratively and get generation
 
 **Ownership:** starts at refcount=1, passing to a parent transfers the reference (no bump). For sharing across multiple parents, explicitly call `hegel_schema_ref(s)` before each extra use. `hegel_schema_free` decrements; actual free at zero.
 
-**Constructors (all return `hegel_schema_t`):**
+**Low-level schema constructors (pure values, no positions):**
 - Integers: `hegel_schema_i8` through `u64`, plus `int` / `long` / `_range` variants
 - Floats: `hegel_schema_float` / `_range`, `hegel_schema_double` / `_range`
 - Text: `hegel_schema_text(min_len, max_len)`
-- `hegel_schema_struct(size, fields...)` — variadic, H_END-terminated internally
 - `hegel_schema_self()` — recursive reference
+- `hegel_schema_optional_ptr(inner)`, `hegel_schema_array(len_offset, elem, lo, hi)`, etc.
 
-**Macros (the user-facing surface):**
-- `HEGEL_INT(T, f, lo, hi)` / `HEGEL_INT(T, f)` (full range) — arg-count overloaded; same for `_I8`/`_U8`/`_I16`/…/`_DOUBLE`
-- `HEGEL_TEXT(T, f, lo, hi)` — always-present string field
-- `HEGEL_OPTIONAL(T, f, inner)` — 50/50 nullable pointer
-- `HEGEL_SELF(T, f)` — optional recursive pointer (expands to `HEGEL_OPTIONAL` + `hegel_schema_self()`)
-- `HEGEL_ARRAY(T, ptr_f, len_f, elem, lo, hi)` — malloc'd array, separate ptr+count fields
-- `HEGEL_ARRAY_INLINE(T, ptr_f, len_f, elem, elem_sz, lo, hi)` — contiguous inline struct/union array
-- `HEGEL_UNION(T, tag_f, cases...)` — tagged union, writes tag to struct
-- `HEGEL_UNION_UNTAGGED(cases...)` — tag only in shape tree
-- `HEGEL_VARIANT(T, tag_f, ptr_f, cases...)` — tag + pointer to separately allocated variant struct
-- `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing "pick one struct, allocate, return ptr"; used as `HEGEL_ARRAY` elem or inside `HEGEL_OPTIONAL`
-- `HEGEL_CASE(fields...)` — used inside `HEGEL_UNION*` macros
-- `HEGEL_MAP_INT(T, f, source, fn, ctx)` — functional map: draw source, apply fn, store result
-- `HEGEL_FILTER_INT(T, f, source, pred, ctx)` — keep only values matching pred (uses `hegel_assume` to discard)
-- `HEGEL_FLAT_MAP_INT(T, f, source, fn, ctx)` — dependent: draw source, callback returns a fresh schema, draw from that
+**Macros (the positional user-facing surface):**
+- `HEGEL_STRUCT(T, field_entries...)` — computes offsets from the struct type at runtime, asserts `sizeof(T) == computed_total`. Top-level composition primitive.
+- `HEGEL_INT(lo, hi)` / `HEGEL_INT()` (full range) — 0-vs-2-arg overloaded via `__VA_OPT__`; same for `_I8`/`_U8`/`_I16`/…/`_DOUBLE` / `_LONG` / `_FLOAT`
+- `HEGEL_TEXT(lo, hi)` — `char *` field, pointer-sized slot
+- `HEGEL_OPTIONAL(inner)` — 50/50 nullable pointer; 1 slot
+- `HEGEL_SELF()` — optional recursive pointer; 1 slot
+- `HEGEL_ARRAY(elem, lo, hi)` — 2 slots: `void *` pointer, then `int` count. User's struct must put ptr before count.
+- `HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi)` — same 2-slot shape, contiguous elements
+- `HEGEL_UNION(cases...)` — cluster slot: int tag + union body (sized/aligned to widest case)
+- `HEGEL_UNION_UNTAGGED(cases...)` — cluster slot: union body only, tag in shape tree
+- `HEGEL_VARIANT(case_struct_schemas...)` — cluster slot: int tag + `void *` ptr
+- `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing schema; used as `HEGEL_ARRAY` elem or inside `HEGEL_OPTIONAL`
+- `HEGEL_CASE(field_entries...)` — used inside `HEGEL_UNION*`; contains layout entries, NOT bindings
+- `HEGEL_MAP_INT(source, fn, ctx)` / `HEGEL_FILTER_INT(source, pred, ctx)` / `HEGEL_FLAT_MAP_INT(source, fn, ctx)` — 1 slot (int-sized); same for `_I64` and `_DOUBLE`
+- `HEGEL_ONE_OF_INT(scalar_schemas...)` — 1 int slot; same for `_I64` and `_DOUBLE`
+- `HEGEL_BOOL()` — 1-byte `bool` slot
+- `HEGEL_REGEX(pattern, capacity)` — `char *` slot
+- `hegel_schema_of(layout_entry)` — unwrap a `HEGEL_UNION` / `HEGEL_VARIANT` layout entry to a raw `hegel_schema_t` for standalone use (e.g. as an `ARRAY_INLINE` element type)
 
-Variadic macros do **not** take a trailing `NULL` — the H_END sentinel is appended internally.
+The positional form means **the user writes a flat list of generators in the same order as the struct fields**, with matching types. The layout pass computes byte offsets the same way the C compiler does and asserts `sizeof(T)` matches. If a field is reordered or its type changes, the assert fires at schema-build time.
+
+For advanced cases that don't fit the positional form (e.g. schema reuse at arbitrary offsets), drop down to `hegel_schema_struct_v(size, bindings_array)` + `hegel__bind(offset, schema)`.
 
 **Draw / free:**
 - `hegel_shape *hegel_schema_draw(tc, schema, (void**)&ptr)` — allocates, fills, returns shape

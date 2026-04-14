@@ -79,6 +79,66 @@ terms of `hegel_schema_t`.
 Users should never need to touch `_raw` — it's the library's
 internal handle.
 
+## How HEGEL_STRUCT derives offsets
+
+`HEGEL_STRUCT(T, ...)` does not take field names. It takes a struct
+type and a **positional** list of field-schema descriptions — one
+per field, in declaration order.
+
+```c
+typedef struct { int x; int y; char *name; } Thing;
+
+hegel_schema_t s = HEGEL_STRUCT (Thing,
+    HEGEL_INT  (0, 100),
+    HEGEL_INT  (),
+    HEGEL_TEXT (1, 20));
+```
+
+At runtime, `HEGEL_STRUCT` walks the entries, computes each one's
+byte offset using the same layout rules the C compiler uses (each
+field starts at the smallest offset ≥ `previous_end` aligned to the
+field's alignment, total rounds up to `alignof(T)`), builds the
+internal schema, and asserts `sizeof(T) == computed_total`. If
+your generator list doesn't match the struct fields in order and
+type, the assertion fires immediately.
+
+Each `HEGEL_*` macro knows its own target type:
+- `HEGEL_INT` targets `int` (sizeof=`sizeof(int)`, alignof=same)
+- `HEGEL_I8` / `I16` / `I32` / `I64` / `U8` / … targets the fixed-width
+  integer type
+- `HEGEL_FLOAT` / `HEGEL_DOUBLE` targets `float` / `double`
+- `HEGEL_TEXT` / `HEGEL_OPTIONAL` / `HEGEL_SELF` / `HEGEL_REGEX`
+  target pointer-sized slots
+- `HEGEL_ARRAY` / `HEGEL_ARRAY_INLINE` occupy **two** consecutive
+  slots (a `void *` pointer and an `int` count), matching the idiom
+  `void *ptr; int n_items;`
+- `HEGEL_UNION` / `HEGEL_UNION_UNTAGGED` / `HEGEL_VARIANT` occupy
+  a "cluster" slot whose size and alignment are derived from the
+  cases — tag plus internal body layout — matching the idiom
+  `int tag; union { ... } u;`
+
+The low-level `hegel_schema_struct_v` / `hegel__bind` escape hatches
+are still available if you need to build a schema with offsets you
+compute yourself, but `HEGEL_STRUCT` is the right default.
+
+### Standalone use of `HEGEL_UNION` / `HEGEL_VARIANT`
+
+`HEGEL_UNION` normally appears inside a `HEGEL_STRUCT` and behaves
+like one cluster slot. But a union can also be used standalone as
+the element type of an `ARRAY_INLINE` — each array slot is then a
+self-contained tag+body block. To unwrap the layout entry and get
+a raw `hegel_schema_t`, use `hegel_schema_of()`:
+
+```c
+hegel_schema_t shape_union = hegel_schema_of (HEGEL_UNION (
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                HEGEL_DOUBLE (0.1, 100.0))));
+
+hegel_schema_t gallery = HEGEL_STRUCT (Gallery,
+    HEGEL_ARRAY_INLINE (shape_union, sizeof (Shape), 1, 6));
+```
+
 ## Primitive constructors
 
 Every integer type has a **full-range** version (no args) and a
@@ -107,37 +167,37 @@ hegel_schema_t hegel_schema_text (int min_len, int max_len);
 These all produce "field schemas" you plug into a struct via the
 convenience macros (next section).
 
-## Struct field macros
+## Scalar field macros
 
-For every scalar type, there's a macro that takes a struct type +
-field name + optional range:
+Each scalar macro has a full-range form (no args) and a constrained
+form (`lo`, `hi`):
 
 ```c
-HEGEL_INT   (MyStruct, field)                       /* full int range */
-HEGEL_INT   (MyStruct, field, -1000, 1000)          /* constrained */
-HEGEL_U8    (MyStruct, byte_field)                  /* [0, 255] */
-HEGEL_I16   (MyStruct, temp, -400, 850)
-HEGEL_U32   (MyStruct, serial)
-HEGEL_I64   (MyStruct, timestamp)
-HEGEL_FLOAT (MyStruct, voltage, 0.0, 5.0)
-HEGEL_DOUBLE (MyStruct, latitude, -90.0, 90.0)
-HEGEL_TEXT  (MyStruct, label, 0, 8)                 /* [a-z]{0..8}, always present */
+HEGEL_INT   ()                    /* full int range  */
+HEGEL_INT   (-1000, 1000)         /* constrained     */
+HEGEL_U8    ()                    /* [0, 255]        */
+HEGEL_I16   (-400, 850)
+HEGEL_U32   ()
+HEGEL_I64   ()
+HEGEL_FLOAT (0.0, 5.0)
+HEGEL_DOUBLE (-90.0, 90.0)
+HEGEL_TEXT  (0, 8)                /* [a-z]{0..8}, always present */
 ```
 
-The macro picks between the full-range and range-constrained form by
-argument count.
+The macro picks between the full-range and range-constrained form
+by argument count (via `__VA_OPT__`).
 
 ## Struct constructor
 
 ```c
-hegel_schema_t s = hegel_schema_struct (sizeof (MyStruct),
-    HEGEL_INT  (MyStruct, x, 0, 100),
-    HEGEL_INT  (MyStruct, y, 0, 100),
-    HEGEL_TEXT (MyStruct, name, 1, 20));
+hegel_schema_t s = HEGEL_STRUCT (MyStruct,
+    HEGEL_INT  (0, 100),
+    HEGEL_INT  (0, 100),
+    HEGEL_TEXT (1, 20));
 ```
 
-Variadic. The macro appends an `H_END` sentinel internally; **do
-not write a trailing NULL**. The top-level schema you pass to
+Variadic. The macro appends a sentinel internally; **do not write
+a trailing NULL**. The top-level schema you pass to
 `hegel_schema_draw` must be a struct.
 
 ## Composite schemas
@@ -145,40 +205,42 @@ not write a trailing NULL**. The top-level schema you pass to
 ### `HEGEL_OPTIONAL` — 50/50 nullable pointer
 
 ```c
-HEGEL_OPTIONAL (MyStruct, ptr_field, inner_schema)
+HEGEL_OPTIONAL (inner_schema)
 ```
 
 On each draw, flips a coin. If true, draws `inner_schema` and stores
-the pointer at `ptr_field`. If false, leaves the field NULL. Use for
-optional strings (inner = `hegel_schema_text(...)`) or optional
-sub-structs.
+the pointer in the corresponding field. If false, leaves the field
+NULL. Use for optional strings (inner = `hegel_schema_text(...)`)
+or optional sub-structs. Fits a single pointer-sized slot in the
+enclosing `HEGEL_STRUCT`.
 
 ### `HEGEL_SELF` — optional recursive pointer
 
 ```c
-HEGEL_SELF (Tree, left)    /* Tree *left; — optional recursive */
+HEGEL_SELF ()    /* Tree *left; — optional recursive */
 ```
 
-Shorthand for `HEGEL_OPTIONAL(Tree, left, hegel_schema_self())`.
-Must be used inside a `hegel_schema_struct` that declares the type.
-The field must be a pointer to the enclosing struct type.
-Automatically optional (50/50 NULL) because recursive chains need
-termination — unbounded recursion is capped at
-`HEGEL_DEFAULT_MAX_DEPTH = 5`.
+Shorthand for `HEGEL_OPTIONAL (hegel_schema_self ())`. Must be used
+inside a `HEGEL_STRUCT` that declares the type. The field must be
+a pointer to the enclosing struct type. Automatically optional
+(50/50 NULL) because recursive chains need termination — unbounded
+recursion is capped at `HEGEL_DEFAULT_MAX_DEPTH = 5`.
 
 ### `HEGEL_ARRAY` — variable-length array with separate allocation
 
 ```c
 typedef struct { int *items; int n_items; } Bag;
 
-HEGEL_ARRAY (Bag, items, n_items, hegel_schema_int_range (0, 100), 0, 10)
+HEGEL_STRUCT (Bag,
+    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10));
 ```
 
-Writes both the malloc'd array pointer (at `items` offset) and the
-count (at `n_items` offset). The element schema can be any of:
-`hegel_schema_int_range(...)`, `hegel_schema_text(...)`, a struct
-schema (each element gets a separate allocation, array stores
-pointers), or a `HEGEL_ONE_OF_STRUCT(...)` (heterogeneous pointer
+Occupies two consecutive positional slots: the array pointer
+(`void *`) and the count (`int`). The user's struct must put the
+pointer field first, then the count field. The element schema can
+be any of: `hegel_schema_int_range(...)`, `hegel_schema_text(...)`,
+a struct schema (each element separately allocated, array stores
+pointers), or `HEGEL_ONE_OF_STRUCT(...)` (heterogeneous pointer
 array).
 
 ### `HEGEL_ARRAY_INLINE` — contiguous array of inline structs
@@ -186,13 +248,13 @@ array).
 ```c
 typedef struct { Point *points; int n_points; } Path;
 
-HEGEL_ARRAY_INLINE (Path, points, n_points, point_schema, sizeof (Point), 1, 8)
+HEGEL_STRUCT (Path,
+    HEGEL_ARRAY_INLINE (point_schema, sizeof (Point), 1, 8));
 ```
 
-One contiguous buffer, stride = `sizeof(elem)`. Elements are laid
-out inline (no per-element pointer chase). The `elem` schema must be
-a struct or union — runtime assert catches misuse. Use for
-cache-friendly arrays where every element is the same size.
+Same two-slot shape as `HEGEL_ARRAY`, but elements are laid out in
+one contiguous buffer (stride = `sizeof(elem)`) rather than each
+allocated separately. The `elem` schema must be a struct or union.
 
 ### `HEGEL_UNION` — tagged union with tag field in the struct
 
@@ -205,28 +267,29 @@ typedef struct {
   } u;
 } Shape;
 
-HEGEL_UNION (Shape, tag,
-    HEGEL_CASE (HEGEL_DOUBLE (Shape, u.circle.radius, 0.1, 100.0)),
-    HEGEL_CASE (HEGEL_DOUBLE (Shape, u.rect.w, 0.1, 100.0),
-                HEGEL_DOUBLE (Shape, u.rect.h, 0.1, 100.0)))
+HEGEL_STRUCT (Shape,
+    HEGEL_UNION (
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                    HEGEL_DOUBLE (0.1, 100.0))));
 ```
 
-Picks a variant, writes the variant index to `tag`, fills the chosen
-union member's fields. Each case is `HEGEL_CASE(...)` wrapping the
-fields to draw for that variant. No trailing `NULL` in the cases.
+Occupies a single "cluster" slot: the int tag followed by the union
+body (sized/aligned to the widest case). Each case is a positional
+list of field schemas, laid out starting at the union body's base.
+No trailing `NULL` in the cases.
 
 ### `HEGEL_UNION_UNTAGGED` — tag lives in shape tree only
 
-Same shape as `HEGEL_UNION` but **writes no tag** to the struct. The
-user reads the chosen variant from the shape tree via
-`hegel_shape_tag()`. Use when your C type doesn't have an outer tag
-field (see the common-initial-sequence pattern in
-[patterns.md](patterns.md)).
+Same as `HEGEL_UNION` but **writes no tag** — the cluster is just
+the union body. Read the chosen variant from the shape tree via
+`hegel_shape_tag()`.
 
 ```c
 HEGEL_UNION_UNTAGGED (
-    HEGEL_CASE (HEGEL_DOUBLE (Thing, circle.radius, 0.1, 100.0)),
-    HEGEL_CASE (HEGEL_DOUBLE (Thing, rect.w, 0.1, 100.0)))
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                HEGEL_DOUBLE (0.1, 100.0)))
 ```
 
 ### `HEGEL_VARIANT` — tag + pointer to separately allocated struct
@@ -234,44 +297,39 @@ HEGEL_UNION_UNTAGGED (
 ```c
 typedef struct { int tag; void *value; } ShapeVar;
 
-HEGEL_VARIANT (ShapeVar, tag, value, circle_schema, rect_schema)
+HEGEL_STRUCT (ShapeVar,
+    HEGEL_VARIANT (circle_schema, rect_schema));
 ```
 
-Picks a variant, allocates the chosen struct, writes the tag at
-`tag` and the pointer at `value`. The user casts based on tag. Used
-when variants are genuinely different-size structs and you want
-each in its own allocation.
+Occupies a two-field cluster: int tag + void pointer. The chosen
+variant's struct is allocated separately; the pointer lives at the
+cluster's second slot.
 
 ### `HEGEL_MAP_INT` / `HEGEL_FILTER_INT` / `HEGEL_FLAT_MAP_INT` — functional combinators
 
 The schema API handles *structural* composition (struct fields,
 arrays, unions). For *functional* composition — transforming drawn
-values, filtering, dependent generation — use these combinators:
+values, filtering, dependent generation — use these combinators.
+They each occupy a single slot sized for their target type.
 
 ```c
 /* Map: draw an int, transform through fn, store result. */
 int square_fn (int x, void *ctx) { return x * x; }
-HEGEL_MAP_INT (MyStruct, field,
-               hegel_schema_int_range (0, 100),
-               square_fn, NULL)
+HEGEL_MAP_INT (hegel_schema_int_range (0, 100), square_fn, NULL)
 /* field is always a perfect square in [0, 10000] */
 
 /* Filter: draw an int, keep only those matching the predicate. */
 int is_even (int x, void *ctx) { return (x % 2) == 0; }
-HEGEL_FILTER_INT (MyStruct, field,
-                  hegel_schema_int_range (0, 100),
-                  is_even, NULL)
-/* field is always even; if hegel rolls too many odd values in a
-** row, Hypothesis's filter_too_much health check discards the case */
+HEGEL_FILTER_INT (hegel_schema_int_range (0, 100), is_even, NULL)
+/* field is always even; filter_too_much health check if rejection
+** rate is too high */
 
 /* Flat-map: dependent generation — draw n, then draw something
 ** whose range depends on n. */
 hegel_schema_t dep_fn (int n, void *ctx) {
   return hegel_schema_int_range (0, n * 10);
 }
-HEGEL_FLAT_MAP_INT (MyStruct, field,
-                    hegel_schema_int_range (1, 10),
-                    dep_fn, NULL)
+HEGEL_FLAT_MAP_INT (hegel_schema_int_range (1, 10), dep_fn, NULL)
 /* field is in [0, n*10] where n was drawn first */
 ```
 
@@ -313,8 +371,9 @@ field's type.
 HEGEL_BOOL(MyStruct, is_active)   /* 1-byte unsigned int in [0,1] */
 ```
 
-Expands to `hegel_schema_u8_range_at(offsetof(T, f), 0, 1)`. The
-field should be `bool` or `_Bool` from `stdbool.h` (1 byte).
+Expands to a binding that places `hegel_schema_u8_range(0, 1)` at
+`offsetof(T, f)`. The field should be `bool` or `_Bool` from
+`stdbool.h` (1 byte).
 
 ### `HEGEL_REGEX` — regex-generated text
 
@@ -357,7 +416,7 @@ static void my_test (hegel_testcase *tc) {
 }
 
 int main (void) {
-  my_schema = hegel_schema_struct (sizeof (MyStruct), ...);
+  my_schema = HEGEL_STRUCT (MyStruct, ...);
   hegel_run_test (my_test);
   hegel_schema_free (my_schema);
   return 0;
@@ -382,8 +441,25 @@ int len     = hegel_shape_array_len (hegel_shape_field (sh, 2));
 int is_some = hegel_shape_is_some   (hegel_shape_field (sh, 1));
 ```
 
-Currently positional (by field index). Named accessors are on the
-TODO list — see `TODO.md`.
+### Offset-based lookup — `HEGEL_SHAPE_GET`
+
+Counting field positions is error-prone when the struct grows.
+Since every struct binding carries its field offset, shapes can
+also be looked up by offset:
+
+```c
+hegel_shape * field = HEGEL_SHAPE_GET (sh, MyStruct, some_field);
+int len = hegel_shape_array_len (HEGEL_SHAPE_GET (sh, MyStruct, items));
+```
+
+`HEGEL_SHAPE_GET(sh, T, f)` expands to
+`hegel_shape_get_offset(sh, offsetof(T, f))` — a linear scan over
+the struct shape's bindings looking for a match. Returns NULL if
+the offset doesn't correspond to any bound field, or if `sh` is
+not a struct shape.
+
+Named accessors (by field name string) are still on the TODO list
+— see `TODO.md`.
 
 ## Refcounting and ownership
 
@@ -397,14 +473,14 @@ For sharing a schema across multiple parents, explicitly call
 `hegel_schema_ref()` to add a reference before passing:
 
 ```c
-hegel_schema_t color = hegel_schema_struct (sizeof (Color), ...);
+hegel_schema_t color = HEGEL_STRUCT (Color, ...);
 hegel_schema_ref (color);  /* +1 for second use */
 
-palette_s = hegel_schema_struct (sizeof (Palette),
-    HEGEL_ARRAY_INLINE (Palette, colors, n, color, sizeof (Color), 1, 5));
+palette_s = HEGEL_STRUCT (Palette,
+    HEGEL_ARRAY_INLINE (color, sizeof (Color), 1, 5));
 
-sprite_s = hegel_schema_struct (sizeof (Sprite),
-    HEGEL_ARRAY_INLINE (Sprite, pixels, n, color, sizeof (Color), 1, 4));
+sprite_s = HEGEL_STRUCT (Sprite,
+    HEGEL_ARRAY_INLINE (color, sizeof (Color), 1, 4));
 
 /* Both palette_s and sprite_s independently own a reference to color.
 ** Freeing them releases the refs in turn; color is freed when the

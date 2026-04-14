@@ -65,20 +65,20 @@ static
 void
 init_schema (void)
 {
-  hegel_schema_t type_a = hegel_schema_struct (sizeof (TypeA),
-      HEGEL_INT (TypeA, tag, 3, 3),          /* constant: always 3 */
-      HEGEL_INT (TypeA, value, -1000, 1000));
+  hegel_schema_t type_a = HEGEL_STRUCT (TypeA,
+      HEGEL_INT (3, 3),                      /* constant: always 3 */
+      HEGEL_INT (-1000, 1000));
 
-  hegel_schema_t type_b = hegel_schema_struct (sizeof (TypeB),
-      HEGEL_INT (TypeB, tag, 5, 5),          /* constant: always 5 */
-      HEGEL_TEXT (TypeB, name, 1, 10),
-      HEGEL_U8  (TypeB, byte));
+  hegel_schema_t type_b = HEGEL_STRUCT (TypeB,
+      HEGEL_INT (5, 5),                      /* constant: always 5 */
+      HEGEL_TEXT (1, 10),
+      HEGEL_U8 ());
 
-  hegel_schema_t type_c = hegel_schema_struct (sizeof (TypeC),
-      HEGEL_INT (TypeC, tag, 7, 7),          /* constant: always 7 */
-      HEGEL_DOUBLE (TypeC, x, -10.0, 10.0),
-      HEGEL_DOUBLE (TypeC, y, -10.0, 10.0),
-      HEGEL_DOUBLE (TypeC, z, -10.0, 10.0));
+  hegel_schema_t type_c = HEGEL_STRUCT (TypeC,
+      HEGEL_INT (7, 7),                      /* constant: always 7 */
+      HEGEL_DOUBLE (-10.0, 10.0),
+      HEGEL_DOUBLE (-10.0, 10.0),
+      HEGEL_DOUBLE (-10.0, 10.0));
 
   /* HEGEL_ONE_OF_STRUCT picks one of the three struct schemas and
   ** returns a pointer to a freshly allocated instance.  Used as the
@@ -86,8 +86,8 @@ init_schema (void)
   ** to whichever variant was chosen — TypeA, TypeB, or TypeC. */
   hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 
-  coll_schema = hegel_schema_struct (sizeof (RawCollection),
-      HEGEL_ARRAY (RawCollection, items, n_items, one_of, 1, 6));
+  coll_schema = HEGEL_STRUCT (RawCollection,
+      HEGEL_ARRAY (one_of, 1, 6));
 }
 
 /* ---- Test ---- */

@@ -87,9 +87,8 @@ main (void)
   hegel_suite *       s;
   int                 rc;
 
-  thing_schema = hegel_schema_struct (sizeof (Thing),
-      HEGEL_FILTER_INT (Thing, x,
-                        hegel_schema_int_range (-1000000, 1000000),
+  thing_schema = HEGEL_STRUCT (Thing,
+      HEGEL_FILTER_INT (hegel_schema_int_range (-1000000, 1000000),
                         only_accept_zero, NULL));
 
   s = hegel_suite_new ();

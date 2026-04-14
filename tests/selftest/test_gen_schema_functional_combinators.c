@@ -259,57 +259,46 @@ static void test_regex (hegel_testcase * tc) {
 ** ================================================================ */
 
 int main (void) {
-  optint_schema = hegel_schema_struct (sizeof (OptIntThing),
-      HEGEL_OPTIONAL (OptIntThing, maybe_val,
-                      hegel_schema_int_range (50, 150)),
-      HEGEL_INT (OptIntThing, always_val, 0, 100));
+  optint_schema = HEGEL_STRUCT (OptIntThing,
+      HEGEL_OPTIONAL (hegel_schema_int_range (50, 150)),
+      HEGEL_INT (0, 100));
 
-  map_schema = hegel_schema_struct (sizeof (MapThing),
-      HEGEL_MAP_INT    (MapThing, square,
-                        hegel_schema_int_range (0, 100),
+  map_schema = HEGEL_STRUCT (MapThing,
+      HEGEL_MAP_INT    (hegel_schema_int_range (0, 100),
                         square_int, NULL),
-      HEGEL_MAP_I64    (MapThing, cube,
-                        hegel_schema_i64_range (0, 10),
+      HEGEL_MAP_I64    (hegel_schema_i64_range (0, 10),
                         cube_i64, NULL),
-      HEGEL_MAP_DOUBLE (MapThing, halved,
-                        hegel_schema_double_range (0.0, 10.0),
+      HEGEL_MAP_DOUBLE (hegel_schema_double_range (0.0, 10.0),
                         halve_double, NULL));
 
-  filter_int_schema = hegel_schema_struct (sizeof (FilterIntThing),
-      HEGEL_FILTER_INT (FilterIntThing, v,
-                        hegel_schema_int_range (0, 100),
+  filter_int_schema = HEGEL_STRUCT (FilterIntThing,
+      HEGEL_FILTER_INT (hegel_schema_int_range (0, 100),
                         is_even_int, NULL));
-  filter_i64_schema = hegel_schema_struct (sizeof (FilterI64Thing),
-      HEGEL_FILTER_I64 (FilterI64Thing, v,
-                        hegel_schema_i64_range (-1000, 1000),
+  filter_i64_schema = HEGEL_STRUCT (FilterI64Thing,
+      HEGEL_FILTER_I64 (hegel_schema_i64_range (-1000, 1000),
                         is_positive_i64, NULL));
-  filter_double_schema = hegel_schema_struct (sizeof (FilterDoubleThing),
-      HEGEL_FILTER_DOUBLE (FilterDoubleThing, v,
-                           hegel_schema_double_range (0.0, 10.0),
+  filter_double_schema = HEGEL_STRUCT (FilterDoubleThing,
+      HEGEL_FILTER_DOUBLE (hegel_schema_double_range (0.0, 10.0),
                            is_ge_one_double, NULL));
 
-  flat_map_schema = hegel_schema_struct (sizeof (FlatMapThing),
-      HEGEL_FLAT_MAP_INT    (FlatMapThing, dep_int,
-                             hegel_schema_int_range (1, 10),
+  flat_map_schema = HEGEL_STRUCT (FlatMapThing,
+      HEGEL_FLAT_MAP_INT    (hegel_schema_int_range (1, 10),
                              dep_int_fn, NULL),
-      HEGEL_FLAT_MAP_I64    (FlatMapThing, dep_i64,
-                             hegel_schema_i64_range (1, 10),
+      HEGEL_FLAT_MAP_I64    (hegel_schema_i64_range (1, 10),
                              dep_i64_fn, NULL),
-      HEGEL_FLAT_MAP_DOUBLE (FlatMapThing, dep_double,
-                             hegel_schema_double_range (1.0, 10.0),
+      HEGEL_FLAT_MAP_DOUBLE (hegel_schema_double_range (1.0, 10.0),
                              dep_double_fn, NULL));
 
-  one_of_schema = hegel_schema_struct (sizeof (OneOfThing),
-      HEGEL_ONE_OF_INT (OneOfThing, value,
-                        hegel_schema_int_range (0, 10),
+  one_of_schema = HEGEL_STRUCT (OneOfThing,
+      HEGEL_ONE_OF_INT (hegel_schema_int_range (0, 10),
                         hegel_schema_int_range (1000, 9999)));
 
-  bool_schema = hegel_schema_struct (sizeof (BoolThing),
-      HEGEL_BOOL (BoolThing, flag),
-      HEGEL_INT  (BoolThing, val, 0, 100));
+  bool_schema = HEGEL_STRUCT (BoolThing,
+      HEGEL_BOOL (),
+      HEGEL_INT  (0, 100));
 
-  regex_schema = hegel_schema_struct (sizeof (RegexThing),
-      HEGEL_REGEX (RegexThing, text, "[a-z]+", 64));
+  regex_schema = HEGEL_STRUCT (RegexThing,
+      HEGEL_REGEX ("[a-z]+", 64));
 
   printf ("  optional int pointer...\n");
   hegel_run_test (test_optint); printf ("    PASSED\n");

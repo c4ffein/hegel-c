@@ -7,6 +7,171 @@
 Open items after the V0 schema API milestone. For what's already
 done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
+## Exploratory
+
+### `HEGEL_INLINE(T, …)` — inline sub-struct as a positional field
+
+The positional `HEGEL_STRUCT(T, …)` API currently can't express an
+inlined sub-struct field.  Given
+
+```c
+typedef struct { uint8_t r, g, b; }   Color;
+typedef struct { Color fg; Color bg; } Palette;
+```
+
+the user either has to spell every nested byte out manually
+(`HEGEL_U8() ×6`) or drop to the low-level
+`hegel_schema_struct_v` + `hegel__bind` form.  A `HEGEL_INLINE`
+macro would close this gap:
+
+```c
+HEGEL_STRUCT (Palette,
+    HEGEL_INLINE (Color, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()),
+    HEGEL_INLINE (Color, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()));
+```
+
+**Sketch:**
+- New layout kind `HEGEL_LAY_INLINE_STRUCT`, `slot0_size = sizeof (T)`,
+  `slot0_align = _Alignof (T)`.
+- Draw-time: when the layout pass reaches an inline struct entry,
+  instead of calling `hegel__draw_struct` (which `calloc`s), use a
+  new helper `hegel__draw_struct_into (slot, …)` that treats the
+  pre-allocated slot (`parent + binding.offset`) as the struct root
+  and iterates the sub-schema's bindings from there.  The machinery
+  already exists inside `HEGEL_ARRAY_INLINE`'s element handler for
+  struct elements — extract it into a shared helper.
+- The outer `HEGEL_STRUCT` `sizeof (T)` assertion already catches
+  mismatches; the inner `HEGEL_STRUCT`-style build of the sub-schema
+  would also assert `sizeof (Color) == computed_total`, giving
+  nested safety nets.
+- Two API flavors worth shipping together:
+  - `HEGEL_INLINE (T, …entries)` — nested form, builds a fresh
+    sub-schema each call, composes recursively.  Default.
+  - `HEGEL_INLINE_REF (T, pre_built_schema)` — escape hatch for
+    reusing a schema built with runtime-computed parameters.
+    Requires the usual `hegel_schema_ref` before each extra use.
+
+Estimated scope: ~100–150 lines (new kind, new draw helper, two
+macros, one selftest exercising `Palette`).  No fan-out to other
+code paths.
+
+**Why exploratory, not in the punch list yet**: the low-level
+escape hatch already works for this case, and the most common
+shared-schema pattern (same schema passed as the `inner` / `elem`
+to `HEGEL_OPTIONAL` / `HEGEL_ARRAY` / `HEGEL_ARRAY_INLINE`) is
+already ergonomic.  The only missing case is "same schema bound to
+multiple direct fields of a parent struct," which is real but rare.
+
+## Reuse multiple fields of a generator
+
+```
+❯ How about something like : x = HEGEL_ARRAY(...); s = HEGEL_STRUCT(..., x.array_pointer, x.size); ??? Build the tree in a smart
+  way? Everything works on draw?
+
+● This is actually a genuinely good idea, and it generalizes beyond arrays. Let me sketch it honestly.
+
+  What you'd write
+
+  hegel_array_t x = HEGEL_ARRAY(hegel_schema_int_range(0, 100), 0, 10);
+
+  hegel_schema_t s = HEGEL_STRUCT(Bag,
+      x.array_pointer,   // goes wherever the ptr field is
+      x.size);           // goes wherever the len field is
+
+  /* Or with other fields in between: */
+  hegel_schema_t t = HEGEL_STRUCT(Thing,
+      HEGEL_INT(0, 100),  // some other field
+      x.size,             // len comes first!
+      HEGEL_TEXT(1, 5),   // another field
+      x.array_pointer);   // ptr comes later
+
+  What each accessor is
+
+  x is a handle containing two layout entries plus a shared pointer to some generation state:
+
+  typedef struct {
+    hegel_array_state *  state;      // malloc'd, shared
+    hegel_layout_entry   array_pointer;
+    hegel_layout_entry   size;
+  } hegel_array_t;
+
+  typedef struct {
+    hegel_schema *  generator;       // the underlying array schema
+    void *          drawn_ptr;       // filled at draw time
+    int             drawn_len;       // filled at draw time
+    int             drawn_this_run;  // reset per test case
+  } hegel_array_state;
+
+  Both x.array_pointer and x.size carry a pointer to the same state. They're independent layout entries from the layout pass's
+  point of view (each occupies one slot), but at draw time they collaborate.
+
+  How draw resolves the dependency
+
+  When hegel__draw_struct iterates bindings in order and hits either the x.array_pointer binding or the x.size binding:
+
+  1. Check state->drawn_this_run. If not set, call state->generator's draw — this allocates the heap buffer and picks the length,
+  storing both in state.
+  2. Write the relevant facet (drawn_ptr or drawn_len) at this binding's offset.
+  3. Mark drawn_this_run.
+
+  The second binding encountered skips step 1 because state is already populated. Order doesn't matter — whichever of
+  x.array_pointer or x.size comes first in the positional list triggers the actual generation.
+
+  At the end of each test case (or start of the next), reset drawn_this_run = 0 so the next case draws fresh. Either the struct
+  schema does this pre-draw, or the state has a "round stamp" compared against the current round.
+
+  This generalizes beautifully
+
+  Once you have "produce one value, project facets," you can do it for more than arrays:
+
+  hegel_union_t u = HEGEL_UNION(
+      HEGEL_CASE(HEGEL_DOUBLE(0.1, 100.0)),
+      HEGEL_CASE(HEGEL_INT(), HEGEL_INT()));
+
+  HEGEL_STRUCT(Weird,
+      u.tag,           // tag at field 0
+      HEGEL_FLOAT(),   // an unrelated field in between
+      u.body);         // body at field 2 — non-adjacent from the tag!
+
+  Variant, array_inline, even user-defined composites. The "2-slot adjacent" constraint of the current design is lifted entirely.
+
+  The cost
+
+  Not trivial. You need:
+  - Shared heap state per grouped generation
+  - New layout entry kinds for "read from shared state at this slot"
+  - Draw-time resolution: check-then-generate-or-reuse
+  - Per-test-case reset of the drawn_this_run flag, probably owned by the enclosing struct schema
+  - Ownership story: the shared state must be freed exactly once, even though two layout entries reference it. Refcount on the
+  state, or the struct schema takes exclusive ownership when it consumes the handle, or the array schema node itself carries the
+  state.
+
+  I'd estimate ~250–400 lines for the array case alone, maybe another 150 to generalize to unions/variants. Plus a handful of
+  tests.
+
+  The actual conceptual win
+
+  The part I find most appealing is what it says about the model:
+
+  ▎ A composite schema produces one value. That value has named facets (ptr, length, tag, body). You project facets into struct
+  ▎ fields wherever they need to land. The schema's job is the generation; the layout's job is the placement; the two are fully
+  ▎ orthogonal.
+
+  That's cleaner than today's "a composite schema occupies 2 adjacent slots in declaration order." It matches how you think about
+  the problem, not how C happens to represent it.
+
+  My honest take
+
+  I think this is the right direction for a V2 of the schema API. The positional form we just built is a clear step up from the
+  offsetof form, but it still conflates "generate a value" with "place its pieces in a parent struct." Your proposal cleanly
+  separates them. If you're building hegel-c with the "many users, upstream-blessed C binding" mindset (which your memory says you
+  are), this is probably the shape the API should land in long term.
+
+  Worth filing? Yes, strongly. Not as "nice-to-have exploratory" but as "the next major API iteration, when we're ready to revisit
+  the positional form." Want me to write it up as a TODO entry — something clearly distinct from the HEGEL_INLINE exploratory note,
+   since this is a bigger rethink rather than a gap-filler?
+```
+
 ## High-leverage next work
 
 ### Point the library at real C code (Scotch, etc.)
@@ -109,8 +274,8 @@ contains-match), it's in TODO and memory. Go solved it by just plumbing the flag
 
 ### Rename / clarify `HEGEL_SELF`
 
-`HEGEL_SELF(T, f)` silently expands to
-`hegel_schema_optional_ptr_at(offsetof(T,f), hegel_schema_self())`,
+`HEGEL_SELF(T, f)` silently expands to a binding that places
+`hegel_schema_optional_ptr(hegel_schema_self())` at `offsetof(T,f)`,
 which means:
 1. The field is always optional (50% NULL chance)
 2. The field must be a pointer type

@@ -52,14 +52,13 @@ init_schema (void)
   ** ARRAY_INLINE below — each array slot is sizeof(Shape) bytes, and
   ** the union draw writes the tag + the chosen variant's fields into
   ** each slot independently. */
-  hegel_schema_t shape_union = HEGEL_UNION (Shape, tag,
-      HEGEL_CASE (HEGEL_DOUBLE (Shape, u.circle.radius, 0.1, 100.0)),
-      HEGEL_CASE (HEGEL_DOUBLE (Shape, u.rect.width,  0.1, 100.0),
-                  HEGEL_DOUBLE (Shape, u.rect.height, 0.1, 100.0)));
+  hegel_schema_t shape_union = hegel_schema_of (HEGEL_UNION (
+      HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+      HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                  HEGEL_DOUBLE (0.1, 100.0))));
 
-  gallery_schema = hegel_schema_struct (sizeof (Gallery),
-      HEGEL_ARRAY_INLINE (Gallery, shapes, n_shapes,
-                          shape_union, sizeof (Shape), 1, 6));
+  gallery_schema = HEGEL_STRUCT (Gallery,
+      HEGEL_ARRAY_INLINE (shape_union, sizeof (Shape), 1, 6));
 }
 
 /* ---- Test ---- */

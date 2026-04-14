@@ -32,11 +32,11 @@ static void test_roundtrip (hegel_testcase *tc) {
 }
 
 int main (void) {
-  tree_schema = hegel_schema_struct (sizeof (Tree),
-      HEGEL_INT      (Tree, val, -1000, 1000),
-      HEGEL_OPTIONAL (Tree, label, hegel_schema_text (0, 8)),
-      HEGEL_SELF     (Tree, left),
-      HEGEL_SELF     (Tree, right));
+  tree_schema = HEGEL_STRUCT (Tree,
+      HEGEL_INT      (-1000, 1000),
+      HEGEL_OPTIONAL (hegel_schema_text (0, 8)),
+      HEGEL_SELF     (),
+      HEGEL_SELF     ());
   hegel_run_test (test_roundtrip);
   hegel_schema_free (tree_schema);
   return 0;

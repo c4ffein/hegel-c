@@ -78,9 +78,8 @@ hegel_testcase *            tc)
 int
 main (void)
 {
-  thing_schema = hegel_schema_struct (sizeof (Thing),
-      HEGEL_FILTER_INT (Thing, x,
-                        hegel_schema_int_range (-1000000, 1000000),
+  thing_schema = HEGEL_STRUCT (Thing,
+      HEGEL_FILTER_INT (hegel_schema_int_range (-1000000, 1000000),
                         only_accept_zero, NULL));
   hegel_run_test_n (test_too_strict, 100);
   /* Should not reach here — health check should panic out. */
