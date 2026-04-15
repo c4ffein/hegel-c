@@ -90,6 +90,7 @@ The schema system lets tests describe C structs declaratively and get generation
 
 **Macros (the positional user-facing surface):**
 - `HEGEL_STRUCT(T, field_entries...)` — computes offsets from the struct type at runtime, asserts `sizeof(T) == computed_total`. Top-level composition primitive.
+- `HEGEL_INLINE(T, field_entries...)` / `HEGEL_INLINE_REF(T, schema)` — inline-by-value sub-struct field. Lays out `sizeof(T)` bytes in the parent slot; fields are drawn into that region (no separate allocation). Nests recursively; inner `sizeof(T)` assert fires at schema-build time. `_REF` form plugs in a pre-built struct schema; the `(sch, sizeof(T))` match is asserted.
 - `HEGEL_INT(lo, hi)` / `HEGEL_INT()` (full range) — 0-vs-2-arg overloaded via `__VA_OPT__`; same for `_I8`/`_U8`/`_I16`/…/`_DOUBLE` / `_LONG` / `_FLOAT`
 - `HEGEL_TEXT(lo, hi)` — `char *` field, pointer-sized slot
 - `HEGEL_OPTIONAL(inner)` — 50/50 nullable pointer; 1 slot

@@ -214,6 +214,46 @@ NULL. Use for optional strings (inner = `hegel_schema_text(...)`)
 or optional sub-structs. Fits a single pointer-sized slot in the
 enclosing `HEGEL_STRUCT`.
 
+### `HEGEL_INLINE` / `HEGEL_INLINE_REF` — inline-by-value sub-struct
+
+```c
+typedef struct { uint8_t r, g, b; }   RGB;
+typedef struct { RGB fg; RGB bg; }    Palette;
+
+/* Fresh form: build a sub-schema in place, once per call. */
+palette_schema = HEGEL_STRUCT (Palette,
+    HEGEL_INLINE (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()),
+    HEGEL_INLINE (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()));
+
+/* Reuse form: share one pre-built sub-schema across multiple
+** parent fields.  Bump the refcount once per extra use. */
+rgb_schema = HEGEL_STRUCT (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());
+hegel_schema_ref (rgb_schema);
+palette_schema = HEGEL_STRUCT (Palette,
+    HEGEL_INLINE_REF (RGB, rgb_schema),
+    HEGEL_INLINE_REF (RGB, rgb_schema));
+```
+
+Lays out `sizeof(T)` bytes aligned to `_Alignof(T)` at the parent
+slot; at draw time, the sub-struct's fields are drawn directly into
+that region, no separate allocation. Nests to any depth — each
+inner `HEGEL_INLINE` asserts its own `sizeof(T)` match at schema
+build time, so a layout mismatch fires at init with a clear
+diagnostic before any draw happens.
+
+`HEGEL_INLINE` consumes a fresh entry list each call. `HEGEL_INLINE_REF`
+takes a pre-built struct schema and asserts at build time that its
+kind is `HEGEL_SCH_STRUCT` and its size matches `sizeof(T)`. Ownership
+follows the usual "transfer on pass" rule: one reference per use,
+call `hegel_schema_ref` once per extra use.
+
+`HEGEL_INLINE` coexists with `HEGEL_OPTIONAL(pointer-to-struct)`,
+`HEGEL_ARRAY`, etc. in the same parent — they occupy their own slots
+and dispatch through independent schema kinds at draw time.
+
+`HEGEL_SHAPE_GET(sh, Parent, outer.leaf)` resolves through any level
+of inline nesting and returns the leaf scalar shape.
+
 ### `HEGEL_SELF` — optional recursive pointer
 
 ```c

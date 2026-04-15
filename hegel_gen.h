@@ -30,11 +30,30 @@
 **     struct Tree *left, *right;
 **   } Tree;
 **
-**   hegel_schema_t s = hegel_schema_struct(sizeof(Tree),
-**       HEGEL_INT(Tree, val, -1000, 1000),
-**       HEGEL_OPTIONAL(Tree, label, hegel_schema_text(0, 8)),
-**       HEGEL_SELF(Tree, left),
-**       HEGEL_SELF(Tree, right));
+**   hegel_schema_t s = HEGEL_STRUCT (Tree,
+**       HEGEL_INT      (-1000, 1000),
+**       HEGEL_OPTIONAL (hegel_schema_text (0, 8)),
+**       HEGEL_SELF     (),
+**       HEGEL_SELF     ());
+**
+** === Positional layout entries ===
+**
+** The HEGEL_STRUCT(T, ...) macro takes a positional list of field
+** generators in declaration order — one entry per struct field, in
+** the same order the C compiler lays them out.  Each HEGEL_<kind>
+** macro expands to a hegel_layout_entry describing the schema and
+** its slot size/alignment.  HEGEL_STRUCT walks the list at runtime,
+** computes offsets the same way the C compiler does, and asserts
+** `sizeof(T) == computed_total`.  A mismatched field order or type
+** fires the assert immediately at schema-build time.
+**
+** Some entries occupy more than one slot (HEGEL_ARRAY / _INLINE take
+** a pointer + count; HEGEL_UNION takes a tag + body cluster); the
+** layout rules for those are documented next to the macros below.
+**
+** For advanced cases that don't fit the positional form (e.g. schema
+** reuse at arbitrary offsets), drop down to the low-level
+** `hegel_schema_struct_v` + `hegel__bind` escape hatch.
 **
 ** === Schemas vs field bindings ===
 **
@@ -42,16 +61,10 @@
 ** of length 0..8, a struct with these fields).  A schema is a
 ** pure value — it has no position, no "where does this write to."
 **
-** A field binding pairs a schema with an offset into a parent
-** struct.  The HEGEL_INT / HEGEL_TEXT / HEGEL_OPTIONAL / …
-** macros produce bindings, not schemas.  `hegel_schema_struct`
-** takes a variadic list of bindings; each binding tells it
-** "draw from this schema, then write the result at this offset
-** inside the parent struct."
-**
-** Because schemas are pure values, the same schema can be
-** reused at different positions (bump refcount via
-** hegel_schema_ref() before the second use).
+** A layout entry / binding pairs a schema with a slot in a parent
+** struct.  Because schemas are pure values, the same schema can be
+** reused at different positions — bump its refcount via
+** hegel_schema_ref() before each extra use.
 **
 ** Notice: no trailing NULL.  The variadic macros inject a sentinel
 ** (H_END / H_END_BINDING) internally, so user code just lists fields.
@@ -183,6 +196,38 @@ hegel_schema_t hegel__struct_build (size_t declared_size,
 #define HEGEL_STRUCT(T, ...) \
   hegel__struct_build (sizeof (T), _Alignof (T), \
       (hegel_layout_entry[]){ __VA_ARGS__, HEGEL_LAYOUT_END })
+
+/* HEGEL_INLINE / HEGEL_INLINE_REF — inline-by-value sub-struct as a
+** positional field.  The parent lays out `sizeof(T)` bytes aligned to
+** `_Alignof(T)`, and the sub-struct's fields are drawn directly into
+** that region at draw time (no separate allocation).
+**
+**   HEGEL_INLINE (T, entries...) — builds a fresh sub-schema each call.
+**     Nested HEGEL_STRUCT-style sizeof check fires at build time if
+**     the entry list doesn't match T.
+**
+**   HEGEL_INLINE_REF (T, schema) — plugs in a pre-built struct schema.
+**     Useful when you want to share the same sub-schema across multiple
+**     parent fields (pair with hegel_schema_ref to add extra refs).
+**     Asserts at build time that `schema` is a HEGEL_STRUCT and that
+**     `schema->struct_def.size == sizeof(T)`. */
+hegel_schema * hegel__inline_ref_check (size_t declared_size,
+                                        hegel_schema_t sch);
+
+#define HEGEL_INLINE(T, ...)                                               \
+  ((hegel_layout_entry){                                                   \
+      HEGEL_LAY_SIMPLE,                                                    \
+      hegel__struct_build (sizeof (T), _Alignof (T),                       \
+          (hegel_layout_entry[]){ __VA_ARGS__, HEGEL_LAYOUT_END })._raw,   \
+      sizeof (T), _Alignof (T),                                            \
+      0, 0 })
+
+#define HEGEL_INLINE_REF(T, sch)                                           \
+  ((hegel_layout_entry){                                                   \
+      HEGEL_LAY_SIMPLE,                                                    \
+      hegel__inline_ref_check (sizeof (T), (sch)),                         \
+      sizeof (T), _Alignof (T),                                            \
+      0, 0 })
 
 struct hegel_schema {
   hegel_schema_kind       kind;
@@ -825,10 +870,20 @@ int           hegel_shape_array_len (hegel_shape * s);
 int           hegel_shape_is_some   (hegel_shape * s);
 hegel_shape * hegel_shape_field     (hegel_shape * s, int index);
 
-/* Offset-based struct-field accessor.  Linear scan over the struct
-** schema's bindings, returning the shape corresponding to the field
-** whose binding offset matches.  Returns NULL if no match (or if
+/* Offset-based struct-field accessor.  Walks the struct shape's
+** bindings looking for the one that matches `offset`, and returns
+** the LEAF shape at that offset — not an enclosing wrapper.  For
+** nested HEGEL_INLINE sub-structs, descends recursively: if the
+** requested offset matches an inline sub-struct binding, the
+** accessor keeps walking into that sub-struct until it reaches a
+** non-struct shape.  Returns NULL if no binding matches (or if
 ** `s` is not a struct shape).
+**
+** Consequence: when several field paths share the same byte offset
+** (e.g. `Doll.b`, `Doll.b.g`, `Doll.b.g.karat` all at offset 0),
+** HEGEL_SHAPE_GET always returns the deepest leaf — you cannot
+** reach an inline wrapper shape via this accessor.  Use
+** hegel_shape_field() directly to walk wrappers by index.
 **
 ** Typical usage is through the HEGEL_SHAPE_GET macro:
 **

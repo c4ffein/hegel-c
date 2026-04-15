@@ -68,14 +68,14 @@ int main (void) {
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 44 (28 PASS, 9 FAIL, 3 CRASH, 4 HEALTH) | `make selftest-test` |
+| selftest | 38 (26 PASS, 5 FAIL, 3 CRASH, 4 HEALTH) | `make selftest-test` |
 | from-hegel-rust | 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
 | Scotch IRL | 4 (2 sequential, 1 reducer demo, 1 PT-Scotch MPI) | `make scotch-test` |
 
 MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [docs/mpi-testing.md](docs/mpi-testing.md).
 
-The selftest suite doubles as example code — 11 of the 44 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
+The selftest suite doubles as example code — 11 of the 38 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
 
 The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part_schema.c`](tests/irl/scotch/test_graph_part_schema.c) shows the schema API generating graphs for `SCOTCH_graphPart`; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from a random schema and shrinks to a 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
 

@@ -3,22 +3,24 @@
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
 ** Test: HEGEL_SHAPE_GET offset-based accessor with the positional
-** HEGEL_STRUCT API.
+** HEGEL_STRUCT API, exercising HEGEL_INLINE_REF (inline-by-value
+** sub-struct with a shared schema).
 **
 ** Verifies:
-**   1. The layout pass assigns each HEGEL_U8() the right offset
-**      (0..5) matching the Palette struct's nested RGB fields.
-**   2. HEGEL_SHAPE_GET(sh, T, f) looks up by offset and returns the
-**      matching field shape.
+**   1. HEGEL_INLINE_REF lays out a nested RGB at offset 0 and another
+**      at offset 3 inside Palette; nested sizeof assert fires if the
+**      sub-schema doesn't match sizeof(RGB).
+**   2. HEGEL_SHAPE_GET(sh, T, f) resolves through nested struct
+**      shapes.  offsetof(Palette, fg.r) = 0 must find the scalar
+**      for r, not the wrapper struct shape for fg.
+**   3. hegel_schema_ref + HEGEL_INLINE_REF cleanly shares the same
+**      RGB sub-schema across two parent fields.
 **
 ** Layer 1 (nominal): no external function — the property IS that
-** the bindings layer works.
-** Layer 2: build a struct with two RGB-triples (fg, bg), each using
-** the SAME `channel` schema bound at six different offsets.  Draw,
-** then use HEGEL_SHAPE_GET to walk into fg.r and verify it's a
-** SCALAR shape.  Assert every drawn byte is in [0, 255] (redundant
-** with the schema bound, but it proves the bindings resolved
-** correctly at every offset).
+** the bindings layer works end-to-end through nested shapes.
+** Layer 2: build the Palette schema with one shared rgb sub-schema
+** plugged in twice via HEGEL_INLINE_REF, draw, and walk into every
+** leaf via HEGEL_SHAPE_GET.
 **
 ** Expected: EXIT 0.
 */
@@ -37,14 +39,20 @@ typedef struct {
   RGB bg;
 } Palette;
 
+static hegel_schema_t rgb_schema;
 static hegel_schema_t palette_schema;
 
 static void
 init_schema (void)
 {
-  palette_schema = HEGEL_STRUCT (Palette,
-      HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 (),
+  rgb_schema = HEGEL_STRUCT (RGB,
       HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());
+  /* Share rgb_schema across two Palette fields: one ref per extra
+  ** use, matching the pattern for any other shared schema. */
+  hegel_schema_ref (rgb_schema);
+  palette_schema = HEGEL_STRUCT (Palette,
+      HEGEL_INLINE_REF (RGB, rgb_schema),
+      HEGEL_INLINE_REF (RGB, rgb_schema));
 }
 
 static void
@@ -53,23 +61,34 @@ test_palette (hegel_testcase * tc)
   Palette *      p;
   hegel_shape *  sh;
   hegel_shape *  fg_r_shape;
+  hegel_shape *  fg_g_shape;
+  hegel_shape *  bg_g_shape;
   hegel_shape *  bg_b_shape;
   hegel_shape *  missing;
 
   sh = hegel_schema_draw (tc, palette_schema, (void **) &p);
 
-  /* Every channel byte must land in [0, 255] (trivially true for a
-  ** uint8_t, but this verifies the binding offsets don't collide or
-  ** overwrite each other — if two bindings resolved to the same
-  ** field, one channel would be zero while another would be double-
-  ** written, and we'd fail below).  Instead of relying on
-  ** uint8_t saturation, check the shape accessor returns a valid
-  ** node for each field. */
-
+  /* fg.r at offset 0: exact-match pass 1 on the outer Palette
+  ** binding, then descend with sub-offset 0 into the RGB struct
+  ** shape to return the scalar for r (not the wrapper struct). */
   fg_r_shape = HEGEL_SHAPE_GET (sh, Palette, fg.r);
   HEGEL_ASSERT (fg_r_shape != NULL, "HEGEL_SHAPE_GET returned NULL for fg.r");
   HEGEL_ASSERT (fg_r_shape->kind == HEGEL_SHAPE_SCALAR,
                 "fg.r shape kind = %d (want SCALAR)", (int) fg_r_shape->kind);
+
+  /* fg.g at offset 1: no exact match at the top level, Pass 2
+  ** recurses into the inline RGB at offset 0 with sub-offset 1. */
+  fg_g_shape = HEGEL_SHAPE_GET (sh, Palette, fg.g);
+  HEGEL_ASSERT (fg_g_shape != NULL, "HEGEL_SHAPE_GET returned NULL for fg.g");
+  HEGEL_ASSERT (fg_g_shape->kind == HEGEL_SHAPE_SCALAR,
+                "fg.g shape kind = %d (want SCALAR)", (int) fg_g_shape->kind);
+
+  /* bg.g at offset 4: Pass 2 must recurse into the SECOND inline
+  ** RGB (at offset 3) with sub-offset 1, not the first. */
+  bg_g_shape = HEGEL_SHAPE_GET (sh, Palette, bg.g);
+  HEGEL_ASSERT (bg_g_shape != NULL, "HEGEL_SHAPE_GET returned NULL for bg.g");
+  HEGEL_ASSERT (bg_g_shape->kind == HEGEL_SHAPE_SCALAR,
+                "bg.g shape kind = %d (want SCALAR)", (int) bg_g_shape->kind);
 
   bg_b_shape = HEGEL_SHAPE_GET (sh, Palette, bg.b);
   HEGEL_ASSERT (bg_b_shape != NULL, "HEGEL_SHAPE_GET returned NULL for bg.b");

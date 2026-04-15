@@ -7,62 +7,34 @@
 Open items after the V0 schema API milestone. For what's already
 done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
+## rn
+
+- **`hegel__abort` internal helper.**  Consolidate the 6 `fprintf
+  (stderr, …); abort ()` sites in `hegel_gen.c` behind a single
+  internal macro.  One place to add `__FILE__:__LINE__` prefixing
+  later, one place to swap in a longjmp-based recovery if a
+  "schema-build-should-fail" testing mode ever lands, and `grep
+  hegel__abort` becomes the authoritative list of "where the
+  schema layer gives up."  Not urgent, do as a standalone refactor
+  commit — don't mix into feature diffs.
+
+- **Path-based shape accessor (vs offset-based).**  `HEGEL_SHAPE_GET`
+  currently maps `offsetof(T, field)` to a leaf shape and silently
+  descends through inline sub-structs when offsets collide (see
+  `hegel_shape_get_offset` comment).  That's the right default for
+  the common case (leaf assertions), but it means inline wrapper
+  shapes are unreachable via this accessor.  If a use case appears
+  for walking wrapper shapes (span inspection, introspection
+  tooling), add a path-based companion that composes
+  `hegel_shape_field` by index.  C preprocessor can't split
+  `b.g.karat` into tokens, so the form would be
+  `HEGEL_SHAPE_PATH(sh, 0, 0, 0)` or fixed-arity variants — uglier
+  than the offsetof form, which is why it's a companion, not a
+  replacement.  Skip until an actual use case shows up.
+
 ## Exploratory
 
-### `HEGEL_INLINE(T, …)` — inline sub-struct as a positional field
-
-The positional `HEGEL_STRUCT(T, …)` API currently can't express an
-inlined sub-struct field.  Given
-
-```c
-typedef struct { uint8_t r, g, b; }   Color;
-typedef struct { Color fg; Color bg; } Palette;
-```
-
-the user either has to spell every nested byte out manually
-(`HEGEL_U8() ×6`) or drop to the low-level
-`hegel_schema_struct_v` + `hegel__bind` form.  A `HEGEL_INLINE`
-macro would close this gap:
-
-```c
-HEGEL_STRUCT (Palette,
-    HEGEL_INLINE (Color, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()),
-    HEGEL_INLINE (Color, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()));
-```
-
-**Sketch:**
-- New layout kind `HEGEL_LAY_INLINE_STRUCT`, `slot0_size = sizeof (T)`,
-  `slot0_align = _Alignof (T)`.
-- Draw-time: when the layout pass reaches an inline struct entry,
-  instead of calling `hegel__draw_struct` (which `calloc`s), use a
-  new helper `hegel__draw_struct_into (slot, …)` that treats the
-  pre-allocated slot (`parent + binding.offset`) as the struct root
-  and iterates the sub-schema's bindings from there.  The machinery
-  already exists inside `HEGEL_ARRAY_INLINE`'s element handler for
-  struct elements — extract it into a shared helper.
-- The outer `HEGEL_STRUCT` `sizeof (T)` assertion already catches
-  mismatches; the inner `HEGEL_STRUCT`-style build of the sub-schema
-  would also assert `sizeof (Color) == computed_total`, giving
-  nested safety nets.
-- Two API flavors worth shipping together:
-  - `HEGEL_INLINE (T, …entries)` — nested form, builds a fresh
-    sub-schema each call, composes recursively.  Default.
-  - `HEGEL_INLINE_REF (T, pre_built_schema)` — escape hatch for
-    reusing a schema built with runtime-computed parameters.
-    Requires the usual `hegel_schema_ref` before each extra use.
-
-Estimated scope: ~100–150 lines (new kind, new draw helper, two
-macros, one selftest exercising `Palette`).  No fan-out to other
-code paths.
-
-**Why exploratory, not in the punch list yet**: the low-level
-escape hatch already works for this case, and the most common
-shared-schema pattern (same schema passed as the `inner` / `elem`
-to `HEGEL_OPTIONAL` / `HEGEL_ARRAY` / `HEGEL_ARRAY_INLINE`) is
-already ergonomic.  The only missing case is "same schema bound to
-multiple direct fields of a parent struct," which is real but rare.
-
-## Reuse multiple fields of a generator
+## Reuse multiple fields of a generator (V2 rethink)
 
 ```
 ❯ How about something like : x = HEGEL_ARRAY(...); s = HEGEL_STRUCT(..., x.array_pointer, x.size); ??? Build the tree in a smart
@@ -172,6 +144,23 @@ multiple direct fields of a parent struct," which is real but rare.
    since this is a bigger rethink rather than a gap-filler?
 ```
 
+**Related symptom — `HEGEL_INLINE_REF` refcount footgun.**  Today,
+sharing a pre-built struct schema across two `HEGEL_INLINE_REF`
+slots requires the user to call `hegel_schema_ref` once before the
+second use; forgetting it is a silent double-free at
+`hegel_schema_free` time (visible under ASan, invisible otherwise).
+This is not a bug in `HEGEL_INLINE_REF` specifically — it's the
+same ownership gap this entry is trying to close.  Under the
+handle model, `INLINE_REF` becomes a "shared template, independent
+draws" facet of a handle that owns the underlying schema, and the
+ref-bumping requirement disappears because facets are non-owning.
+
+Until the V2 handle model lands: leave `INLINE_REF` semantics
+alone (matches the rest of the API's transfer-on-pass convention),
+and add an ASan-caught deliberate-misuse selftest that pins the
+current behavior so a future accidental fix doesn't silently change
+it.
+
 ## High-leverage next work
 
 ### Point the library at real C code (Scotch, etc.)
@@ -219,6 +208,7 @@ matter for "does the API handle arbitrary foreign C code".
 | Item | Status |
 |---|---|
 | Fix `HEGEL_ARRAY_INLINE` fork-mode orphan leak | done — see "Known bugs" below |
+| `HEGEL_INLINE` / `HEGEL_INLINE_REF` — inline-by-value sub-struct | done — `test_gen_schema_inline_struct.c`, shared helper `hegel__draw_struct_into_slot`, `HEGEL_SHAPE_GET` now recurses through nested structs |
 | Real-world demo: schema-API on actual Scotch | done — `test_graph_part_schema.c` |
 | Shrinker demo: reducer on a real Scotch bug | done — `test_graph_order_shrink.c` + `docs/shrinking.md` |
 | Health-check failure path coverage in CI | done — `TESTS_HEALTH` selftests (filter_too_much, large_base_example, single + suite versions) |

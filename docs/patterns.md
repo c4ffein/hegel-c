@@ -47,6 +47,43 @@ typed integer macros (`Sensor` with u8/i16/u32/i64/float/double).
 
 ---
 
+## Nested sub-struct by value
+
+**C layout:**
+```c
+typedef struct { uint8_t r, g, b; }  RGB;
+typedef struct { RGB fg; RGB bg; }   Palette;
+```
+
+**Schema (fresh form):**
+```c
+palette_schema = HEGEL_STRUCT (Palette,
+    HEGEL_INLINE (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()),
+    HEGEL_INLINE (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()));
+```
+
+**Schema (shared form — one `RGB` schema reused at two offsets):**
+```c
+rgb_schema = HEGEL_STRUCT (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());
+hegel_schema_ref (rgb_schema);
+palette_schema = HEGEL_STRUCT (Palette,
+    HEGEL_INLINE_REF (RGB, rgb_schema),
+    HEGEL_INLINE_REF (RGB, rgb_schema));
+```
+
+**Tests:**
+- [`test_gen_schema_inline_struct.c`](../tests/selftest/test_gen_schema_inline_struct.c) — fresh form, mixed inline + `HEGEL_OPTIONAL`, and three-level nesting
+- [`test_gen_schema_shape_get_and_reuse.c`](../tests/selftest/test_gen_schema_shape_get_and_reuse.c) — shared form + `HEGEL_SHAPE_GET` resolving through nested shapes
+
+Exercises: `HEGEL_INLINE` / `HEGEL_INLINE_REF`. Sub-struct storage is
+carved out of the parent's own allocation (no extra malloc per
+field). Nests to any depth — each inner `HEGEL_INLINE` runs its own
+`sizeof(T)` assert at schema-build time, so field-order or type
+mismatches fire at init with a clear diagnostic. `HEGEL_SHAPE_GET`
+resolves leaf offsets through any level of nesting.
+
+---
+
 ## Tagged union with wrapper struct
 
 **C layout:**

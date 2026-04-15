@@ -17,6 +17,21 @@
 #include <float.h>
 
 /* ================================================================
+** Internal fatal-error helper
+** ================================================================
+**
+** Every call site that detects a non-recoverable schema misuse
+** (layout mismatch, INLINE_REF type check, nested union-in-case,
+** wrong ARRAY_INLINE element kind, ...) goes through this macro
+** so there's one place to prepend a prefix, add __FILE__:__LINE__
+** later if wanted, or swap in a longjmp-based recovery for a
+** "schema-build-should-fail" testing mode. Internal only. */
+#define hegel__abort(fmt, ...) do {                                   \
+    fprintf (stderr, "hegel: " fmt "\n" __VA_OPT__(,) __VA_ARGS__);   \
+    abort ();                                                         \
+  } while (0)
+
+/* ================================================================
 ** Refcount
 ** ================================================================ */
 
@@ -43,6 +58,26 @@ hegel__bind (size_t offset, hegel_schema_t schema)
   b.offset = offset;
   b.schema = schema._raw;   /* unwrap + transfer */
   return (b);
+}
+
+/* HEGEL_INLINE_REF check: the referenced schema must be a struct of
+** the expected size, otherwise the parent layout would lie about the
+** slot it occupies.  Called inline from the macro so the error fires
+** at schema-build time, not at first draw. */
+hegel_schema *
+hegel__inline_ref_check (size_t declared_size, hegel_schema_t sch)
+{
+  if (sch._raw == NULL || sch._raw->kind != HEGEL_SCH_STRUCT) {
+    hegel__abort ("HEGEL_INLINE_REF: schema must be a HEGEL_STRUCT "
+                  "(got kind=%d)",
+                  sch._raw != NULL ? (int) sch._raw->kind : -1);
+  }
+  if (sch._raw->struct_def.size != declared_size) {
+    hegel__abort ("HEGEL_INLINE_REF: sizeof(T)=%zu but referenced schema "
+                  "has size=%zu",
+                  declared_size, sch._raw->struct_def.size);
+  }
+  return (sch._raw);
 }
 
 /* ================================================================
@@ -163,18 +198,16 @@ hegel__struct_build (size_t declared_size, size_t declared_align,
   {
     size_t computed_total = hegel__align_up (cur, max_align);
     if (computed_total != declared_size) {
-      fprintf (stderr,
-          "hegel__struct_build: sizeof(T)=%zu but layout computed %zu "
-          "(max_align=%zu).  Check that your HEGEL_STRUCT entries "
-          "match the struct fields in order and type.\n",
-          declared_size, computed_total, max_align);
-      abort ();
+      hegel__abort ("hegel__struct_build: sizeof(T)=%zu but layout "
+                    "computed %zu (max_align=%zu).  Check that your "
+                    "HEGEL_STRUCT entries match the struct fields in "
+                    "order and type.",
+                    declared_size, computed_total, max_align);
     }
     if (declared_align < max_align) {
-      fprintf (stderr,
-          "hegel__struct_build: alignof(T)=%zu but layout needs %zu.\n",
-          declared_align, max_align);
-      abort ();
+      hegel__abort ("hegel__struct_build: alignof(T)=%zu but layout "
+                    "needs %zu.",
+                    declared_align, max_align);
     }
   }
 
@@ -245,9 +278,8 @@ hegel__lay_case (hegel_layout_entry * case_entries,
         break;
       default:
         /* Nested unions/variants inside union cases not supported yet. */
-        fprintf (stderr, "hegel__lay_case: nested union/variant in case "
-                         "not supported (kind=%d)\n", (int) e->kind);
-        abort ();
+        hegel__abort ("hegel__lay_case: nested union/variant in case "
+                      "not supported (kind=%d)", (int) e->kind);
     }
   }
 
@@ -551,11 +583,9 @@ hegel_schema_array_inline (size_t len_offset, hegel_schema_t elem,
   if (e->kind != HEGEL_SCH_STRUCT
       && e->kind != HEGEL_SCH_UNION
       && e->kind != HEGEL_SCH_UNION_UNTAGGED) {
-    fprintf (stderr,
-        "hegel_schema_array_inline: elem kind %d not supported "
-        "(must be STRUCT, UNION, or UNION_UNTAGGED)\n",
-        (int) e->kind);
-    abort ();
+    hegel__abort ("hegel_schema_array_inline: elem kind %d not supported "
+                  "(must be STRUCT, UNION, or UNION_UNTAGGED)",
+                  (int) e->kind);
   }
 
   hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
@@ -963,7 +993,22 @@ hegel_shape_field (hegel_shape * s, int index)
 ** shape is a STRUCT whose fields were produced from a bindings
 ** array, the ordering matches.  We keep this accessor simple: the
 ** struct shape stores offsets in a parallel `field_offsets` array
-** populated at draw time (see hegel__draw_struct). */
+** populated at draw time (see hegel__draw_struct).
+**
+** With HEGEL_INLINE, a top-level binding's offset may name an inline
+** sub-struct, and the caller may request an offset pointing *inside*
+** that sub-struct.  Two recursion passes handle this:
+**   1. Exact match: if the requested offset matches a binding
+**      exactly, return that field.  If that field is itself a
+**      struct shape (inline sub-struct), descend with sub-offset 0
+**      so HEGEL_SHAPE_GET(sh, T, sub.leaf) where leaf is the first
+**      field of `sub` still returns the leaf scalar, not the
+**      wrapper struct shape.
+**   2. Interior match: for each struct-kind child, recurse with
+**      (offset − child_offset).  This only returns non-NULL if the
+**      relative offset hits a real binding in the sub-struct, so
+**      it's self-limiting.  Non-overlapping binding ranges mean at
+**      most one child will return a non-NULL match. */
 hegel_shape *
 hegel_shape_get_offset (hegel_shape * s, size_t offset)
 {
@@ -975,9 +1020,31 @@ hegel_shape_get_offset (hegel_shape * s, size_t offset)
     size_t * offs = (size_t *) (s->struct_shape.fields
                                 + s->struct_shape.n_fields);
     int i;
-    for (i = 0; i < s->struct_shape.n_fields; i ++)
-      if (offs[i] == offset)
-        return (s->struct_shape.fields[i]);
+
+    /* Pass 1: exact match, descending into inline sub-structs. */
+    for (i = 0; i < s->struct_shape.n_fields; i ++) {
+      if (offs[i] == offset) {
+        hegel_shape * child = s->struct_shape.fields[i];
+        if (child != NULL && child->kind == HEGEL_SHAPE_STRUCT
+            && child->struct_shape.fields != NULL) {
+          hegel_shape * deeper = hegel_shape_get_offset (child, 0);
+          if (deeper != NULL) return (deeper);
+        }
+        return (child);
+      }
+    }
+
+    /* Pass 2: the offset may fall inside an inline sub-struct. */
+    for (i = 0; i < s->struct_shape.n_fields; i ++) {
+      hegel_shape * child = s->struct_shape.fields[i];
+      if (child != NULL && child->kind == HEGEL_SHAPE_STRUCT
+          && child->struct_shape.fields != NULL
+          && offset > offs[i]) {
+        hegel_shape * deeper =
+            hegel_shape_get_offset (child, offset - offs[i]);
+        if (deeper != NULL) return (deeper);
+      }
+    }
   }
   return (NULL);
 }
@@ -992,6 +1059,9 @@ hegel__draw_struct (hegel_testcase * tc, hegel_schema * gen, void ** out,
 static hegel_shape *
 hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
                    void * parent, size_t offset, int depth);
+static hegel_shape *
+hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
+                              void * slot, int depth);
 
 /* ---- Draw an integer into memory at `dst` ---- */
 
@@ -1143,6 +1213,40 @@ hegel__alloc_struct_fields (hegel_shape * shape, int n)
                 + (size_t) n * sizeof (size_t);
   shape->struct_shape.n_fields = n;
   shape->struct_shape.fields = (hegel_shape **) calloc (1, bytes);
+}
+
+/* ---- Draw a STRUCT schema into a pre-allocated slot ----
+** Used for inline-by-value sub-structs: the storage for the struct's
+** fields is owned by the caller (parent struct block, or an
+** HEGEL_ARRAY_INLINE element slot), not by this call.  The returned
+** shape has `owned = NULL` to mark that shape_free must not touch
+** the slot memory. */
+
+static hegel_shape *
+hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
+                              void * slot, int depth)
+{
+  int                 nf = gen->struct_def.n_bindings;
+  hegel_shape *       sh;
+  size_t *            offs;
+  int                 f;
+
+  sh = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+  sh->kind = HEGEL_SHAPE_STRUCT;
+  sh->owned = NULL;
+  hegel__alloc_struct_fields (sh, nf);
+  offs = (size_t *) (sh->struct_shape.fields + nf);
+
+  hegel_start_span (tc, HEGEL_SPAN_TUPLE);
+  for (f = 0; f < nf; f ++) {
+    hegel_field_binding * b = &gen->struct_def.bindings[f];
+    offs[f] = b->offset;
+    sh->struct_shape.fields[f] =
+        hegel__draw_field (tc, b->schema, slot, b->offset, depth - 1);
+  }
+  hegel_stop_span (tc, 0);
+
+  return (sh);
 }
 
 /* ---- Draw struct ---- */
@@ -1345,22 +1449,10 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
         /* Draw fields of elem schema into the slot (as if slot
         ** is the parent struct for the element's fields). */
         if (elem->kind == HEGEL_SCH_STRUCT) {
-          /* Inline struct: draw each field into slot. */
-          int nf = elem->struct_def.n_bindings;
-          hegel_shape * es = (hegel_shape *) calloc (1, sizeof (hegel_shape));
-          es->kind = HEGEL_SHAPE_STRUCT;
-          es->owned = NULL; /* slot is part of array alloc, not separate */
-          hegel__alloc_struct_fields (es, nf);
-          size_t * eoffs = (size_t *) (es->struct_shape.fields + nf);
-          hegel_start_span (tc, HEGEL_SPAN_TUPLE);
-          for (int f = 0; f < nf; f ++) {
-            hegel_field_binding * b = &elem->struct_def.bindings[f];
-            eoffs[f] = b->offset;
-            es->struct_shape.fields[f] =
-                hegel__draw_field (tc, b->schema, slot, b->offset, depth - 1);
-          }
-          hegel_stop_span (tc, 0);
-          shape->array_shape.elems[i] = es;
+          /* Inline struct: draw each field into slot.  Shared with
+          ** the HEGEL_INLINE field path via hegel__draw_struct_into_slot. */
+          shape->array_shape.elems[i] =
+              hegel__draw_struct_into_slot (tc, elem, slot, depth);
 
         } else if (elem->kind == HEGEL_SCH_UNION
                 || elem->kind == HEGEL_SCH_UNION_UNTAGGED) {
@@ -1639,8 +1731,13 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       return (shape);
     }
 
-    case HEGEL_SCH_SELF:
     case HEGEL_SCH_STRUCT:
+      /* Inline-by-value sub-struct: draw the nested struct's fields
+      ** directly into the parent slot at `dst`.  Storage is owned by
+      ** the parent struct block; the returned shape has owned=NULL. */
+      return (hegel__draw_struct_into_slot (tc, gen, dst, depth));
+
+    case HEGEL_SCH_SELF:
     case HEGEL_SCH_ONE_OF_STRUCT:
       /* ONE_OF_STRUCT can't be used directly as a struct field —
       ** use HEGEL_VARIANT for that.  It's only for use as an ARRAY

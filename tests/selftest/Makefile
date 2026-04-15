@@ -33,7 +33,8 @@ TESTS_PASS = test_pass_simple \
              test_gen_schema_array_of_raw_struct_pointers_by_kind \
              test_gen_schema_array_inline_of_bare_unions_common_prefix \
              test_gen_schema_functional_combinators \
-             test_gen_schema_shape_get_and_reuse
+             test_gen_schema_shape_get_and_reuse \
+             test_gen_schema_inline_struct
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
