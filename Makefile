@@ -4,7 +4,8 @@
 INSPIRATION_DIR = inspiration
 
 GITHUB_REPOS = hegeldev/hegel-rust \
-               hegeldev/hegel-go
+               hegeldev/hegel-go \
+               hegeldev/hegel-cpp
 
 GITLAB_REPOS = scotch/scotch
 
@@ -15,7 +16,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  help                          Show this help (default)"
-	@echo "  inspiration                   Clone/update hegel-rust and hegel-go into inspiration/"
+	@echo "  inspiration                   Clone/update hegel-rust, hegel-go, hegel-cpp into inspiration/"
 	@echo "  clean-inspiration             Remove inspiration/"
 	@echo ""
 	@echo "Proxy targets (forwarded to sub-Makefiles):"

@@ -247,8 +247,8 @@ These are all open questions and would be good future work:
 - Individual draw primitives (int vs float vs text vs schema)
 - Schema-layer allocation overhead vs hand-rolled draws
 - `hegeltest` version comparison (0.1.18 vs 0.4.3)
-- Cross-binding comparison (hegel-rust vs hegel-go vs hegel-c on
-  the same property)
+- Cross-binding comparison (hegel-rust vs hegel-go vs hegel-cpp
+  vs hegel-c on the same property)
 - Effect of the `catch_unwind` orphan-leak fix on total throughput
 - rust_direct at larger N (steady-state cases/s once startup is
   amortized — single-point sampling at N=5000/10000 earlier in
