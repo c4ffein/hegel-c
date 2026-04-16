@@ -466,7 +466,7 @@ at the schema layer, in 7 sub-tests:
 2. `map` for int / i64 / double (square, cube, halve)
 3. `filter` for int / i64 / double (even, positive, ≥1.0)
 4. `flat_map` for int / i64 / double (dependent ranges)
-5. `HEGEL_ONE_OF_INT` — "small OR large" distribution
+5. `HEGEL_ONE_OF` — "small OR large" distribution
 6. `HEGEL_BOOL` — 1-byte bool field
 7. `HEGEL_REGEX` — pattern-generated text
 

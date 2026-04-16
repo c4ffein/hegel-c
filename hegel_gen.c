@@ -42,29 +42,11 @@ hegel_schema_ref (hegel_schema_t s)
   return (s);
 }
 
-/* ================================================================
-** Field-binding helper
-** ================================================================
-**
-** Packs `{ offset, schema }` into a binding value.  Ownership of
-** the schema reference transfers into the binding — the schema
-** will be refcount-decremented when the enclosing composite is
-** freed. */
-
-hegel_binding_t
-hegel__bind (size_t offset, hegel_schema_t schema)
-{
-  hegel_binding_t b;
-  b.offset = offset;
-  b.schema = schema._raw;   /* unwrap + transfer */
-  return (b);
-}
-
 /* HEGEL_INLINE_REF check: the referenced schema must be a struct of
 ** the expected size, otherwise the parent layout would lie about the
 ** slot it occupies.  Called inline from the macro so the error fires
 ** at schema-build time, not at first draw. */
-hegel_schema *
+hegel_schema_t
 hegel__inline_ref_check (size_t declared_size, hegel_schema_t sch)
 {
   if (sch._raw == NULL || sch._raw->kind != HEGEL_SCH_STRUCT) {
@@ -77,28 +59,27 @@ hegel__inline_ref_check (size_t declared_size, hegel_schema_t sch)
                   "has size=%zu",
                   declared_size, sch._raw->struct_def.size);
   }
-  return (sch._raw);
+  return (sch);
 }
 
 /* ================================================================
 ** Layout pass — positional HEGEL_STRUCT
 ** ================================================================
 **
-** Given a list of `hegel_layout_entry` values describing ordered
-** fields of a struct, compute each entry's byte offset in the
-** parent struct using C's layout rules, fix up kind-specific
-** sub-offsets inside each schema (array_def.len_offset, union_def.
-** tag_offset, case field offsets, variant_def.tag_offset /
-** ptr_offset), and build an H_END_BINDING-terminated list of
-** bindings that `hegel_schema_struct_v` can consume.
+** Given a list of `hegel_schema_t` entries describing ordered fields
+** of a struct, compute each entry's byte offset in the parent struct
+** using C's layout rules, fix up kind-specific sub-offsets inside
+** each schema (array_def.len_offset), and build children + offsets
+** arrays.  Size and alignment for each entry are derived from its
+** schema kind via `hegel__schema_slot_info`.
 **
 ** Layout rule: each slot starts at
 **   offset = align_up(current_end, slot_align)
 ** and the struct total rounds up to `alignof(T)` at the end.
 **
-** For each entry with 2 slots, the primary binding uses slot0's
-** offset; slot1's offset is baked into the schema's internal
-** kind-specific field. */
+** Arrays occupy two slots in the parent (pointer + int count);
+** unions and variants occupy one cluster slot whose internal
+** offsets are baked into the schema itself. */
 
 static size_t
 hegel__align_up (size_t x, size_t align)
@@ -106,93 +87,165 @@ hegel__align_up (size_t x, size_t align)
   return ((x + align - 1) & ~(align - 1));
 }
 
-static int
-hegel__count_entries (hegel_layout_entry * entries)
+static void hegel__resolve_self (hegel_schema * node, hegel_schema * target);
+
+/* Kind-dispatch: given a schema, return how many bytes it occupies in
+** a parent struct's value memory, and what alignment it needs.  For
+** multi-slot kinds (ARRAY, ARRAY_INLINE) this returns the primary
+** (pointer) slot; the caller is expected to know the secondary-slot
+** dimensions are {sizeof(int), _Alignof(int)} via hardcoded knowledge
+** of the kind. */
+static void
+hegel__schema_slot_info (const hegel_schema * s,
+                         size_t * out_size, size_t * out_align)
 {
-  int n = 0;
-  while (entries[n].schema != NULL) n ++;
-  return (n);
+  if (s == NULL) { *out_size = 0; *out_align = 1; return; }
+
+  switch (s->kind) {
+    case HEGEL_SCH_INTEGER:
+      *out_size  = (size_t) s->integer.width;
+      *out_align = (size_t) s->integer.width;
+      return;
+    case HEGEL_SCH_FLOAT:
+      *out_size  = (size_t) s->fp.width;
+      *out_align = (size_t) s->fp.width;
+      return;
+    case HEGEL_SCH_TEXT:
+    case HEGEL_SCH_REGEX:
+      *out_size  = sizeof (char *);
+      *out_align = _Alignof (char *);
+      return;
+    case HEGEL_SCH_OPTIONAL_PTR:
+      *out_size  = sizeof (void *);
+      *out_align = _Alignof (void *);
+      return;
+    case HEGEL_SCH_ARRAY:
+    case HEGEL_SCH_ARRAY_INLINE:
+      /* Primary slot only: the pointer.  Callers that need the
+      ** length-slot dimensions use {sizeof(int), _Alignof(int)}. */
+      *out_size  = sizeof (void *);
+      *out_align = _Alignof (void *);
+      return;
+    case HEGEL_SCH_STRUCT:
+      *out_size  = s->struct_def.size;
+      *out_align = s->struct_def.align > 0 ? s->struct_def.align : 1;
+      return;
+    case HEGEL_SCH_UNION:
+    case HEGEL_SCH_UNION_UNTAGGED:
+      *out_size  = s->union_def.cluster_size;
+      *out_align = s->union_def.cluster_align > 0 ? s->union_def.cluster_align : 1;
+      return;
+    case HEGEL_SCH_VARIANT:
+      *out_size  = s->variant_def.cluster_size;
+      *out_align = s->variant_def.cluster_align > 0 ? s->variant_def.cluster_align : 1;
+      return;
+    case HEGEL_SCH_ONE_OF_STRUCT:
+      *out_size  = sizeof (void *);
+      *out_align = _Alignof (void *);
+      return;
+    case HEGEL_SCH_MAP_INT:
+    case HEGEL_SCH_FILTER_INT:
+    case HEGEL_SCH_FLAT_MAP_INT:
+      *out_size  = sizeof (int);
+      *out_align = _Alignof (int);
+      return;
+    case HEGEL_SCH_MAP_I64:
+    case HEGEL_SCH_FILTER_I64:
+    case HEGEL_SCH_FLAT_MAP_I64:
+      *out_size  = sizeof (int64_t);
+      *out_align = _Alignof (int64_t);
+      return;
+    case HEGEL_SCH_MAP_DOUBLE:
+    case HEGEL_SCH_FILTER_DOUBLE:
+    case HEGEL_SCH_FLAT_MAP_DOUBLE:
+      *out_size  = sizeof (double);
+      *out_align = _Alignof (double);
+      return;
+    case HEGEL_SCH_ONE_OF_SCALAR:
+      /* Size/align depend on the cases' shared scalar kind; the
+      ** HEGEL_ONE_OF_{INT,I64,DOUBLE} macros know this at expansion
+      ** time and fill in slot size directly today.  For kind-dispatch
+      ** we infer from the first case's kind. */
+      if (s->one_of_scalar_def.n_cases > 0
+          && s->one_of_scalar_def.cases[0] != NULL) {
+        hegel__schema_slot_info (s->one_of_scalar_def.cases[0],
+                                 out_size, out_align);
+        return;
+      }
+      *out_size  = sizeof (int);
+      *out_align = _Alignof (int);
+      return;
+    case HEGEL_SCH_SELF:
+      /* Self-refs always occupy a pointer slot in the parent. */
+      *out_size  = sizeof (void *);
+      *out_align = _Alignof (void *);
+      return;
+  }
+  *out_size = 0;
+  *out_align = 1;
 }
 
-/* Shift every binding offset in a union schema's case list by
+/* Shift every field offset in a union schema's case schemas by
 ** `shift` bytes.  Used when the union body starts at a non-zero
-** offset relative to the union's own root (e.g. after the int tag). */
+** offset relative to the union's own root (e.g. after the int tag).
+** The case is a struct-kind schema whose offsets[] array holds the
+** body-relative field positions; we just bump each. */
 static void
 hegel__shift_union_cases (hegel_schema * u, size_t shift)
 {
   int i;
   for (i = 0; i < u->union_def.n_cases; i ++) {
+    hegel_schema * c = u->union_def.cases[i];
     int j;
-    for (j = 0; u->union_def.cases[i][j].schema != NULL; j ++)
-      u->union_def.cases[i][j].offset += shift;
+    for (j = 0; j < c->struct_def.n_children; j ++)
+      c->struct_def.offsets[j] += shift;
   }
 }
 
 hegel_schema_t
 hegel__struct_build (size_t declared_size, size_t declared_align,
-                     hegel_layout_entry * entries)
+                     hegel_schema_t * entries)
 {
   int               n;
   int               i;
   size_t            cur = 0;
   size_t            max_align = 1;
-  hegel_binding_t * bindings;
+  hegel_schema **   children;
+  size_t *          offsets;
 
-  n = hegel__count_entries (entries);
+  /* Count H_END-terminated entries. */
+  for (n = 0; entries[n]._raw != NULL; n ++) {}
 
-  bindings = (hegel_binding_t *) malloc (
-      (size_t) (n + 1) * sizeof (hegel_binding_t));
+  children = (hegel_schema **) malloc ((size_t) n * sizeof (hegel_schema *));
+  offsets  = (size_t *)        malloc ((size_t) n * sizeof (size_t));
 
   for (i = 0; i < n; i ++) {
-    hegel_layout_entry * e = &entries[i];
-    size_t slot0_off;
-    size_t slot1_off = 0;
+    hegel_schema * e = entries[i]._raw;
+    size_t         slot0_size, slot0_align;
+    size_t         slot0_off;
 
-    slot0_off = hegel__align_up (cur, e->slot0_align);
-    cur = slot0_off + e->slot0_size;
-    if (e->slot0_align > max_align) max_align = e->slot0_align;
+    hegel__schema_slot_info (e, &slot0_size, &slot0_align);
 
-    if (e->slot1_size > 0) {
-      slot1_off = hegel__align_up (cur, e->slot1_align);
-      cur = slot1_off + e->slot1_size;
-      if (e->slot1_align > max_align) max_align = e->slot1_align;
-    }
+    slot0_off = hegel__align_up (cur, slot0_align);
+    cur       = slot0_off + slot0_size;
+    if (slot0_align > max_align) max_align = slot0_align;
 
-    switch (e->kind) {
+    children[i] = e;
+    offsets[i]  = slot0_off;
 
-      case HEGEL_LAY_SIMPLE:
-        bindings[i].offset = slot0_off;
-        bindings[i].schema = e->schema;
-        break;
-
-      case HEGEL_LAY_ARRAY:
-        /* slot0 = ptr, slot1 = count */
-        e->schema->array_def.len_offset = slot1_off;
-        bindings[i].offset = slot0_off;
-        bindings[i].schema = e->schema;
-        break;
-
-      case HEGEL_LAY_ARRAY_INLINE:
-        e->schema->array_inline_def.len_offset = slot1_off;
-        bindings[i].offset = slot0_off;
-        bindings[i].schema = e->schema;
-        break;
-
-      case HEGEL_LAY_UNION:
-      case HEGEL_LAY_UNION_UNTAGGED:
-      case HEGEL_LAY_VARIANT:
-        /* Composite with self-relative internal offsets — the union
-        ** / variant was fully laid out by hegel__union_make /
-        ** hegel__variant_make, so the struct layout pass just needs
-        ** to record the binding offset and the draw code will add
-        ** it to the schema's internal tag/case offsets at draw time. */
-        bindings[i].offset = slot0_off;
-        bindings[i].schema = e->schema;
-        break;
+    /* Arrays have a second slot: the int count that follows the ptr.
+    ** We hardcode {sizeof(int), _Alignof(int)} by kind and write the
+    ** computed length-slot offset back into the array schema. */
+    if (e->kind == HEGEL_SCH_ARRAY || e->kind == HEGEL_SCH_ARRAY_INLINE) {
+      size_t slot1_off = hegel__align_up (cur, _Alignof (int));
+      cur = slot1_off + sizeof (int);
+      if (_Alignof (int) > max_align) max_align = _Alignof (int);
+      if (e->kind == HEGEL_SCH_ARRAY)
+        e->array_def.len_offset = slot1_off;
+      else
+        e->array_inline_def.len_offset = slot1_off;
     }
   }
-
-  bindings[n] = (hegel_binding_t){ 0, NULL };
 
   /* Round struct size up to its alignment. */
   {
@@ -212,9 +265,16 @@ hegel__struct_build (size_t declared_size, size_t declared_align,
   }
 
   {
-    hegel_schema_t result = hegel_schema_struct_v (declared_size, bindings);
-    free (bindings);
-    return (result);
+    hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+    s->kind = HEGEL_SCH_STRUCT;
+    s->refcount = 1;
+    s->struct_def.size       = declared_size;
+    s->struct_def.align      = declared_align;
+    s->struct_def.n_children = n;
+    s->struct_def.children   = children;   /* transfer */
+    s->struct_def.offsets    = offsets;    /* transfer */
+    hegel__resolve_self (s, s);
+    return (hegel_schema_t){s};
   }
 }
 
@@ -232,67 +292,71 @@ hegel__struct_build (size_t declared_size, size_t declared_align,
 **
 ** Body size = max case size; body align = max case align. */
 
-static void
-hegel__lay_case (hegel_layout_entry * case_entries,
-                 hegel_binding_t ** out_bindings, int * out_nf,
-                 size_t * out_size, size_t * out_align)
+static hegel_schema *
+hegel__lay_case (hegel_schema_t * case_entries,
+                 size_t * out_body_size, size_t * out_body_align)
 {
-  int               nf = hegel__count_entries (case_entries);
-  hegel_binding_t * bnds;
+  int               nf = 0;
   int               i;
   size_t            cur = 0;
   size_t            max_align = 1;
+  hegel_schema *    cs;
+  hegel_schema **   children;
+  size_t *          offsets;
 
-  bnds = (hegel_binding_t *) malloc (
-      (size_t) (nf + 1) * sizeof (hegel_binding_t));
+  while (case_entries[nf]._raw != NULL) nf ++;
+
+  children = (hegel_schema **) malloc ((size_t) nf * sizeof (hegel_schema *));
+  offsets  = (size_t *)        malloc ((size_t) nf * sizeof (size_t));
 
   for (i = 0; i < nf; i ++) {
-    hegel_layout_entry * e = &case_entries[i];
-    size_t slot0_off;
-    size_t slot1_off = 0;
+    hegel_schema * e = case_entries[i]._raw;
+    size_t         slot0_size, slot0_align;
+    size_t         slot0_off;
 
-    slot0_off = hegel__align_up (cur, e->slot0_align);
-    cur = slot0_off + e->slot0_size;
-    if (e->slot0_align > max_align) max_align = e->slot0_align;
-
-    if (e->slot1_size > 0) {
-      slot1_off = hegel__align_up (cur, e->slot1_align);
-      cur = slot1_off + e->slot1_size;
-      if (e->slot1_align > max_align) max_align = e->slot1_align;
+    /* Nested unions/variants inside union cases: not supported. */
+    if (e->kind == HEGEL_SCH_UNION || e->kind == HEGEL_SCH_UNION_UNTAGGED
+        || e->kind == HEGEL_SCH_VARIANT) {
+      hegel__abort ("hegel__lay_case: nested union/variant in case "
+                    "not supported (kind=%d)", (int) e->kind);
     }
 
-    switch (e->kind) {
-      case HEGEL_LAY_SIMPLE:
-        bnds[i].offset = slot0_off;
-        bnds[i].schema = e->schema;
-        break;
-      case HEGEL_LAY_ARRAY:
-        e->schema->array_def.len_offset = slot1_off;
-        bnds[i].offset = slot0_off;
-        bnds[i].schema = e->schema;
-        break;
-      case HEGEL_LAY_ARRAY_INLINE:
-        e->schema->array_inline_def.len_offset = slot1_off;
-        bnds[i].offset = slot0_off;
-        bnds[i].schema = e->schema;
-        break;
-      default:
-        /* Nested unions/variants inside union cases not supported yet. */
-        hegel__abort ("hegel__lay_case: nested union/variant in case "
-                      "not supported (kind=%d)", (int) e->kind);
+    hegel__schema_slot_info (e, &slot0_size, &slot0_align);
+    slot0_off = hegel__align_up (cur, slot0_align);
+    cur       = slot0_off + slot0_size;
+    if (slot0_align > max_align) max_align = slot0_align;
+
+    children[i] = e;
+    offsets[i]  = slot0_off;
+
+    if (e->kind == HEGEL_SCH_ARRAY || e->kind == HEGEL_SCH_ARRAY_INLINE) {
+      size_t slot1_off = hegel__align_up (cur, _Alignof (int));
+      cur = slot1_off + sizeof (int);
+      if (_Alignof (int) > max_align) max_align = _Alignof (int);
+      if (e->kind == HEGEL_SCH_ARRAY)
+        e->array_def.len_offset = slot1_off;
+      else
+        e->array_inline_def.len_offset = slot1_off;
     }
   }
 
-  bnds[nf] = (hegel_binding_t){ 0, NULL };
-  *out_bindings = bnds;
-  *out_nf = nf;
-  *out_size = hegel__align_up (cur, max_align);
-  *out_align = max_align;
+  *out_body_size  = hegel__align_up (cur, max_align);
+  *out_body_align = max_align;
+
+  cs = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  cs->kind = HEGEL_SCH_STRUCT;
+  cs->refcount = 1;
+  cs->struct_def.size       = *out_body_size;
+  cs->struct_def.align      = max_align;
+  cs->struct_def.n_children = nf;
+  cs->struct_def.children   = children;
+  cs->struct_def.offsets    = offsets;
+  return (cs);
 }
 
-hegel_layout_entry
-hegel__union_make (hegel_layout_kind kind,
-                   hegel_layout_entry ** case_list)
+hegel_schema_t
+hegel__union_make (hegel_schema_kind kind,
+                   hegel_schema_t ** case_list)
 {
   int               n_cases = 0;
   int               i;
@@ -303,26 +367,23 @@ hegel__union_make (hegel_layout_kind kind,
   while (case_list[n_cases] != NULL) n_cases ++;
 
   u = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  u->kind = (kind == HEGEL_LAY_UNION) ? HEGEL_SCH_UNION
-                                       : HEGEL_SCH_UNION_UNTAGGED;
+  u->kind = kind;
   u->refcount = 1;
   u->union_def.n_cases = n_cases;
-  u->union_def.cases = (hegel_field_binding **) malloc (
-      (size_t) n_cases * sizeof (hegel_field_binding *));
+  u->union_def.cases = (hegel_schema **) malloc (
+      (size_t) n_cases * sizeof (hegel_schema *));
 
   for (i = 0; i < n_cases; i ++) {
-    hegel_binding_t * case_bindings;
-    int               nf;
-    size_t            case_size;
-    size_t            case_align;
+    size_t         case_size;
+    size_t         case_align;
+    hegel_schema * case_schema;
 
-    hegel__lay_case (case_list[i], &case_bindings, &nf,
-                     &case_size, &case_align);
+    case_schema = hegel__lay_case (case_list[i], &case_size, &case_align);
 
     if (case_size > body_size)   body_size = case_size;
     if (case_align > body_align) body_align = case_align;
 
-    u->union_def.cases[i] = case_bindings;
+    u->union_def.cases[i] = case_schema;
   }
 
   /* Compute self-relative internal offsets: tag at 0 (if tagged),
@@ -337,7 +398,7 @@ hegel__union_make (hegel_layout_kind kind,
     size_t cluster_align;
     size_t cluster_size;
 
-    if (kind == HEGEL_LAY_UNION) {
+    if (kind == HEGEL_SCH_UNION) {
       cluster_align = _Alignof (int) > body_align ? _Alignof (int) : body_align;
       body_off = hegel__align_up (sizeof (int), body_align);
     } else {
@@ -346,20 +407,13 @@ hegel__union_make (hegel_layout_kind kind,
     }
     cluster_size = hegel__align_up (body_off + body_size, cluster_align);
 
-    u->union_def.tag_offset = tag_off;
+    u->union_def.tag_offset    = tag_off;
+    u->union_def.cluster_size  = cluster_size;
+    u->union_def.cluster_align = cluster_align;
     hegel__shift_union_cases (u, body_off);
-
-    {
-      hegel_layout_entry out;
-      out.kind        = kind;
-      out.schema      = u;
-      out.slot0_size  = cluster_size;
-      out.slot0_align = cluster_align;
-      out.slot1_size  = 0;
-      out.slot1_align = 0;
-      return (out);
-    }
   }
+
+  return (hegel_schema_t){u};
 }
 
 /* HEGEL_VARIANT positional form.  Takes an H_END-terminated list of
@@ -367,7 +421,7 @@ hegel__union_make (hegel_layout_kind kind,
 ** and ptr_offset.  The parent HEGEL_STRUCT layout pass fills those
 ** in with the real slot offsets. */
 
-hegel_layout_entry
+hegel_schema_t
 hegel__variant_make (hegel_schema_t * case_list)
 {
   int              n_cases = 0;
@@ -396,19 +450,12 @@ hegel__variant_make (hegel_schema_t * case_list)
                   ? _Alignof (void *) : _Alignof (int);
   cluster_size = hegel__align_up (ptr_off + sizeof (void *), cluster_align);
 
-  v->variant_def.tag_offset = tag_off;
-  v->variant_def.ptr_offset = ptr_off;
+  v->variant_def.tag_offset    = tag_off;
+  v->variant_def.ptr_offset    = ptr_off;
+  v->variant_def.cluster_size  = cluster_size;
+  v->variant_def.cluster_align = cluster_align;
 
-  {
-    hegel_layout_entry out;
-    out.kind        = HEGEL_LAY_VARIANT;
-    out.schema      = v;
-    out.slot0_size  = cluster_size;
-    out.slot0_align = cluster_align;
-    out.slot1_size  = 0;
-    out.slot1_align = 0;
-    return (out);
-  }
+  return (hegel_schema_t){v};
 }
 
 /* ================================================================
@@ -596,66 +643,6 @@ hegel_schema_array_inline (size_t len_offset, hegel_schema_t elem,
   s->array_inline_def.elem_size = elem_size;
   s->array_inline_def.min_len = min_len;
   s->array_inline_def.max_len = max_len;
-  return (hegel_schema_t){s};
-}
-
-/* Union constructors.  `case_list` is a NULL-terminated array of
-** pointers to H_END_BINDING-terminated binding arrays.  Each binding
-** array comes from a HEGEL_CASE(...) macro compound literal on the
-** caller's stack — we deep-copy into heap storage before returning. */
-hegel_schema_t
-hegel__union (size_t tag_offset, hegel_schema_kind kind,
-              hegel_binding_t ** case_list)
-{
-  int                 n;
-  hegel_schema *      s;
-
-  for (n = 0; case_list[n] != NULL; n ++) {}
-
-  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  s->kind = kind;
-  s->refcount = 1;
-  s->union_def.tag_offset = tag_offset;
-  s->union_def.n_cases = n;
-  s->union_def.cases = (hegel_field_binding **) malloc (
-      (size_t) n * sizeof (hegel_field_binding *));
-  for (int i = 0; i < n; i ++) {
-    /* case_list[i] is a H_END_BINDING-terminated array of bindings.
-    ** Count fields, allocate, copy. */
-    int nf;
-    for (nf = 0; case_list[i][nf].schema != NULL; nf ++) {}
-    s->union_def.cases[i] = (hegel_field_binding *) malloc (
-        (size_t) (nf + 1) * sizeof (hegel_field_binding));
-    for (int j = 0; j < nf; j ++)
-      s->union_def.cases[i][j] = case_list[i][j];   /* copy + transfer */
-    s->union_def.cases[i][nf] = (hegel_field_binding){ 0, NULL };
-  }
-  return (hegel_schema_t){s};
-}
-
-/* Variant constructor.  `cases` is an H_END-terminated array of
-** STRUCT schemas — one per variant.  The chosen one gets allocated
-** and its pointer stored at ptr_offset. */
-hegel_schema_t
-hegel_schema_variant_v (size_t tag_offset, size_t ptr_offset,
-                        hegel_schema_t * case_list)
-{
-  int                 n;
-  hegel_schema *      s;
-
-  /* case_list is H_END-terminated (from the HEGEL_VARIANT macro) */
-  for (n = 0; case_list[n]._raw != NULL; n ++) {}
-
-  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  s->kind = HEGEL_SCH_VARIANT;
-  s->refcount = 1;
-  s->variant_def.tag_offset = tag_offset;
-  s->variant_def.ptr_offset = ptr_offset;
-  s->variant_def.n_cases = n;
-  s->variant_def.cases = (hegel_schema **) malloc (
-      (size_t) n * sizeof (hegel_schema *));
-  for (int i = 0; i < n; i ++)
-    s->variant_def.cases[i] = case_list[i]._raw;  /* unwrap + transfer */
   return (hegel_schema_t){s};
 }
 
@@ -875,14 +862,13 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
       hegel__resolve_self (node->array_inline_def.elem, target);
       break;
     case HEGEL_SCH_STRUCT:
-      for (int i = 0; i < node->struct_def.n_bindings; i ++)
-        hegel__resolve_self (node->struct_def.bindings[i].schema, target);
+      for (int i = 0; i < node->struct_def.n_children; i ++)
+        hegel__resolve_self (node->struct_def.children[i], target);
       break;
     case HEGEL_SCH_UNION:
     case HEGEL_SCH_UNION_UNTAGGED:
       for (int i = 0; i < node->union_def.n_cases; i ++)
-        for (int j = 0; node->union_def.cases[i][j].schema != NULL; j ++)
-          hegel__resolve_self (node->union_def.cases[i][j].schema, target);
+        hegel__resolve_self (node->union_def.cases[i], target);
       break;
     case HEGEL_SCH_VARIANT:
     case HEGEL_SCH_ONE_OF_STRUCT:
@@ -925,32 +911,6 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
   }
 }
 
-/* ---- Struct constructor (variadic) ---- */
-
-hegel_schema_t
-hegel_schema_struct_v (size_t size, hegel_binding_t * binding_list)
-{
-  int                 n;
-  hegel_schema *      s;
-
-  /* binding_list is H_END_BINDING-terminated */
-  for (n = 0; binding_list[n].schema != NULL; n ++) {}
-
-  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  s->kind = HEGEL_SCH_STRUCT;
-  s->refcount = 1;
-  s->struct_def.size = size;
-  s->struct_def.n_bindings = n;
-  s->struct_def.bindings = (hegel_field_binding *) malloc (
-      (size_t) n * sizeof (hegel_field_binding));
-  for (int i = 0; i < n; i ++)
-    s->struct_def.bindings[i] = binding_list[i];  /* copy + transfer */
-
-  hegel__resolve_self (s, s);
-  return (hegel_schema_t){s};
-}
-
-
 /* ================================================================
 ** Shape accessors — read metadata from shape tree
 ** ================================================================ */
@@ -988,12 +948,19 @@ hegel_shape_field (hegel_shape * s, int index)
   return (s->struct_shape.fields[index]);
 }
 
-/* Offset-based lookup.  The shape tree itself doesn't store field
-** offsets, but `s->owned` points at the value struct — when the
-** shape is a STRUCT whose fields were produced from a bindings
-** array, the ordering matches.  We keep this accessor simple: the
-** struct shape stores offsets in a parallel `field_offsets` array
-** populated at draw time (see hegel__draw_struct).
+/* Read the i-th field's value-memory offset for a STRUCT shape.
+** Reads through the shape's schema backpointer, which every STRUCT
+** shape now has.  The synthetic variant-body case was retired when
+** union cases became real struct schemas. */
+static size_t
+hegel__shape_field_offset (hegel_shape * s, int i)
+{
+  return (s->schema->struct_def.offsets[i]);
+}
+
+/* Offset-based lookup.  Given a STRUCT shape and a field offset
+** (typically `offsetof(T, field)`), return the shape node
+** corresponding to that field's drawn value.
 **
 ** With HEGEL_INLINE, a top-level binding's offset may name an inline
 ** sub-struct, and the caller may request an offset pointing *inside*
@@ -1013,17 +980,13 @@ hegel_shape *
 hegel_shape_get_offset (hegel_shape * s, size_t offset)
 {
   if (s == NULL || s->kind != HEGEL_SHAPE_STRUCT) return (NULL);
-  /* field_offsets is stored immediately after the fields array as
-  ** an inline trailer — see hegel__draw_struct for allocation. */
   if (s->struct_shape.fields == NULL) return (NULL);
   {
-    size_t * offs = (size_t *) (s->struct_shape.fields
-                                + s->struct_shape.n_fields);
     int i;
 
     /* Pass 1: exact match, descending into inline sub-structs. */
     for (i = 0; i < s->struct_shape.n_fields; i ++) {
-      if (offs[i] == offset) {
+      if (hegel__shape_field_offset (s, i) == offset) {
         hegel_shape * child = s->struct_shape.fields[i];
         if (child != NULL && child->kind == HEGEL_SHAPE_STRUCT
             && child->struct_shape.fields != NULL) {
@@ -1037,11 +1000,12 @@ hegel_shape_get_offset (hegel_shape * s, size_t offset)
     /* Pass 2: the offset may fall inside an inline sub-struct. */
     for (i = 0; i < s->struct_shape.n_fields; i ++) {
       hegel_shape * child = s->struct_shape.fields[i];
+      size_t child_offset = hegel__shape_field_offset (s, i);
       if (child != NULL && child->kind == HEGEL_SHAPE_STRUCT
           && child->struct_shape.fields != NULL
-          && offset > offs[i]) {
+          && offset > child_offset) {
         hegel_shape * deeper =
-            hegel_shape_get_offset (child, offset - offs[i]);
+            hegel_shape_get_offset (child, offset - child_offset);
         if (deeper != NULL) return (deeper);
       }
     }
@@ -1139,6 +1103,7 @@ hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
       *out = buf;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_TEXT;
+      shape->schema = actual;
       shape->owned = buf;
       return (shape);
     }
@@ -1149,6 +1114,7 @@ hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
       *out = p;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = actual;
       shape->owned = p;
       return (shape);
     }
@@ -1173,6 +1139,7 @@ hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
       *out = child;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_VARIANT;
+      shape->schema = actual;
       shape->variant_shape.tag = tag;
       shape->variant_shape.inner = inner;
       return (shape);
@@ -1203,16 +1170,17 @@ hegel__elem_size (hegel_schema * elem)
   }
 }
 
-/* ---- Allocate struct_shape.fields with an inline field_offsets
-** trailer.  Layout: [shape *; n_fields] followed by [size_t; n_fields]. */
+/* ---- Allocate struct_shape.fields.  Just an array of shape pointers.
+** Field offsets used to sit in a trailer here, but every struct shape
+** now carries a schema backpointer that has the offsets in its
+** struct_def.offsets array — so the trailer is redundant. */
 
 static void
 hegel__alloc_struct_fields (hegel_shape * shape, int n)
 {
-  size_t bytes = (size_t) n * sizeof (hegel_shape *)
-                + (size_t) n * sizeof (size_t);
   shape->struct_shape.n_fields = n;
-  shape->struct_shape.fields = (hegel_shape **) calloc (1, bytes);
+  shape->struct_shape.fields = (hegel_shape **) calloc (
+      (size_t) n, sizeof (hegel_shape *));
 }
 
 /* ---- Draw a STRUCT schema into a pre-allocated slot ----
@@ -1226,23 +1194,22 @@ static hegel_shape *
 hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
                               void * slot, int depth)
 {
-  int                 nf = gen->struct_def.n_bindings;
+  int                 nf = gen->struct_def.n_children;
   hegel_shape *       sh;
-  size_t *            offs;
   int                 f;
 
   sh = (hegel_shape *) calloc (1, sizeof (hegel_shape));
   sh->kind = HEGEL_SHAPE_STRUCT;
+  sh->schema = gen;
   sh->owned = NULL;
   hegel__alloc_struct_fields (sh, nf);
-  offs = (size_t *) (sh->struct_shape.fields + nf);
 
   hegel_start_span (tc, HEGEL_SPAN_TUPLE);
   for (f = 0; f < nf; f ++) {
-    hegel_field_binding * b = &gen->struct_def.bindings[f];
-    offs[f] = b->offset;
+    size_t          field_off = gen->struct_def.offsets[f];
+    hegel_schema *  field_sch = gen->struct_def.children[f];
     sh->struct_shape.fields[f] =
-        hegel__draw_field (tc, b->schema, slot, b->offset, depth - 1);
+        hegel__draw_field (tc, field_sch, slot, field_off, depth - 1);
   }
   hegel_stop_span (tc, 0);
 
@@ -1259,23 +1226,22 @@ hegel__draw_struct (hegel_testcase * tc, hegel_schema * gen, void ** out,
   hegel_shape *       shape;
   int                 n;
   int                 i;
-  size_t *            offs;
 
-  n = gen->struct_def.n_bindings;
+  n = gen->struct_def.n_children;
   ptr = calloc (1, gen->struct_def.size);
 
   shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
   shape->kind = HEGEL_SHAPE_STRUCT;
+  shape->schema = gen;
   shape->owned = ptr;
   hegel__alloc_struct_fields (shape, n);
-  offs = (size_t *) (shape->struct_shape.fields + n);
 
   hegel_start_span (tc, HEGEL_SPAN_TUPLE);
   for (i = 0; i < n; i ++) {
-    hegel_field_binding * b = &gen->struct_def.bindings[i];
-    offs[i] = b->offset;
+    size_t          field_off = gen->struct_def.offsets[i];
+    hegel_schema *  field_sch = gen->struct_def.children[i];
     shape->struct_shape.fields[i] =
-        hegel__draw_field (tc, b->schema, ptr, b->offset, depth);
+        hegel__draw_field (tc, field_sch, ptr, field_off, depth);
   }
   hegel_stop_span (tc, 0);
 
@@ -1298,6 +1264,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel__draw_integer_into (tc, gen, dst);
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1305,6 +1272,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel__draw_fp_into (tc, gen, dst);
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1314,6 +1282,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(char **) dst = buf;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_TEXT;
+      shape->schema = gen;
       shape->owned = buf;
       return (shape);
     }
@@ -1322,6 +1291,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       int present;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_OPTIONAL;
+      shape->schema = gen;
 
       hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
       present = hegel_draw_int (tc, 0, 1);
@@ -1357,6 +1327,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_ARRAY;
+      shape->schema = gen;
 
       hegel_start_span (tc, HEGEL_SPAN_LIST);
       n = hegel_draw_int (tc, gen->array_def.min_len,
@@ -1380,6 +1351,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
           shape->array_shape.elems[i] =
               (hegel_shape *) calloc (1, sizeof (hegel_shape));
           shape->array_shape.elems[i]->kind = HEGEL_SHAPE_SCALAR;
+          shape->array_shape.elems[i]->schema = elem;
 
         } else if (elem->kind == HEGEL_SCH_FLOAT) {
           hegel__draw_fp_into (tc, elem,
@@ -1387,6 +1359,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
           shape->array_shape.elems[i] =
               (hegel_shape *) calloc (1, sizeof (hegel_shape));
           shape->array_shape.elems[i]->kind = HEGEL_SHAPE_SCALAR;
+          shape->array_shape.elems[i]->schema = elem;
 
         } else if (elem->kind == HEGEL_SCH_TEXT) {
           void * txt;
@@ -1428,6 +1401,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_ARRAY;
+      shape->schema = gen;
 
       hegel_start_span (tc, HEGEL_SPAN_LIST);
       n = hegel_draw_int (tc, gen->array_inline_def.min_len,
@@ -1478,9 +1452,9 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
     case HEGEL_SCH_UNION:
     case HEGEL_SCH_UNION_UNTAGGED: {
-      int                   tag;
-      int                   nc;
-      hegel_field_binding * chosen_fields;
+      int              tag;
+      int              nc;
+      hegel_schema *   chosen;
       /* Union internal offsets (tag_offset, case field offsets) are
       ** self-relative.  `dst = parent + offset` is the union's own
       ** base pointer; the case writes happen at dst + internal. */
@@ -1489,6 +1463,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_VARIANT;
+      shape->schema = gen;
 
       hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
       tag = hegel_draw_int (tc, 0, nc - 1);
@@ -1498,27 +1473,15 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       if (gen->kind == HEGEL_SCH_UNION)
         *(int *) ((char *) dst + gen->union_def.tag_offset) = tag;
 
-      /* Draw the chosen case's fields into the union base. */
-      chosen_fields = gen->union_def.cases[tag];
+      /* Draw the chosen case's fields into the union base.  Under
+      ** option A, each case is a real struct schema, so we can
+      ** delegate to the shared helper.  `depth + 1` is passed so
+      ** the inner hegel__draw_field calls see `depth`, matching
+      ** the original manual loop's behavior. */
+      chosen = gen->union_def.cases[tag];
       hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
-
-      /* Build a struct-like shape for the variant's fields. */
-      {
-        int nf;
-        for (nf = 0; chosen_fields[nf].schema != NULL; nf ++) {}
-        hegel_shape * vs = (hegel_shape *) calloc (1, sizeof (hegel_shape));
-        vs->kind = HEGEL_SHAPE_STRUCT;
-        vs->owned = NULL; /* fields are inline in parent, not separate */
-        hegel__alloc_struct_fields (vs, nf);
-        size_t * voffs = (size_t *) (vs->struct_shape.fields + nf);
-        for (int i = 0; i < nf; i ++) {
-          voffs[i] = chosen_fields[i].offset;
-          vs->struct_shape.fields[i] =
-              hegel__draw_field (tc, chosen_fields[i].schema,
-                                 dst, chosen_fields[i].offset, depth);
-        }
-        shape->variant_shape.inner = vs;
-      }
+      shape->variant_shape.inner =
+          hegel__draw_struct_into_slot (tc, chosen, dst, depth + 1);
 
       hegel_stop_span (tc, 0);
       hegel_stop_span (tc, 0);
@@ -1536,6 +1499,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_VARIANT;
+      shape->schema = gen;
 
       hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
       tag = hegel_draw_int (tc, 0, nc - 1);
@@ -1568,6 +1532,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(int *) dst = mapped;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1585,6 +1550,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(int *) dst = raw;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1611,6 +1577,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel_schema_free (next);
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1622,6 +1589,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(int64_t *) dst = mapped;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1634,6 +1602,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(int64_t *) dst = raw;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1654,6 +1623,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel_schema_free (next);
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1665,6 +1635,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(double *) dst = mapped;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1677,6 +1648,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(double *) dst = raw;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1697,6 +1669,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel_schema_free (next);
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1716,6 +1689,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel_stop_span (tc, 0);
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
       return (shape);
     }
 
@@ -1727,6 +1701,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       *(char **) dst = buf;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_TEXT;
+      shape->schema = gen;
       shape->owned = buf;
       return (shape);
     }
@@ -1826,9 +1801,10 @@ hegel__schema_free_raw (hegel_schema * s)
 
   switch (s->kind) {
     case HEGEL_SCH_STRUCT:
-      for (i = 0; i < s->struct_def.n_bindings; i ++)
-        hegel__schema_free_raw (s->struct_def.bindings[i].schema);
-      free (s->struct_def.bindings);
+      for (i = 0; i < s->struct_def.n_children; i ++)
+        hegel__schema_free_raw (s->struct_def.children[i]);
+      free (s->struct_def.children);
+      free (s->struct_def.offsets);
       break;
     case HEGEL_SCH_OPTIONAL_PTR:
       hegel__schema_free_raw (s->optional_ptr.inner);
@@ -1841,12 +1817,8 @@ hegel__schema_free_raw (hegel_schema * s)
       break;
     case HEGEL_SCH_UNION:
     case HEGEL_SCH_UNION_UNTAGGED:
-      for (i = 0; i < s->union_def.n_cases; i ++) {
-        int j;
-        for (j = 0; s->union_def.cases[i][j].schema != NULL; j ++)
-          hegel__schema_free_raw (s->union_def.cases[i][j].schema);
-        free (s->union_def.cases[i]);
-      }
+      for (i = 0; i < s->union_def.n_cases; i ++)
+        hegel__schema_free_raw (s->union_def.cases[i]);
       free (s->union_def.cases);
       break;
     case HEGEL_SCH_VARIANT:

@@ -9,14 +9,25 @@ done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
 ## rn
 
-- **`hegel__abort` internal helper.**  Consolidate the 6 `fprintf
-  (stderr, …); abort ()` sites in `hegel_gen.c` behind a single
-  internal macro.  One place to add `__FILE__:__LINE__` prefixing
-  later, one place to swap in a longjmp-based recovery if a
-  "schema-build-should-fail" testing mode ever lands, and `grep
-  hegel__abort` becomes the authoritative list of "where the
-  schema layer gives up."  Not urgent, do as a standalone refactor
-  commit — don't mix into feature diffs.
+- **Harden `HEGEL_ONE_OF`.**  After the primitive-macro refactor,
+  `HEGEL_ONE_OF` dispatches on the first case's kind for slot
+  size/align, and the draw path at `hegel_gen.c` `HEGEL_SCH_ONE_OF_SCALAR`
+  only handles INTEGER / FLOAT cases — anything else (struct, text,
+  mismatched-width scalars) is silently wrong.  Two levels of fix:
+  (a) **Immediate:** in `hegel_schema_one_of_scalar_v`, walk all
+      cases, compute `hegel__schema_slot_info` for each, abort at
+      schema-build time if sizes or alignments disagree.  Cheap,
+      catches the `HEGEL_ONE_OF(HEGEL_INT(...), HEGEL_DOUBLE(...))`
+      footgun before it silently becomes a double slot with ints
+      written into it.
+  (b) **Design question:** should `HEGEL_ONE_OF` be generalized to
+      accept heterogeneous cases (scalars of different widths,
+      structs, etc.)?  If yes, it becomes equivalent to
+      `HEGEL_UNION_UNTAGGED` with implicit single-field cases and
+      we should either merge them or alias one to the other.  If
+      no, keep the name narrow ("same-width scalar picker") and
+      keep `HEGEL_UNION_UNTAGGED` as the general form.  Defer until
+      there's a real use case pushing for the wider semantics.
 
 - **Path-based shape accessor (vs offset-based).**  `HEGEL_SHAPE_GET`
   currently maps `offsetof(T, field)` to a leaf shape and silently
@@ -445,7 +456,7 @@ and span emission:
 | `hegel_gen_int/i64/u64/float/double/bool` | `hegel_schema_i8..u64`, `_float`, `_double`, `HEGEL_BOOL` |
 | `hegel_gen_text` | `hegel_schema_text` (char-by-char, no regex gotcha) |
 | `hegel_gen_regex` | `hegel_schema_regex` / `HEGEL_REGEX` (same footgun; see below) |
-| `hegel_gen_one_of` (for scalars) | `HEGEL_ONE_OF_INT` / `_I64` / `_DOUBLE` (all via `HEGEL_SCH_ONE_OF_SCALAR`) |
+| `hegel_gen_one_of` (for scalars) | `HEGEL_ONE_OF` (via `HEGEL_SCH_ONE_OF_SCALAR`) |
 | `hegel_gen_one_of` (for structs) | `HEGEL_ONE_OF_STRUCT` |
 | `hegel_gen_sampled_from(N)` | `hegel_schema_int_range(0, N-1)` |
 | `hegel_gen_optional` (of ptr) | `HEGEL_OPTIONAL` |

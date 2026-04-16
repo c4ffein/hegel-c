@@ -103,14 +103,12 @@ The schema system lets tests describe C structs declaratively and get generation
 - `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing schema; used as `HEGEL_ARRAY` elem or inside `HEGEL_OPTIONAL`
 - `HEGEL_CASE(field_entries...)` — used inside `HEGEL_UNION*`; contains layout entries, NOT bindings
 - `HEGEL_MAP_INT(source, fn, ctx)` / `HEGEL_FILTER_INT(source, pred, ctx)` / `HEGEL_FLAT_MAP_INT(source, fn, ctx)` — 1 slot (int-sized); same for `_I64` and `_DOUBLE`
-- `HEGEL_ONE_OF_INT(scalar_schemas...)` — 1 int slot; same for `_I64` and `_DOUBLE`
+- `HEGEL_ONE_OF(scalar_schemas...)` — 1 slot, size/align inferred from the first case's kind
 - `HEGEL_BOOL()` — 1-byte `bool` slot
 - `HEGEL_REGEX(pattern, capacity)` — `char *` slot
 - `hegel_schema_of(layout_entry)` — unwrap a `HEGEL_UNION` / `HEGEL_VARIANT` layout entry to a raw `hegel_schema_t` for standalone use (e.g. as an `ARRAY_INLINE` element type)
 
 The positional form means **the user writes a flat list of generators in the same order as the struct fields**, with matching types. The layout pass computes byte offsets the same way the C compiler does and asserts `sizeof(T)` matches. If a field is reordered or its type changes, the assert fires at schema-build time.
-
-For advanced cases that don't fit the positional form (e.g. schema reuse at arbitrary offsets), drop down to `hegel_schema_struct_v(size, bindings_array)` + `hegel__bind(offset, schema)`.
 
 **Draw / free:**
 - `hegel_shape *hegel_schema_draw(tc, schema, (void**)&ptr)` — allocates, fills, returns shape

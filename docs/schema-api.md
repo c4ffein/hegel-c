@@ -117,10 +117,6 @@ Each `HEGEL_*` macro knows its own target type:
   cases — tag plus internal body layout — matching the idiom
   `int tag; union { ... } u;`
 
-The low-level `hegel_schema_struct_v` / `hegel__bind` escape hatches
-are still available if you need to build a schema with offsets you
-compute yourself, but `HEGEL_STRUCT` is the right default.
-
 ### Standalone use of `HEGEL_UNION` / `HEGEL_VARIANT`
 
 `HEGEL_UNION` normally appears inside a `HEGEL_STRUCT` and behaves
@@ -138,6 +134,37 @@ hegel_schema_t shape_union = hegel_schema_of (HEGEL_UNION (
 hegel_schema_t gallery = HEGEL_STRUCT (Gallery,
     HEGEL_ARRAY_INLINE (shape_union, sizeof (Shape), 1, 6));
 ```
+
+## Why positional macros instead of reflection
+
+[hegel-cpp](https://github.com/hegeldev/hegel-cpp) can spell
+nested-struct generators as `default_generator<Line>()` with
+zero annotations. That works because C++ has **compile-time
+reflection**: template metaprogramming enumerates a type's
+fields, reads each one's static type, and recursively dispatches
+to the right sub-generator — all resolved at build time, the
+compiler walking the type tree for you.
+
+**C has none of that.** There is no standard mechanism to ask
+"what are the fields of this struct?" at compile time or at
+runtime. Any C-level schema system has to get the field list
+from the user directly, typically by spelling the fields out in
+a macro and trusting the user to keep them in sync with the
+struct definition.
+
+`HEGEL_STRUCT` is that trade, executed as carefully as C allows:
+the list is **positional** (one generator per field, in
+declaration order); each `HEGEL_INT` / `HEGEL_DOUBLE` /
+`HEGEL_TEXT` / etc. knows the size and alignment of its target
+field; the macro walks the entries using the same layout rules
+the C compiler itself uses; and the final
+`sizeof(T) == computed_total` assertion is the checksum. Reorder
+a field, change a type, or pick the wrong generator and the
+totals diverge and the assert fires before any test runs.
+
+These are different tradeoffs. Reflection-based
+systems push structural knowledge into the compiler; we push it
+into macros and runtime, which is the C way.
 
 ## Primitive constructors
 
@@ -389,21 +416,21 @@ Shrinking works on the **source** (the root draw), which is why
 `map` preserves shrinker quality: it doesn't shrink the output
 directly but shrinks the input that produced the output.
 
-### `HEGEL_ONE_OF_INT` / `_I64` / `_DOUBLE` — pick one of several scalar schemas
+### `HEGEL_ONE_OF` — pick one of several scalar schemas
 
 When a single range doesn't capture the distribution you want,
-`HEGEL_ONE_OF_*` picks between multiple scalar schemas — e.g.,
+`HEGEL_ONE_OF` picks between multiple scalar schemas — e.g.,
 "small int OR large int" to exercise both ends of a function:
 
 ```c
-HEGEL_ONE_OF_INT(MyStruct, field,
-                 hegel_schema_int_range(0, 10),
-                 hegel_schema_int_range(1000, 9999))
+HEGEL_ONE_OF(hegel_schema_int_range(0, 10),
+             hegel_schema_int_range(1000, 9999))
 ```
 
 The draw picks one case uniformly, then draws from it. Each case
-must be a scalar schema (INTEGER or FLOAT) matching the target
-field's type.
+must be a scalar schema (INTEGER or FLOAT) and all cases must share
+the same scalar width — the slot size and alignment are inferred
+from the first case's kind at layout time.
 
 ### `HEGEL_BOOL` — 1-byte `bool` field
 

@@ -290,8 +290,8 @@ int main (void) {
                              dep_double_fn, NULL));
 
   one_of_schema = HEGEL_STRUCT (OneOfThing,
-      HEGEL_ONE_OF_INT (hegel_schema_int_range (0, 10),
-                        hegel_schema_int_range (1000, 9999)));
+      HEGEL_ONE_OF (hegel_schema_int_range (0, 10),
+                    hegel_schema_int_range (1000, 9999)));
 
   bool_schema = HEGEL_STRUCT (BoolThing,
       HEGEL_BOOL (),
