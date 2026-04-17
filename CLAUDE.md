@@ -86,7 +86,7 @@ The schema system lets tests describe C structs declaratively and get generation
 - Floats: `hegel_schema_float` / `_range`, `hegel_schema_double` / `_range`
 - Text: `hegel_schema_text(min_len, max_len)`
 - `hegel_schema_self()` — recursive reference
-- `hegel_schema_optional_ptr(inner)`, `hegel_schema_array(len_offset, elem, lo, hi)`, etc.
+- `hegel_schema_optional_ptr(inner)`, `hegel_schema_array(elem, lo, hi)`, etc.
 
 **Macros (the positional user-facing surface):**
 - `HEGEL_STRUCT(T, field_entries...)` — computes offsets from the struct type at runtime, asserts `sizeof(T) == computed_total`. Top-level composition primitive.
@@ -95,8 +95,9 @@ The schema system lets tests describe C structs declaratively and get generation
 - `HEGEL_TEXT(lo, hi)` — `char *` field, pointer-sized slot
 - `HEGEL_OPTIONAL(inner)` — 50/50 nullable pointer; 1 slot
 - `HEGEL_SELF()` — optional recursive pointer; 1 slot
-- `HEGEL_ARRAY(elem, lo, hi)` — 2 slots: `void *` pointer, then `int` count. User's struct must put ptr before count.
-- `HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi)` — same 2-slot shape, contiguous elements
+- `HEGEL_ARRAY(elem, lo, hi)` — builds an array schema; not a direct layout entry. Project into the parent struct via `HEGEL_FACET(hat, value)` + `HEGEL_FACET(hat, size)`. Facets may be non-adjacent, in either order. Caller must `hegel_schema_free(hat)` after building.
+- `HEGEL_FACET(hat, value|size)` — project a facet of a composite schema (e.g. `HEGEL_ARRAY`) into a single parent slot. Bumps source refcount per use. Per-struct-instance scoping: two facets of the same `hat` in one struct share; across struct instances (e.g. array elements) each gets its own draw.
+- `HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi)` — 2 slots: `void *` pointer + `int` count. Contiguous elements; user's struct must put ptr before count.
 - `HEGEL_UNION(cases...)` — cluster slot: int tag + union body (sized/aligned to widest case)
 - `HEGEL_UNION_UNTAGGED(cases...)` — cluster slot: union body only, tag in shape tree
 - `HEGEL_VARIANT(case_struct_schemas...)` — cluster slot: int tag + `void *` ptr

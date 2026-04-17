@@ -7,51 +7,60 @@
 Open items after the V0 schema API milestone. For what's already
 done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
-## Active plan — V2 handles, starting with `HEGEL_ARRAY`
+## V2 handles — V1 scope landed 2026-04-17
 
-**Goal:** introduce "composite schemas that produce one value with
-multiple facets projected into different struct slots."  V1 scope =
-`HEGEL_ARRAY` only.  Prove the mechanic concretely before
-generalizing to optional / union / variant.
+**Status:** `HEGEL_ARRAY` facets model is in.  `HEGEL_ARRAY(elem, lo,
+hi)` builds an array schema projected into the parent struct via
+`HEGEL_FACET(hat, value)` + `HEGEL_FACET(hat, size)`.  Facets may be
+non-adjacent, in either order.  Per-struct-instance ctx scoping —
+facets within one struct share one drawn array; across struct
+instances (e.g. array elements) each gets its own draw.  Three new
+pattern tests (`facets_nonadjacent`, `facets_reversed`, `facets_nested`)
+plus all 7 existing `HEGEL_ARRAY` sites migrated.  Docs updated
+(`schema-api.md`, `patterns.md`, `hegel_gen.h`).  Design memo that
+drove the work is `v2-handles-handoff.md` (delete once we're
+confident the approach stands).
 
-### Design (aligned 2026-04-17)
+### Remaining investigations
 
-**User-facing API.**  `HEGEL_ARRAY(elem, lo, hi)` returns
-`hegel_array_t *` (heap-allocated).  `h->size` and `h->value` are
-`hegel_schema_t` values that plug into `HEGEL_STRUCT` at any
-position — no longer required to be adjacent.
+- **`HEGEL_SELF()` nested inside an array's element schema — silently
+  broken.**  `hegel__resolve_self` has no `HEGEL_SCH_SUBSCHEMA`
+  case, so when it walks a struct's children it doesn't cross the
+  subschema→source boundary into the array's `elem`.  If the
+  element schema is `HEGEL_SELF()`, its `self_ref.target` stays
+  NULL, and `hegel__draw_array_standalone` falls through the
+  element-kind dispatch silently — the array gets zero-initialized
+  entries instead of real recursive draws.  Fix is ~3 lines (add
+  SUBSCHEMA case descending into `source`), plus a test for
+  `HEGEL_ARRAY(HEGEL_SELF(), ...)` inside a struct.  Orthogonal
+  subtlety: a schema shared across two parents would have the
+  second resolve pass overwrite the first's SELF target — that
+  pre-dates facets (same issue with `hegel_schema_ref`'d struct
+  subtrees) and is not specific to this fix.
 
-```c
-hegel_array_t *h = HEGEL_ARRAY(hegel_schema_int_range(0, 100), 0, 10);
-HEGEL_STRUCT(Bag,
-    HEGEL_INT(0, 100),
-    h->size,            // int slot
-    HEGEL_TEXT(1, 5),
-    h->value);          // pointer slot
-```
+- **`hegel_shape_array_len` asymmetry on facet slot shapes.**  The
+  primary facet (first-seen for a source this draw) owns the
+  `HEGEL_SHAPE_ARRAY` shape; the secondary emits a trivial
+  `HEGEL_SHAPE_SCALAR` leaf.  So `hegel_shape_array_len` returns
+  the real length only when called on the `value`-facet slot
+  (the pointer field); on the `size`-facet slot it returns 0.
+  Currently documented in `docs/schema-api.md` as an asymmetry.
+  Options if we want symmetry: (a) secondary leaf dispatches to
+  primary's array shape via ctx lookup — but ctx is gone after
+  the draw ends, so we'd need a different linkage; (b) make the
+  secondary slot hold a non-owning reference to the primary's
+  array shape and teach `hegel_shape_array_len` to follow it;
+  (c) leave as-is and keep the doc note.  Decide once a concrete
+  use case surfaces.
 
-**Schema-tree representation.**
-- New kind `HEGEL_SCH_SUBSCHEMA`.  Node = `{ source: hegel_schema_t, offset: int }`.
-- `hegel_subschema_t` is just `hegel_schema_t` (same wrapper type; facet-ness is internal kind).
-- Slot size/align derived from offset at layout time.
+### Out of scope for V1 (still deferred)
 
-### Explicitly out of scope for this change
-
-- `HEGEL_COPY` — wait until V1 validates the handle mechanic.
+- `HEGEL_COPY` — shared template, independent draws.  See its own
+  section below.
 - Facets for `HEGEL_OPTIONAL` / `HEGEL_UNION` / `HEGEL_VARIANT` —
   V1.1 once the array pattern is shaken out.
-- Schema/shape merge — exploratory; revisit after V1 lands.
-- `HEGEL_ONE_OF` hardening — cheap and independent, not bundled here.
-
-### Risks / watch for
-
-- **`HEGEL_SELF()` interaction.**  Subschemas of a source that
-  itself contains `HEGEL_SELF()` — does the recursive reference
-  still resolve correctly when viewed through a subschema?
-  Check on first recursive test case.
-- **Shape accessor surface.**  `hegel_shape_array_len(shape_field(sh, N))`
-  must still work when N points at a secondary subschema slot.
-  Decide behavior: error, or transparent forward to primary?
+- Schema/shape merge — exploratory; see its own section below.
+- `HEGEL_ONE_OF` hardening — tracked separately below.
 
 ## rn
 

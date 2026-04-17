@@ -226,9 +226,13 @@ static
 void
 init_bag_schema (void)
 {
+  hegel_schema_t items_arr =
+      HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
   bag_schema = HEGEL_STRUCT (Bag,
-      HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10),
+      HEGEL_FACET (items_arr, value),
+      HEGEL_FACET (items_arr, size),
       HEGEL_INT (0, 3));
+  hegel_schema_free (items_arr);
 }
 
 static

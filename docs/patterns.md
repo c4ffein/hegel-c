@@ -192,8 +192,12 @@ typedef struct {
 
 **Schema:**
 ```c
+hegel_schema_t items_arr =
+    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
 bag_schema = HEGEL_STRUCT (Bag,
-    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10));
+    HEGEL_FACET (items_arr, value),
+    HEGEL_FACET (items_arr, size));
+hegel_schema_free (items_arr);
 ```
 
 **Tests:**
@@ -366,8 +370,11 @@ typedef struct {
 ```c
 hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 
+hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
 coll_schema = HEGEL_STRUCT (RawCollection,
-    HEGEL_ARRAY (one_of, 1, 6));
+    HEGEL_FACET (items_arr, value),
+    HEGEL_FACET (items_arr, size));
+hegel_schema_free (items_arr);
 ```
 
 **Test:** [`test_gen_schema_array_of_raw_struct_pointers_by_kind.c`](../tests/selftest/test_gen_schema_array_of_raw_struct_pointers_by_kind.c)
@@ -390,8 +397,12 @@ typedef struct { Row *rows;   int n_rows; }   Matrix;
 
 **Schema:**
 ```c
+hegel_schema_t values_arr =
+    HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6);
 hegel_schema_t row = HEGEL_STRUCT (Row,
-    HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6));
+    HEGEL_FACET (values_arr, value),
+    HEGEL_FACET (values_arr, size));
+hegel_schema_free (values_arr);
 
 matrix_schema = HEGEL_STRUCT (Matrix,
     HEGEL_ARRAY_INLINE (row, sizeof (Row), 1, 4));
@@ -419,6 +430,45 @@ Five sub-tests in one binary:
 
 Also demonstrates `hegel_schema_ref` to share `color_s` across
 `palette_s` and `sprite_s` (two different parent schemas).
+
+---
+
+## Non-adjacent array facets
+
+Sometimes the struct you're trying to generate puts the array's
+pointer and length at non-adjacent positions — maybe there's a tag
+field or some unrelated scalar between them. The 2-slot inline form
+of `HEGEL_ARRAY` can't express this; facets can.
+
+**C layout:**
+```c
+typedef struct {
+  int *items;
+  int  tag;         /* unrelated field between the two facets */
+  int  n;
+} Bag;
+```
+
+**Schema:**
+```c
+hegel_schema_t items_arr =
+    HEGEL_ARRAY (hegel_schema_int_range (0, 999), 0, 8);
+bag_schema = HEGEL_STRUCT (Bag,
+    HEGEL_FACET (items_arr, value),
+    HEGEL_INT   (-10, 10),
+    HEGEL_FACET (items_arr, size));
+hegel_schema_free (items_arr);
+```
+
+**Tests:**
+- [`test_gen_schema_facets_nonadjacent.c`](../tests/selftest/test_gen_schema_facets_nonadjacent.c) — tag field between the two facets
+- [`test_gen_schema_facets_reversed.c`](../tests/selftest/test_gen_schema_facets_reversed.c) — `size` comes before `value` in the struct
+- [`test_gen_schema_facets_nested.c`](../tests/selftest/test_gen_schema_facets_nested.c) — outer array whose elements hold their own inner array (verifies per-instance ctx scoping)
+
+Exercises: `HEGEL_FACET` projecting one named `HEGEL_ARRAY` into
+separated struct positions. The two projections are resolved into
+one consistent drawn array per struct instance; across instances
+(e.g. array elements of a parent array), each gets its own draw.
 
 ---
 

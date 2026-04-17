@@ -43,8 +43,12 @@ static
 void
 init_schema (void)
 {
+  hegel_schema_t values_arr =
+      HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6);
   hegel_schema_t row = HEGEL_STRUCT (Row,
-      HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6));
+      HEGEL_FACET (values_arr, value),
+      HEGEL_FACET (values_arr, size));
+  hegel_schema_free (values_arr);
 
   matrix_schema = HEGEL_STRUCT (Matrix,
       HEGEL_ARRAY_INLINE (row, sizeof (Row), 1, 4));

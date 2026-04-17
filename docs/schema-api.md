@@ -109,9 +109,12 @@ Each `HEGEL_*` macro knows its own target type:
 - `HEGEL_FLOAT` / `HEGEL_DOUBLE` targets `float` / `double`
 - `HEGEL_TEXT` / `HEGEL_OPTIONAL` / `HEGEL_SELF` / `HEGEL_REGEX`
   target pointer-sized slots
-- `HEGEL_ARRAY` / `HEGEL_ARRAY_INLINE` occupy **two** consecutive
-  slots (a `void *` pointer and an `int` count), matching the idiom
+- `HEGEL_ARRAY_INLINE` occupies **two** consecutive slots (a
+  `void *` pointer and an `int` count), matching the idiom
   `void *ptr; int n_items;`
+- `HEGEL_ARRAY` is placed via two `HEGEL_FACET` projections — a
+  pointer-sized slot and an int-sized slot — which may appear at
+  non-adjacent positions, in either order; see `HEGEL_ARRAY` below
 - `HEGEL_UNION` / `HEGEL_UNION_UNTAGGED` / `HEGEL_VARIANT` occupy
   a "cluster" slot whose size and alignment are derived from the
   cases — tag plus internal body layout — matching the idiom
@@ -293,22 +296,61 @@ a pointer to the enclosing struct type. Automatically optional
 (50/50 NULL) because recursive chains need termination — unbounded
 recursion is capped at `HEGEL_DEFAULT_MAX_DEPTH = 5`.
 
-### `HEGEL_ARRAY` — variable-length array with separate allocation
+### `HEGEL_ARRAY` — variable-length array, projected via facets
 
 ```c
 typedef struct { int *items; int n_items; } Bag;
 
+hegel_schema_t items_arr =
+    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
 HEGEL_STRUCT (Bag,
-    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10));
+    HEGEL_FACET (items_arr, value),     /* int *items */
+    HEGEL_FACET (items_arr, size));     /* int n_items */
+hegel_schema_free (items_arr);
 ```
 
-Occupies two consecutive positional slots: the array pointer
-(`void *`) and the count (`int`). The user's struct must put the
-pointer field first, then the count field. The element schema can
-be any of: `hegel_schema_int_range(...)`, `hegel_schema_text(...)`,
-a struct schema (each element separately allocated, array stores
-pointers), or `HEGEL_ONE_OF_STRUCT(...)` (heterogeneous pointer
-array).
+`HEGEL_ARRAY(elem, lo, hi)` builds an array schema that produces
+one drawn buffer per draw. Its two projections — the data pointer
+and the length — are placed into the parent struct individually via
+`HEGEL_FACET(hat, value)` and `HEGEL_FACET(hat, size)`. The facets
+may be non-adjacent and in either order; match them to the struct's
+actual field order.
+
+The element schema can be any of: `hegel_schema_int_range(...)`,
+`hegel_schema_text(...)`, a struct schema (each element separately
+allocated, array stores pointers), or `HEGEL_ONE_OF_STRUCT(...)`
+(heterogeneous pointer array).
+
+**Ownership math:** `HEGEL_ARRAY(...)` returns `refcount = 1` for
+the user. Each `HEGEL_FACET` use bumps source refcount. Each
+`HEGEL_STRUCT` decrements source refcount at struct-free time for
+the subschema children it holds. The user must call
+`hegel_schema_free(hat)` once after building their struct(s) to
+release their own reference — without this, the array schema and
+its element schema would leak.
+
+**Scoping:** `hat`-driven facets share within one struct instance,
+but are independent across struct instances. If `hat` appears in
+an element schema of an outer array, each outer element gets an
+INDEPENDENT draw of `hat`.
+
+**Cannot be used directly:** `HEGEL_STRUCT(T, HEGEL_ARRAY(...))`
+aborts at schema-build time with a diagnostic. Always name the
+array and use `HEGEL_FACET`.
+
+### `HEGEL_FACET` — project a facet of a composite
+
+```c
+HEGEL_FACET (hat, value)    /* ARRAY's data pointer */
+HEGEL_FACET (hat, size)     /* ARRAY's length */
+```
+
+Projects a specific facet of a named composite schema into the
+parent struct's positional field list. `hat` must be a schema with
+facets (currently only `HEGEL_ARRAY`; future kinds may expose
+`tag`, `body`, etc.). Bumps source refcount each time; the user
+keeps their original reference and must release it after building.
+See `HEGEL_ARRAY` for the complete usage pattern.
 
 ### `HEGEL_ARRAY_INLINE` — contiguous array of inline structs
 
@@ -460,8 +502,11 @@ FFI-level fix status.
 
 ```c
 hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
-/* Then use as an array element or optional inner: */
-HEGEL_ARRAY (Collection, items, n_items, one_of, 1, 6)
+hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
+HEGEL_STRUCT (Collection,
+    HEGEL_FACET (items_arr, value),
+    HEGEL_FACET (items_arr, size));
+hegel_schema_free (items_arr);
 ```
 
 Picks one of several struct schemas, allocates it, returns a raw
@@ -524,6 +569,13 @@ int len = hegel_shape_array_len (HEGEL_SHAPE_GET (sh, MyStruct, items));
 the struct shape's bindings looking for a match. Returns NULL if
 the offset doesn't correspond to any bound field, or if `sh` is
 not a struct shape.
+
+**Array facets are asymmetric:** when you call
+`hegel_shape_array_len` on an `HEGEL_ARRAY`'s shape, grab the
+`value`-facet slot (the pointer field), not the `size`-facet slot.
+Only the value-facet slot owns the `HEGEL_SHAPE_ARRAY` shape; the
+size-facet slot is a trivial scalar leaf, and `array_len` returns
+0 for non-array shapes.
 
 Named accessors (by field name string) are still on the TODO list
 — see `TODO.md`.

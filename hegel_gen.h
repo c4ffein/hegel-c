@@ -61,6 +61,33 @@
 ** parent; bump its refcount via hegel_schema_ref() before each
 ** extra use.
 **
+** === Composite facets (HEGEL_ARRAY) ===
+**
+** An array produces ONE value per draw but projects it across two
+** struct slots: the element pointer and the length.  Name the array
+** schema, then place each facet individually via HEGEL_FACET — they
+** may live at non-adjacent positions in the parent struct, in any
+** order, and are resolved into one consistent drawn array per
+** struct instance:
+**
+**   hegel_schema_t items_arr =
+**       HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
+**   hegel_schema_t bag_schema = HEGEL_STRUCT (Bag,
+**       HEGEL_INT   (-10, 10),               // unrelated field
+**       HEGEL_FACET (items_arr, value),      // int * slot
+**       HEGEL_FACET (items_arr, size));      // int slot
+**   hegel_schema_free (items_arr);           // release user ref
+**
+** Ordering of the two facets in the HEGEL_STRUCT list must match
+** the struct field order.  Ctx scope is per-struct-instance — two
+** chunks in an array-of-chunks each get an INDEPENDENT draw of any
+** hat their field schema references.  Two facets in the SAME struct
+** share one draw (that's the whole point).
+**
+** HEGEL_FACET bumps source refcount; the caller must keep their own
+** reference until they're done building structs from the hat, then
+** release it via hegel_schema_free.
+**
 ** Notice: no trailing NULL.  The variadic macros inject a sentinel
 ** (H_END) internally, so user code just lists fields.
 */
@@ -68,6 +95,7 @@
 #include "hegel_c.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <assert.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,13 +131,70 @@ typedef enum {
   HEGEL_SCH_FILTER_DOUBLE,
   HEGEL_SCH_FLAT_MAP_DOUBLE,
   HEGEL_SCH_ONE_OF_SCALAR,   /* pick one of several scalar schemas   */
-  HEGEL_SCH_SELF
+  HEGEL_SCH_SELF,
+  HEGEL_SCH_SUBSCHEMA        /* facet leaf: projects one slot of a composite
+                                source schema (e.g. ARRAY's size or value) */
 } hegel_schema_kind;
 
 /* Forward declarations + typedefs so wrapper types can be defined
 ** before the internal struct body. */
-typedef struct hegel_schema hegel_schema;
+typedef struct hegel_schema        hegel_schema;
+typedef struct hegel_schema_facets hegel_schema_facets;
 typedef struct { hegel_schema * _raw; } hegel_schema_t;
+
+/* ================================================================
+** Facets — the "one value, multiple projected slots" mechanism
+** ================================================================
+**
+** Composite schemas (currently HEGEL_ARRAY; future: OPTIONAL, UNION,
+** VARIANT) produce ONE value per draw but project it across multiple
+** struct slots.  E.g. an array produces a (pointer, length) pair.
+**
+** Under the classic inline form, HEGEL_ARRAY(...) occupied two
+** adjacent slots in the parent struct.  Under the facet form, the
+** user names the intermediate array and projects its facets wherever
+** they need to land — non-adjacent layouts supported:
+**
+**     hegel_schema_t hat = HEGEL_ARRAY (int_schema, 0, 10);
+**     hegel_schema_t s = HEGEL_STRUCT (Bag,
+**         HEGEL_INT     (0, 100),
+**         HEGEL_FACET   (hat, size),     // int slot
+**         HEGEL_TEXT    (1, 5),
+**         HEGEL_FACET   (hat, value));   // pointer slot
+**
+** Field names chosen to not collide across kinds:
+**   size   — ARRAY only (length int)
+**   value  — ARRAY / OPTIONAL / VARIANT (data pointer)
+**   tag    — OPTIONAL / UNION / VARIANT (int discriminator)
+**   body   — UNION only (inline case body)
+**
+** Unused fields on a given source kind are `{ ._raw = NULL }`.
+*/
+
+struct hegel_schema_facets {
+  hegel_schema_t size;       /* HEGEL_ARRAY */
+  hegel_schema_t value;      /* HEGEL_ARRAY / HEGEL_OPTIONAL / HEGEL_VARIANT */
+  hegel_schema_t tag;        /* HEGEL_OPTIONAL / HEGEL_UNION / HEGEL_VARIANT */
+  hegel_schema_t body;       /* HEGEL_UNION */
+};
+
+/* Numeric offsets matching the facets struct fields above.  Used as
+** `subschema_def.offset` on HEGEL_SCH_SUBSCHEMA leaves. */
+#define HEGEL_FACET_OFF_SIZE   0
+#define HEGEL_FACET_OFF_VALUE  1
+#define HEGEL_FACET_OFF_TAG    2
+#define HEGEL_FACET_OFF_BODY   3
+
+/* Access macro: each use bumps source->refcount so the returned
+** wrapper holds its own reference.  HEGEL_STRUCT consumes that
+** reference when it stores the wrapper as a child; the user keeps
+** their original `hat` reference and must call hegel_schema_free(hat)
+** once they're done building structs from it.  Runtime assert catches
+** calling this on a non-composite schema (compiles out under
+** -DNDEBUG). */
+#define HEGEL_FACET(s, name) \
+  (assert ((s)._raw != NULL && (s)._raw->facets != NULL), \
+   hegel_schema_ref ((s)._raw->facets->name))
 
 /* ================================================================
 ** Layout entries — the positional API
@@ -175,6 +260,11 @@ hegel_schema_t hegel__inline_ref_check (size_t declared_size,
 struct hegel_schema {
   hegel_schema_kind       kind;
   int                     refcount;
+  /* Optional facets struct — non-null for composite schemas whose
+  ** value projects across multiple slots (see `hegel_schema_facets`
+  ** doc above).  Populated by the composite schema's constructor
+  ** (e.g. `hegel_schema_array`); null for scalar/leaf kinds. */
+  hegel_schema_facets *   facets;
   union {
     struct {
       int               width;
@@ -201,7 +291,6 @@ struct hegel_schema {
       struct hegel_schema * inner;
     }                                                  optional_ptr;
     struct {
-      size_t            len_offset;    /* relative to parent base */
       struct hegel_schema * elem;
       int               min_len;
       int               max_len;
@@ -294,6 +383,15 @@ struct hegel_schema {
     struct {
       struct hegel_schema * target;
     }                                                  self_ref;
+    struct {
+      /* Facet leaf: project one slot of a composite source schema.
+      ** `source` is a raw (non-owning) pointer — the source's
+      ** facets struct holds the owning wrappers.  External copies
+      ** of subschema wrappers bump `source->refcount` to keep the
+      ** source alive for the subschema's lifetime. */
+      struct hegel_schema * source;
+      int                   offset;   /* HEGEL_FACET_OFF_{SIZE,VALUE,TAG,BODY} */
+    }                                                  subschema_def;
   };
 };
 
@@ -442,12 +540,11 @@ hegel_schema_t hegel_schema_text (int min_len, int max_len);
 
 hegel_schema_t hegel_schema_optional_ptr (hegel_schema_t inner);
 
-/* Pure array constructor.  `len_offset` is the byte offset inside
-** the parent struct where the element count will be written.  The
-** array's pointer slot is determined by the enclosing binding
-** (from HEGEL_ARRAY). */
-hegel_schema_t hegel_schema_array (size_t len_offset,
-                                   hegel_schema_t elem,
+/* Array constructor.  Produces a composite schema with `value` and
+** `size` facets; see HEGEL_FACET for how to place those into a parent
+** struct.  Cannot be used as a direct child of HEGEL_STRUCT — see
+** the module-header "Composite facets" section. */
+hegel_schema_t hegel_schema_array (hegel_schema_t elem,
                                    int min_len, int max_len);
 
 hegel_schema_t hegel_schema_array_inline (size_t len_offset,
@@ -682,12 +779,14 @@ hegel_schema_t hegel_schema_self (void);
 #define HEGEL_ONE_OF(...) \
   hegel_schema_one_of_scalar_v ((hegel_schema_t[]){ __VA_ARGS__, H_END })
 
-/* Array: two sub-slots (void* pointer, int count) in the parent.
-** hegel__struct_build detects HEGEL_SCH_ARRAY by kind and hardcodes
-** the second slot to {sizeof(int), _Alignof(int)}, writing the
-** computed length-slot offset back into array_def.len_offset. */
+/* Array: builds an array schema to be named and projected via
+** HEGEL_FACET(hat, value) and HEGEL_FACET(hat, size).  The returned
+** hegel_schema_t cannot be used as a direct child of HEGEL_STRUCT —
+** the layout pass aborts with a diagnostic if you try.  See the
+** "Composite facets" section of the module header for the full
+** usage pattern. */
 #define HEGEL_ARRAY(elem, lo, hi) \
-  hegel_schema_array (0, (elem), (lo), (hi))
+  hegel_schema_array ((elem), (lo), (hi))
 
 #define HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi) \
   hegel_schema_array_inline (0, (elem), (elem_sz), (lo), (hi))

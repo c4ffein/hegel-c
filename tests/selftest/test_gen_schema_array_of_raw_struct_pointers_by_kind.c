@@ -86,8 +86,11 @@ init_schema (void)
   ** to whichever variant was chosen — TypeA, TypeB, or TypeC. */
   hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 
+  hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
   coll_schema = HEGEL_STRUCT (RawCollection,
-      HEGEL_ARRAY (one_of, 1, 6));
+      HEGEL_FACET (items_arr, value),
+      HEGEL_FACET (items_arr, size));
+  hegel_schema_free (items_arr);
 }
 
 /* ---- Test ---- */
