@@ -7,6 +7,52 @@
 Open items after the V0 schema API milestone. For what's already
 done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
+## Active plan — V2 handles, starting with `HEGEL_ARRAY`
+
+**Goal:** introduce "composite schemas that produce one value with
+multiple facets projected into different struct slots."  V1 scope =
+`HEGEL_ARRAY` only.  Prove the mechanic concretely before
+generalizing to optional / union / variant.
+
+### Design (aligned 2026-04-17)
+
+**User-facing API.**  `HEGEL_ARRAY(elem, lo, hi)` returns
+`hegel_array_t *` (heap-allocated).  `h->size` and `h->value` are
+`hegel_schema_t` values that plug into `HEGEL_STRUCT` at any
+position — no longer required to be adjacent.
+
+```c
+hegel_array_t *h = HEGEL_ARRAY(hegel_schema_int_range(0, 100), 0, 10);
+HEGEL_STRUCT(Bag,
+    HEGEL_INT(0, 100),
+    h->size,            // int slot
+    HEGEL_TEXT(1, 5),
+    h->value);          // pointer slot
+```
+
+**Schema-tree representation.**
+- New kind `HEGEL_SCH_SUBSCHEMA`.  Node = `{ source: hegel_schema_t, offset: int }`.
+- `hegel_subschema_t` is just `hegel_schema_t` (same wrapper type; facet-ness is internal kind).
+- Slot size/align derived from offset at layout time.
+
+### Explicitly out of scope for this change
+
+- `HEGEL_COPY` — wait until V1 validates the handle mechanic.
+- Facets for `HEGEL_OPTIONAL` / `HEGEL_UNION` / `HEGEL_VARIANT` —
+  V1.1 once the array pattern is shaken out.
+- Schema/shape merge — exploratory; revisit after V1 lands.
+- `HEGEL_ONE_OF` hardening — cheap and independent, not bundled here.
+
+### Risks / watch for
+
+- **`HEGEL_SELF()` interaction.**  Subschemas of a source that
+  itself contains `HEGEL_SELF()` — does the recursive reference
+  still resolve correctly when viewed through a subschema?
+  Check on first recursive test case.
+- **Shape accessor surface.**  `hegel_shape_array_len(shape_field(sh, N))`
+  must still work when N points at a secondary subschema slot.
+  Decide behavior: error, or transparent forward to primary?
+
 ## rn
 
 - **Harden `HEGEL_ONE_OF`.**  After the primitive-macro refactor,
@@ -171,6 +217,55 @@ alone (matches the rest of the API's transfer-on-pass convention),
 and add an ASan-caught deliberate-misuse selftest that pins the
 current behavior so a future accidental fix doesn't silently change
 it.
+
+## `HEGEL_COPY` for shared-template instantiation
+
+A schema-tree deep-copy: `HEGEL_COPY(s)` returns a fresh independent
+tree with the same shape.  Use case: place the same schema template
+at two sites without the manual `hegel_schema_ref` bookkeeping that
+`HEGEL_INLINE_REF` currently requires — fixes the silent double-free
+footgun from the V2 rethink section above.
+
+Orthogonal to V2 handles: handles solve "shared draw, project
+facets"; copy solves "shared template, independent draws".  Cheap
+O(tree size) at schema-build time, no per-case cost.
+
+**Gotcha to verify before coding:** how `hegel_schema_self()` is
+represented.  If it's a by-name sentinel resolved against the
+enclosing root at draw time, copy is trivial.  If it stores a pointer
+to a specific root, copy needs pointer rewrites during the tree walk.
+
+**Deferred** until V2 handles land.  Validate the broader "composite
+schemas with projected facets" mechanic first — if handles happen
+to subsume this use case, we don't need `HEGEL_COPY` at all.
+
+## Merge schema and shape into a single tree? (exploratory)
+
+Today: schema (immutable description, refcounted, built once) and
+shape (per-run value wrapper, built on draw, owns value memory) are
+separate tree types that mirror each other.
+
+Alternative to ponder: one tree.  Each node carries `(schema_kind +
+schema_args + nullable drawn_state)`.  `drawn_state` is null until
+populated by draw; reset to null at the start of each test case;
+whole tree freed once at end.  The user's phrasing was "two parallel
+arrays at the root, one of pointers to schemas, one of either null
+or pointer to shapes" — same idea expressed as a sparse mirror.
+
+**Plausibly cleaner:** one ownership story, no two-phase allocation,
+no refcount bookkeeping beyond an optional tree-level refcount if we
+want `HEGEL_COPY` to share structure.
+
+**Risks:** much bigger refactor than V2 handles alone; schema becomes
+mutable (fine in fork mode + sequential suite mode, but we lose the
+invariant); every current shape-accessor API (`hegel_shape_tag`,
+`_array_len`, `_is_some`, `_field`) needs re-examination.
+
+**Disposition:** exploratory only, decision deferred.  Do V2 handles
+in the current two-tier model first.  If handles fit naturally there,
+the split is earning its keep.  If they feel forced — uglier draw
+path, extra indirection, awkward ownership — that's the empirical
+signal to revisit this.
 
 ## High-leverage next work
 
@@ -368,22 +463,6 @@ garbage inputs as an orphan.
 - Reproducer kept at
   `tests/irl/scotch/test_array_inline_orphan_repro.c` as a
   hand-runnable regression demo.
-
-**Follow-up to verify (low priority, not blocking):**
-The fix calls `drop(tc)` between `catch_unwind` and
-`resume_unwind` in `run_forked` (`rust-version/src/lib.rs`
-~line 358).  My read is that it's safe because we're in
-normal control flow at that point — `catch_unwind` has
-suspended the unwind, and `resume_unwind` only restarts it
-later.  The original code's "drop tc BEFORE panicking"
-comment is honored because we're not yet panicking when we
-drop.  Empirically, the 750/750 orphan stress test exercises
-this exact code path on every overflow case and shows no
-issue.  But sanity-check against hegeltest's `TestCase::drop`
-semantics if anything weird shows up — the original concern
-was a double-panic abort if drop talks to the hegel server
-during unwind, which catch_unwind should defuse but is worth
-spot-checking.
 
 ### `hegel_draw_regex` fullmatch semantics
 
