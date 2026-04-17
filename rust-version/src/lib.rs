@@ -416,9 +416,23 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
                 };
                 eprintln!("[hegel] case_end #{} {} ({:.60})", id, kind, msg);
             }
-            /* Child is reaped and pipes are closed; drop tc before
-            ** re-raising so hegel's engine handles the discard cleanly
-            ** (dropping TestCase talks to the hegel server). */
+            /* About to re-raise parent_serve's panic via resume_unwind below.
+            ** We're in normal control flow here because catch_unwind above
+            ** converted the panic into Err(panic_info); the unwind is suspended.
+            **
+            ** resume_unwind never returns and restarts unwinding. As the stack
+            ** unwinds this frame, any still-live local gets dropped — and tc is
+            ** the only non-trivial one. If tc's destructor panicked during
+            ** unwind, Rust would abort the process (double-panic).
+            **
+            ** So drop tc here, before resume_unwind, to keep a hypothetical
+            ** drop-panic in normal control flow where it'd propagate as a
+            ** regular panic instead of aborting. In hegeltest 0.4.3 this is
+            ** defense in depth: TestCase has no Drop impl, and the transitive
+            ** Stream::drop just calls Connection::unregister_stream (mutex +
+            ** HashMap::remove, no I/O). Arc<Connection>'s refcount doesn't hit
+            ** zero here because the process-wide HegelSession singleton holds
+            ** another Arc. Re-check this block on hegeltest upgrades. */
             drop(tc);
             std::panic::resume_unwind(panic_info);
         }
@@ -440,9 +454,10 @@ fn run_forked(test_fn: CTestFn, tc: TestCase) {
         tc.assume(false); /* panics, hegel catches and discards */
     }
 
-    /* Drop tc BEFORE panicking on failure — TestCase::drop talks to
-    ** the hegel server, and doing so during panic unwind causes a
-    ** double-panic abort. */
+    /* Drop tc before the panic! below, same rationale as the
+    ** resume_unwind site above: keeps any hypothetical drop-panic in
+    ** normal control flow instead of mid-unwind. With hegeltest 0.4.3
+    ** this is defense in depth — TestCase has no Drop impl. */
     let fail_msg = match result {
         ChildMsg::Ok => None,
         ChildMsg::Fail(msg) => Some(msg),
