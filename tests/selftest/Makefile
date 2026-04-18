@@ -37,7 +37,8 @@ TESTS_PASS = test_pass_simple \
              test_gen_schema_inline_struct \
              test_gen_schema_facets_nonadjacent \
              test_gen_schema_facets_reversed \
-             test_gen_schema_facets_nested
+             test_gen_schema_facets_nested \
+             test_gen_schema_facets_self_recursion
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \

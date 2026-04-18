@@ -18,7 +18,7 @@ Most new code should use the schema API — it handles allocation, span annotati
 - `hegel_gen.h` / `hegel_gen.c` — Schema system (declarations + pure-C implementation). See `docs/schema-api.md` and `docs/patterns.md`.
 - `rust-version/src/lib.rs` — Rust FFI implementation (primitives), compiled to `libhegel_c.a`
 - `rust-version/build.rs` — cc-crate build script that also compiles `hegel_gen.c` into `libhegel_c.a`
-- `tests/selftest/` — 32 self-tests (PASS/FAIL/CRASH) including 9 schema pattern tests
+- `tests/selftest/` — 42 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including 15 schema pattern tests
 - `tests/from-hegel-rust/` — 26 tests ported from hegel-rust
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI)
