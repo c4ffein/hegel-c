@@ -97,6 +97,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <limits.h>
+#include <float.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -503,34 +505,34 @@ hegel_schema_t hegel_schema_ref (hegel_schema_t s);
 ** Schema constructors — integers (pure values, no offset)
 ** ================================================================ */
 
-hegel_schema_t hegel_schema_i8          (void);
+hegel_schema_t hegel_schema_i8          (void);  /* [-128, 127] */
 hegel_schema_t hegel_schema_i8_range    (int64_t lo, int64_t hi);
-hegel_schema_t hegel_schema_i16         (void);
+hegel_schema_t hegel_schema_i16         (void);  /* [-32768, 32767] */
 hegel_schema_t hegel_schema_i16_range   (int64_t lo, int64_t hi);
-hegel_schema_t hegel_schema_i32         (void);
+hegel_schema_t hegel_schema_i32         (void);  /* [INT32_MIN, INT32_MAX] */
 hegel_schema_t hegel_schema_i32_range   (int64_t lo, int64_t hi);
-hegel_schema_t hegel_schema_i64         (void);
+hegel_schema_t hegel_schema_i64         (void);  /* [INT64_MIN, INT64_MAX] */
 hegel_schema_t hegel_schema_i64_range   (int64_t lo, int64_t hi);
-hegel_schema_t hegel_schema_int         (void);
+hegel_schema_t hegel_schema_int         (void);  /* [INT_MIN, INT_MAX] */
 hegel_schema_t hegel_schema_int_range   (int64_t lo, int64_t hi);
-hegel_schema_t hegel_schema_long        (void);
+hegel_schema_t hegel_schema_long        (void);  /* [LONG_MIN, LONG_MAX] */
 hegel_schema_t hegel_schema_long_range  (int64_t lo, int64_t hi);
-hegel_schema_t hegel_schema_u8          (void);
+hegel_schema_t hegel_schema_u8          (void);  /* [0, 255] */
 hegel_schema_t hegel_schema_u8_range    (uint64_t lo, uint64_t hi);
-hegel_schema_t hegel_schema_u16         (void);
+hegel_schema_t hegel_schema_u16         (void);  /* [0, 65535] */
 hegel_schema_t hegel_schema_u16_range   (uint64_t lo, uint64_t hi);
-hegel_schema_t hegel_schema_u32         (void);
+hegel_schema_t hegel_schema_u32         (void);  /* [0, UINT32_MAX] */
 hegel_schema_t hegel_schema_u32_range   (uint64_t lo, uint64_t hi);
-hegel_schema_t hegel_schema_u64         (void);
+hegel_schema_t hegel_schema_u64         (void);  /* [0, UINT64_MAX] */
 hegel_schema_t hegel_schema_u64_range   (uint64_t lo, uint64_t hi);
 
 /* ================================================================
 ** Schema constructors — floats
 ** ================================================================ */
 
-hegel_schema_t hegel_schema_float        (void);
+hegel_schema_t hegel_schema_float        (void);  /* [-FLT_MAX, FLT_MAX] */
 hegel_schema_t hegel_schema_float_range  (double lo, double hi);
-hegel_schema_t hegel_schema_double       (void);
+hegel_schema_t hegel_schema_double       (void);  /* [-DBL_MAX, DBL_MAX] */
 hegel_schema_t hegel_schema_double_range (double lo, double hi);
 
 /* ================================================================
@@ -882,46 +884,59 @@ hegel_shape * hegel_schema_draw_at   (hegel_testcase * tc, void * addr,
 ** be named `tc` (matches existing selftest style).
 **
 **     int x;
-**     HEGEL_DRAW (&x, my_int_schema);           /. scalar, returns NULL  ./
+**     hegel_shape *sh = HEGEL_DRAW (&x, my_int_schema);   /. scalar: leaf shape ./
+**     /. ... use x ... ./
+**     hegel_shape_free (sh);
 **
 **     MyStruct *p;
-**     hegel_shape *sh = HEGEL_DRAW (&p, my_struct_schema);
+**     hegel_shape *sh2 = HEGEL_DRAW (&p, my_struct_schema);
 **     /. ... use p ... ./
-**     hegel_shape_free (sh);
+**     hegel_shape_free (sh2);
 **
 ** The schema is NOT consumed; the caller still owns a reference. */
 #define HEGEL_DRAW(addr, sch) \
   hegel_schema_draw_at ((tc), (addr), (sch))
 
-/* ---- Typed by-value scalar draws ----
+/* ---- Typed scalar by-value draws ----
 **
-** Consume the schema reference (free it internally) and return the
-** drawn scalar by value.  Designed for the inline one-shot style:
+** Direct dispatch to the `hegel_draw_*` primitives in hegel_c.h —
+** no schema allocation, no composition.  Takes range arguments
+** directly (or none, for full-type-range):
 **
-**     int x = HEGEL_DRAW_INT (HEGEL_INT (0, 10));
-**     bool b = HEGEL_DRAW_BOOL (HEGEL_BOOL ());
+**     int    x = HEGEL_DRAW_INT    (0, 10);
+**     int    y = HEGEL_DRAW_INT    ();           /. INT_MIN..INT_MAX  ./
+**     int64_t a = HEGEL_DRAW_I64   (-100, 100);
+**     double d = HEGEL_DRAW_DOUBLE (0.0, 1.0);
+**     bool   b = HEGEL_DRAW_BOOL   ();           /. no range — 0 or 1 ./
 **
-** Because the schema is built + freed per call, prefer these for
-** lightweight scalar schemas.  For reused schemas, hoist and use
-** HEGEL_DRAW (&x, sch) instead.
-**
-** The caller is responsible for matching the schema kind to the
-** macro — e.g. HEGEL_DRAW_INT on a float schema is undefined
-** behavior (same contract as the positional macros inside
-** HEGEL_STRUCT). */
-int      hegel__draw_int_val    (hegel_testcase * tc, hegel_schema_t gen);
-int64_t  hegel__draw_i64_val    (hegel_testcase * tc, hegel_schema_t gen);
-uint64_t hegel__draw_u64_val    (hegel_testcase * tc, hegel_schema_t gen);
-double   hegel__draw_double_val (hegel_testcase * tc, hegel_schema_t gen);
-float    hegel__draw_float_val  (hegel_testcase * tc, hegel_schema_t gen);
-bool     hegel__draw_bool_val   (hegel_testcase * tc, hegel_schema_t gen);
+** For composed scalar schemas (HEGEL_MAP_INT, HEGEL_FILTER_INT,
+** HEGEL_FLAT_MAP_INT, HEGEL_ONE_OF), hoist the schema once and use
+** HEGEL_DRAW (&x, sch) — then hegel_schema_free (sch) when done. */
 
-#define HEGEL_DRAW_INT(sch)    hegel__draw_int_val    ((tc), (sch))
-#define HEGEL_DRAW_I64(sch)    hegel__draw_i64_val    ((tc), (sch))
-#define HEGEL_DRAW_U64(sch)    hegel__draw_u64_val    ((tc), (sch))
-#define HEGEL_DRAW_DOUBLE(sch) hegel__draw_double_val ((tc), (sch))
-#define HEGEL_DRAW_FLOAT(sch)  hegel__draw_float_val  ((tc), (sch))
-#define HEGEL_DRAW_BOOL(sch)   hegel__draw_bool_val   ((tc), (sch))
+#define HEGEL__DRAW_INT_0()       hegel_draw_int    ((tc), INT_MIN,    INT_MAX)
+#define HEGEL__DRAW_INT_2(lo, hi) hegel_draw_int    ((tc), (lo),       (hi))
+#define HEGEL_DRAW_INT(...)       HEGEL__DISPATCH (HEGEL__DRAW_INT,    __VA_ARGS__)
+
+#define HEGEL__DRAW_I64_0()       hegel_draw_i64    ((tc), INT64_MIN,  INT64_MAX)
+#define HEGEL__DRAW_I64_2(lo, hi) hegel_draw_i64    ((tc), (lo),       (hi))
+#define HEGEL_DRAW_I64(...)       HEGEL__DISPATCH (HEGEL__DRAW_I64,    __VA_ARGS__)
+
+#define HEGEL__DRAW_U64_0()       hegel_draw_u64    ((tc), 0,          UINT64_MAX)
+#define HEGEL__DRAW_U64_2(lo, hi) hegel_draw_u64    ((tc), (lo),       (hi))
+#define HEGEL_DRAW_U64(...)       HEGEL__DISPATCH (HEGEL__DRAW_U64,    __VA_ARGS__)
+
+#define HEGEL__DRAW_FLOAT_0()       hegel_draw_float  ((tc), -FLT_MAX, FLT_MAX)
+#define HEGEL__DRAW_FLOAT_2(lo, hi) hegel_draw_float  ((tc), (lo),     (hi))
+#define HEGEL_DRAW_FLOAT(...)       HEGEL__DISPATCH (HEGEL__DRAW_FLOAT, __VA_ARGS__)
+
+#define HEGEL__DRAW_DOUBLE_0()       hegel_draw_double ((tc), -DBL_MAX, DBL_MAX)
+#define HEGEL__DRAW_DOUBLE_2(lo, hi) hegel_draw_double ((tc), (lo),     (hi))
+#define HEGEL_DRAW_DOUBLE(...)       HEGEL__DISPATCH (HEGEL__DRAW_DOUBLE, __VA_ARGS__)
+
+/* Bool has no range — 0-arg form only.  Uses hegel_draw_int (0, 1)
+** under the hood (shrinks to false the same way). */
+#define HEGEL__DRAW_BOOL_0() ((bool)(hegel_draw_int ((tc), 0, 1)))
+#define HEGEL_DRAW_BOOL(...) HEGEL__DISPATCH (HEGEL__DRAW_BOOL, __VA_ARGS__)
 
 void hegel_shape_free  (hegel_shape * s);
 void hegel_schema_free (hegel_schema_t s);

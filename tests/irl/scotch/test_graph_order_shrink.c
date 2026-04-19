@@ -82,13 +82,13 @@ static
 void
 init_schemas (void)
 {
-  hegel_schema_t edge = HEGEL_STRUCT (EdgePair,
+  hegel_schema_t edge_schema = HEGEL_STRUCT (EdgePair,
       HEGEL_INT (0, MAX_VERT - 1),
       HEGEL_INT (0, MAX_VERT - 1));
 
   graph_schema = HEGEL_STRUCT (Graph,
       HEGEL_INT (3, MAX_VERT),
-      HEGEL_ARRAY_INLINE (edge, sizeof (EdgePair), 0, MAX_EDGES));
+      HEGEL_ARRAY_INLINE (edge_schema, sizeof (EdgePair), 0, MAX_EDGES));
 }
 
 /* Build a valid undirected CSR from the logical graph:

@@ -4,11 +4,11 @@
 /*
 ** Test: top-level HEGEL_DRAW + typed by-value scalar draws.
 **
-** Exercises the three patterns that the new top-level entry points
-** support, described in TODO_RN.md:
+** Exercises the three patterns that the top-level entry points
+** support:
 **
-**   1. HEGEL_DRAW_INT (HEGEL_INT (lo, hi))       — inline one-shot,
-**      schema built + freed per call, returns the int by value.
+**   1. HEGEL_DRAW_INT (lo, hi)                   — direct primitive
+**      dispatch, no schema allocation, returns by value.
 **   2. HEGEL_DRAW (&x, int_schema)               — scalar written at
 **      caller address, reused schema stays alive.
 **   3. MyStruct *p; HEGEL_DRAW (&p, struct_sch)  — allocating path,
@@ -54,7 +54,7 @@ void
 testDrawIntInline (
 hegel_testcase *            tc)
 {
-  int                  x = HEGEL_DRAW_INT (HEGEL_INT (0, 10));
+  int                  x = HEGEL_DRAW_INT (0, 10);
 
   HEGEL_ASSERT (check_in_range (x, 0, 10),
                 "HEGEL_DRAW_INT produced out-of-range %d", x);
@@ -67,9 +67,9 @@ void
 testDrawTypedInline (
 hegel_testcase *            tc)
 {
-  int64_t              a = HEGEL_DRAW_I64    (HEGEL_I64 (-1000, 1000));
-  double               d = HEGEL_DRAW_DOUBLE (HEGEL_DOUBLE (0.0, 1.0));
-  bool                 b = HEGEL_DRAW_BOOL   (HEGEL_BOOL ());
+  int64_t              a = HEGEL_DRAW_I64    (-1000, 1000);
+  double               d = HEGEL_DRAW_DOUBLE (0.0, 1.0);
+  bool                 b = HEGEL_DRAW_BOOL   ();
 
   HEGEL_ASSERT (a >= -1000 && a <= 1000, "i64 out of range: %ld", (long) a);
   HEGEL_ASSERT (d >= 0.0 && d <= 1.0,    "double out of range: %f", d);

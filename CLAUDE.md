@@ -66,7 +66,7 @@ For standalone compilation: `gcc -O2 -I. -funwind-tables -fexceptions -o test te
 
 **Legacy combinator generators:** `hegel_gen_int`, `_i64`, `_u64`, `_float`, `_double`, `_bool`, `_text`, `_regex`, `_one_of`, `_sampled_from`, `_optional`, `_map_*`, `_filter_*`, `_flat_map_*`. These predate the schema API and overlap with it; prefer `hegel_gen.h` for new code.
 
-**Other:** `hegel_note(tc, msg)` (debug on final replay), `hegel_assume(tc, cond)`, `hegel_fail(msg)`, `HEGEL_ASSERT(cond, fmt, ...)`
+**Other:** `hegel_note(tc, msg)` (debug on final replay), `hegel_assume(tc, cond)`, `hegel_fail(msg)` (code-under-test broken), `hegel_health_fail(msg)` (test-setup broken — emits "Health check failure:" prefix), `HEGEL_ASSERT(cond, fmt, ...)`
 
 ## Schema API (`hegel_gen.h`)
 
@@ -112,9 +112,12 @@ The schema system lets tests describe C structs declaratively and get generation
 The positional form means **the user writes a flat list of generators in the same order as the struct fields**, with matching types. The layout pass computes byte offsets the same way the C compiler does and asserts `sizeof(T)` matches. If a field is reordered or its type changes, the assert fires at schema-build time.
 
 **Draw / free:**
-- `hegel_shape *hegel_schema_draw(tc, schema, (void**)&ptr)` — allocates, fills, returns shape
-- `hegel_shape_free(sh)` — walks shape tree, frees value memory + shape
+- `hegel_shape *hegel_schema_draw(tc, schema, (void**)&ptr)` — struct-oriented: allocates, fills, returns shape
+- `HEGEL_DRAW(&addr, sch)` — unified write-at-address entry point. STRUCT kind allocates and writes the pointer at `*addr`; scalar / text / optional / union / variant write the value directly at `addr`. Returns a `hegel_shape *` (leaf for scalars, real tree for composites) — always free it. ARRAY / ARRAY_INLINE / SELF / ONE_OF_STRUCT abort at the top level (they only compose inside a struct). Schema is not consumed.
+- `HEGEL_DRAW_INT(lo, hi)` / `HEGEL_DRAW_INT()` (full range) — dispatches directly to the `hegel_draw_int` primitive. Same `(lo, hi)` / `()` overloading for `_I64` / `_U64` / `_DOUBLE` / `_FLOAT`. `HEGEL_DRAW_BOOL()` takes no args. No schema allocation. For composed scalar schemas (`HEGEL_MAP_INT`, `HEGEL_FILTER_INT`, `HEGEL_FLAT_MAP_INT`, `HEGEL_ONE_OF`), hoist and use `HEGEL_DRAW(&x, sch)`. No `HEGEL_DRAW_ARRAY` by design.
+- `hegel_shape_free(sh)` — walks shape tree, frees value memory + shape (NULL-safe)
 - `hegel_schema_free(schema)` — refcount-decrement, free schema at zero
+- `HEGEL_DEFAULT_MAX_DEPTH = 50` — recursion cap for `HEGEL_SELF`. Exhaustion calls `hegel_health_fail`. Override via `hegel_schema_draw_n` / `hegel_schema_draw_at_n`.
 
 **Shape accessors** (for untagged unions, parallel-length patterns):
 - `hegel_shape_tag(sh)` — variant index
