@@ -7,6 +7,40 @@
 Open items after the V0 schema API milestone. For what's already
 done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
 
+## From FP
+
+- lance combien de fois? parametrisable ou?
+- HEGEL_SELF => prevenir des le debut, parametriser proba
+- link hegel cpp now its out
+- HEGEL protocol?
+- dependency typo?
+- bien preciser version de scotch
+- verifier que les liens sont bons dans le README
+--- => schema_api
+- pas d espace avant les parentheses ouvrantes? un petit linter?
+- THREE LAYERS => expliciter que HEGEL_ => shapes
+  - preciser DRAW => shape ou val
+- free pas en macro? bizarre... free schema vs shape => il a raison, j ai toujours pas clean mdr
+- all public api vs all the public api(s) ???
+- hegel_schema_t => expliquer que structures opaques, un peu moins expliciter mais linker vers code
+  - preciser que runtime fait des checks, preciser lesquels?
+- voir les FAST INT, mecanisme de promotion / acceleration => par le choix du compilo?.. comment gerer?
+- dans schema api, facet introduites avant d etres definies?
+- hegel union, untagged... => expliquer au bon moment?...
+  - degager ce dont j ai plus besoin avec les facettes?...
+- scotch src libscotch arch.h => pointer vers classe
+  - classe a des pointeurs de fonction qui permettent de lire l union
+  - arch_mesh_blabla pour voir comment c est instancier
+- But ? => However
+- rappeler les types dans la description des union?
+- C++ => check si moyen de forcer pas de reour a la ligne entre + et +
+- directement lier vers les array, int etc plus tot dans le doc? si besoin?
+- lo et hi? comment gerer le min/max? documenter? je pense que bien gerer mais verifier code + expliciter
+  - en particulier, comment je gere le u64? => expliciter que bien fait
+- Text => review de mon cote
+- metre des regles locales pour une struct? via un callbak? regenerer tant que pas A et B ou blabla?
+- on a skip aux arrays => FACET pas clair! mieux expliquer :)
+
 ## V2 handles — V1 scope landed 2026-04-17
 
 **Status:** `HEGEL_ARRAY` facets model is in.  `HEGEL_ARRAY(elem, lo,
