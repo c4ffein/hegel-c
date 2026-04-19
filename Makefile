@@ -9,7 +9,7 @@ GITHUB_REPOS = hegeldev/hegel-rust \
 
 GITLAB_REPOS = scotch/scotch
 
-.PHONY: help inspiration clean-inspiration selftest-% from-hegel-rust-% scotch-% mpi-% bench-%
+.PHONY: help inspiration clean-inspiration docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -35,6 +35,13 @@ help:
 	@echo "  make scotch-test-deb          Run Scotch tests with system libscotch-dev (CI)"
 	@echo "  make mpi-test                 Run MPI tests (requires mpicc/mpiexec)"
 	@echo "  make bench-bench              Run fork-vs-nofork benchmarks (see docs/benchmarking.md)"
+	@echo "  make docs-check               Verify transcluded snippets in docs/*.md match source"
+	@echo "  make docs-fix                 Regenerate transcluded snippets in place"
+	@echo ""
+	@echo "Meta target:"
+	@echo "  make test                     Run the four always-available suites:"
+	@echo "                                docs-check + docs-test + selftest-test + from-hegel-rust-test"
+	@echo "                                (mpi-test and scotch-test need optional deps — run separately)"
 	@echo ""
 	@echo "Sub-Makefile help:"
 	@echo "  make selftest-help"
@@ -69,6 +76,17 @@ inspiration:
 clean-inspiration:
 	rm -rf $(INSPIRATION_DIR)
 
+docs-check:
+	python3 scripts/check_doc_includes.py
+
+docs-fix:
+	python3 scripts/check_doc_includes.py --fix
+
+test: docs-check
+	$(MAKE) -C tests/docs test
+	$(MAKE) -C tests/selftest test
+	$(MAKE) -C tests/from-hegel-rust test
+
 selftest-%:
 	$(MAKE) -C tests/selftest $*
 
@@ -83,3 +101,6 @@ mpi-%:
 
 bench-%:
 	$(MAKE) -C tests/bench $*
+
+docs-%:
+	$(MAKE) -C tests/docs $*
