@@ -95,6 +95,7 @@
 #include "hegel_c.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <assert.h>
 
 #ifdef __cplusplus
@@ -820,13 +821,107 @@ hegel_schema_t hegel__variant_make (hegel_schema_t * case_list);
 ** Draw and free
 ** ================================================================ */
 
-#define HEGEL_DEFAULT_MAX_DEPTH 5
+/* Default recursion cap for hegel_schema_draw / _at.  Used to bound
+** HEGEL_SELF chains when the schema's own termination probability
+** would otherwise let a draw recurse indefinitely.
+**
+** Choosing this value is tricky because HEGEL_SELF expands to a 50/50
+** HEGEL_OPTIONAL, and recursive schemas with branching factor ≥ 2
+** (e.g. binary trees with left + right self-references) have CRITICAL
+** branching under uniform 50/50 — a non-trivial fraction of draws
+** reach arbitrary depth by design.  That's why healthy tree tests
+** routinely hit the bound; the bound acts as the actual terminator.
+**
+** 50 is the empirical value at which the selftest's binary-tree
+** property test passes reliably (>1000 consecutive runs without a
+** depth-exhaustion health fail).  Users who build schemas with lower
+** branching (e.g. linear chains via single HEGEL_SELF) can use
+** smaller values; heavy branching may need higher.  Pass a custom
+** max_depth to hegel_schema_draw_n / hegel_schema_draw_at_n. */
+#define HEGEL_DEFAULT_MAX_DEPTH 50
 
 hegel_shape * hegel_schema_draw_n (hegel_testcase * tc, hegel_schema_t gen,
                                    void ** out, int max_depth);
 
 hegel_shape * hegel_schema_draw   (hegel_testcase * tc, hegel_schema_t gen,
                                    void ** out);
+
+/* Unified write-at-address entry point.  Dispatches on schema kind:
+**
+**   STRUCT:           allocates, writes the struct pointer at `*addr`,
+**                     returns the owning SHAPE_STRUCT.  Same semantics
+**                     as hegel_schema_draw but with `void *` instead of
+**                     `void **` out-parameter — caller passes `&p`
+**                     where `p` is `StructT *`.
+**
+**   Scalar / text / optional / union / variant kinds:
+**                     writes the drawn value directly at `addr` (no
+**                     allocation for pure scalars).  Returns a shape
+**                     for bookkeeping (informational leaf for
+**                     scalars; real tree for composites).
+**
+**   ARRAY / ARRAY_INLINE / SELF / ONE_OF_STRUCT / SUBSCHEMA:
+**                     aborted — these kinds only make sense inside a
+**                     parent struct.  See the block comment in
+**                     hegel_gen.c (hegel_schema_draw_at_n) for why.
+**
+** Does NOT consume the schema reference — caller keeps ownership and
+** must still call hegel_schema_free when done with the schema.
+**
+** Typical usage via the HEGEL_DRAW macro below, which captures `tc`
+** from the enclosing scope. */
+hegel_shape * hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
+                                      hegel_schema_t gen, int max_depth);
+hegel_shape * hegel_schema_draw_at   (hegel_testcase * tc, void * addr,
+                                      hegel_schema_t gen);
+
+/* ---- HEGEL_DRAW macro ----
+**
+** Shorthand for `hegel_schema_draw_at`.  Captures `tc` from the
+** enclosing scope by convention — the test function parameter must
+** be named `tc` (matches existing selftest style).
+**
+**     int x;
+**     HEGEL_DRAW (&x, my_int_schema);           /. scalar, returns NULL  ./
+**
+**     MyStruct *p;
+**     hegel_shape *sh = HEGEL_DRAW (&p, my_struct_schema);
+**     /. ... use p ... ./
+**     hegel_shape_free (sh);
+**
+** The schema is NOT consumed; the caller still owns a reference. */
+#define HEGEL_DRAW(addr, sch) \
+  hegel_schema_draw_at ((tc), (addr), (sch))
+
+/* ---- Typed by-value scalar draws ----
+**
+** Consume the schema reference (free it internally) and return the
+** drawn scalar by value.  Designed for the inline one-shot style:
+**
+**     int x = HEGEL_DRAW_INT (HEGEL_INT (0, 10));
+**     bool b = HEGEL_DRAW_BOOL (HEGEL_BOOL ());
+**
+** Because the schema is built + freed per call, prefer these for
+** lightweight scalar schemas.  For reused schemas, hoist and use
+** HEGEL_DRAW (&x, sch) instead.
+**
+** The caller is responsible for matching the schema kind to the
+** macro — e.g. HEGEL_DRAW_INT on a float schema is undefined
+** behavior (same contract as the positional macros inside
+** HEGEL_STRUCT). */
+int      hegel__draw_int_val    (hegel_testcase * tc, hegel_schema_t gen);
+int64_t  hegel__draw_i64_val    (hegel_testcase * tc, hegel_schema_t gen);
+uint64_t hegel__draw_u64_val    (hegel_testcase * tc, hegel_schema_t gen);
+double   hegel__draw_double_val (hegel_testcase * tc, hegel_schema_t gen);
+float    hegel__draw_float_val  (hegel_testcase * tc, hegel_schema_t gen);
+bool     hegel__draw_bool_val   (hegel_testcase * tc, hegel_schema_t gen);
+
+#define HEGEL_DRAW_INT(sch)    hegel__draw_int_val    ((tc), (sch))
+#define HEGEL_DRAW_I64(sch)    hegel__draw_i64_val    ((tc), (sch))
+#define HEGEL_DRAW_U64(sch)    hegel__draw_u64_val    ((tc), (sch))
+#define HEGEL_DRAW_DOUBLE(sch) hegel__draw_double_val ((tc), (sch))
+#define HEGEL_DRAW_FLOAT(sch)  hegel__draw_float_val  ((tc), (sch))
+#define HEGEL_DRAW_BOOL(sch)   hegel__draw_bool_val   ((tc), (sch))
 
 void hegel_shape_free  (hegel_shape * s);
 void hegel_schema_free (hegel_schema_t s);

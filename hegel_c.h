@@ -170,6 +170,38 @@ void hegel_fail (const char * msg);
 /* Assert a condition — if false, fails with message and triggers shrinking */
 void hegel_assert (int condition, const char * msg);
 
+/* Emit a HEALTH CHECK failure — a different kind of failure from
+** hegel_fail:
+**
+**   hegel_fail         → the CODE UNDER TEST is broken.  Shrink, show
+**                        the user a minimal counterexample.
+**   hegel_health_fail  → the TEST SETUP is broken (e.g. the schema's
+**                        recursion probabilities mean every draw hits
+**                        the depth bound).  The user needs to fix the
+**                        test, not the code.  Shrinking shouldn't add
+**                        signal; the problem is invariant across
+**                        inputs.
+**
+** Emits a message prefixed with "Health check failure: " so downstream
+** tooling (CI filters, the selftest Makefile's TESTS_HEALTH category)
+** can distinguish health issues from real property failures.
+**
+** LIMITATION (hegel-c v0, Rust-bound via hegeltest 0.4.3):
+**
+** The underlying hegeltest crate has no public API for a no-shrink
+** failure.  So for now hegel_health_fail still goes through the
+** normal fail+shrink path — but because every shrunk variant also
+** trips the same health-fail condition, shrinking converges on the
+** same message and the user-visible output is correct.  Only cost
+** is wasted shrinking cycles on a failure path that should already
+** be rare in well-shaped tests.
+**
+** A future pure-C hegel binding (speaking the hegeltest wire
+** protocol directly, no Rust intermediary) will make this emit a
+** true "stop the run, do not shrink" signal.  The C API shape stays
+** identical — implementation will change under the hood. */
+void hegel_health_fail (const char * msg);
+
 /*
 ** Convenience macro: HEGEL_ASSERT(cond, fmt, ...) formats a message and
 ** calls hegel_fail. Use this instead of assert() in hegel test functions.

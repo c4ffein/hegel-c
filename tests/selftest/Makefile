@@ -38,7 +38,8 @@ TESTS_PASS = test_pass_simple \
              test_gen_schema_facets_nonadjacent \
              test_gen_schema_facets_reversed \
              test_gen_schema_facets_nested \
-             test_gen_schema_facets_self_recursion
+             test_gen_schema_facets_self_recursion \
+             test_gen_schema_top_level_draw
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -64,7 +65,8 @@ TESTS_CRASH = test_crash_segfault \
 TESTS_HEALTH = test_filter_too_much \
                test_filter_too_much_suite \
                test_overflow_too_much \
-               test_overflow_too_much_suite
+               test_overflow_too_much_suite \
+               test_gen_schema_depth_health
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)
 

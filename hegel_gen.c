@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <limits.h>
 #include <float.h>
 
@@ -1473,7 +1474,19 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
       present = hegel_draw_int (tc, 0, 1);
 
-      if (present && depth > 0) {
+      if (present && depth == 0) {
+        /* The draw *wanted* to recurse but the depth bound stops it.
+        ** That's a signal the schema's termination probability is too
+        ** low (or max_depth is too shallow) — treat as a health check
+        ** failure rather than silently truncating. */
+        hegel_health_fail ("max recursion depth reached — raise "
+                           "max_depth via hegel_schema_draw_n, or "
+                           "adjust schema so recursion terminates "
+                           "earlier");
+        /* unreachable */
+      }
+
+      if (present) {
         void * child;
         shape->optional_shape.inner =
             hegel__draw_alloc (tc, gen->optional_ptr.inner, &child,
@@ -1969,7 +1982,18 @@ hegel__draw_array_standalone (hegel_testcase * tc, hegel_schema * src,
 
       hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
       present = hegel_draw_int (tc, 0, 1);
-      if (present && depth > 0) {
+
+      if (present && depth == 0) {
+        /* Array element wanted to recurse but depth bound stopped it.
+        ** Same health-check semantics as the field-level path above. */
+        hegel_health_fail ("max recursion depth reached in array "
+                           "element — raise max_depth via "
+                           "hegel_schema_draw_n, or adjust schema so "
+                           "recursion terminates earlier");
+        /* unreachable */
+      }
+
+      if (present) {
         void * child;
         opt_sh->optional_shape.inner =
             hegel__draw_alloc (tc, elem->optional_ptr.inner, &child,
@@ -2022,6 +2046,194 @@ hegel_shape *
 hegel_schema_draw (hegel_testcase * tc, hegel_schema_t gen, void ** out)
 {
   return (hegel_schema_draw_n (tc, gen, out, HEGEL_DEFAULT_MAX_DEPTH));
+}
+
+/* ---- Unified top-level entry: write at caller address ------------
+**
+** One signature for every kind.  Semantics branch on schema kind:
+**
+**   STRUCT:            allocate, fill, write the pointer at *addr,
+**                      return a SHAPE_STRUCT that owns the allocation.
+**   INTEGER / FLOAT /
+**   TEXT / REGEX /
+**   MAP_* / FILTER_* /
+**   FLAT_MAP_* /
+**   ONE_OF_SCALAR /
+**   OPTIONAL_PTR /
+**   UNION / _UNTAGGED /
+**   VARIANT:           write the drawn value (scalar, string pointer,
+**                      variant cluster, etc.) at `addr`; return shape
+**                      for scalars (informational leaf) or composite
+**                      shape for compound kinds.  Scalars write by
+**                      value — no allocation, no further free needed
+**                      beyond the returned leaf shape.
+**
+** Kinds explicitly rejected at top level (abort with a diagnostic):
+**
+**   ARRAY:             needs two projected slots (value + size) via
+**                      HEGEL_FACET in a parent struct; no sensible
+**                      top-level form.
+**   ARRAY_INLINE:      len_offset is relative to a parent struct; at
+**                      top level it would collide with the pointer
+**                      slot at offset 0.  Wrap in a struct.
+**   SELF:              only meaningful inside a recursive struct.
+**   ONE_OF_STRUCT:     intended as an ARRAY element or OPTIONAL inner.
+**   SUBSCHEMA:         requires the per-struct facet ctx.  Unreachable
+**                      from top level — wrap the host composite in a
+**                      parent struct that uses HEGEL_FACET.
+*/
+
+hegel_shape *
+hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
+                        hegel_schema_t gen, int max_depth)
+{
+  hegel_schema * g = gen._raw;
+
+  if (g == NULL || addr == NULL)
+    return (NULL);
+
+  switch (g->kind) {
+
+    case HEGEL_SCH_STRUCT: {
+      /* Allocating path — identical to hegel_schema_draw's existing
+      ** semantics.  The caller's addr is treated as `void **` because
+      ** what lands there is a pointer to the allocation. */
+      void *         ptr = NULL;
+      hegel_shape *  sh;
+      sh = hegel__draw_struct (tc, g, &ptr, max_depth);
+      *(void **) addr = ptr;
+      return (sh);
+    }
+
+    case HEGEL_SCH_INTEGER:
+    case HEGEL_SCH_FLOAT:
+    case HEGEL_SCH_TEXT:
+    case HEGEL_SCH_REGEX:
+    case HEGEL_SCH_OPTIONAL_PTR:
+    case HEGEL_SCH_UNION:
+    case HEGEL_SCH_UNION_UNTAGGED:
+    case HEGEL_SCH_VARIANT:
+    case HEGEL_SCH_MAP_INT:
+    case HEGEL_SCH_FILTER_INT:
+    case HEGEL_SCH_FLAT_MAP_INT:
+    case HEGEL_SCH_MAP_I64:
+    case HEGEL_SCH_FILTER_I64:
+    case HEGEL_SCH_FLAT_MAP_I64:
+    case HEGEL_SCH_MAP_DOUBLE:
+    case HEGEL_SCH_FILTER_DOUBLE:
+    case HEGEL_SCH_FLAT_MAP_DOUBLE:
+    case HEGEL_SCH_ONE_OF_SCALAR:
+      /* Direct write at addr.  No facet ctx — SUBSCHEMA can't be
+      ** reached from these kinds, so passing NULL is safe. */
+      return (hegel__draw_field (tc, g, addr, 0, max_depth, NULL));
+
+    case HEGEL_SCH_ARRAY:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_ARRAY cannot be drawn "
+                    "at top level — use HEGEL_FACET(hat, value) + "
+                    "HEGEL_FACET(hat, size) inside a parent struct.");
+      break;
+
+    case HEGEL_SCH_ARRAY_INLINE:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_ARRAY_INLINE cannot be "
+                    "drawn at top level — it needs a parent struct for "
+                    "its length slot.  Wrap it in HEGEL_STRUCT.");
+      break;
+
+    case HEGEL_SCH_SELF:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_SELF is only valid "
+                    "inside a recursive struct schema.");
+      break;
+
+    case HEGEL_SCH_ONE_OF_STRUCT:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_ONE_OF_STRUCT is a "
+                    "pointer-producing element schema — use it as an "
+                    "HEGEL_ARRAY element or inside HEGEL_OPTIONAL.");
+      break;
+
+    case HEGEL_SCH_SUBSCHEMA:
+      hegel__abort ("hegel_schema_draw_at: SUBSCHEMA facet leaf requires "
+                    "a parent struct's facet ctx — unreachable at top "
+                    "level.");
+      break;
+  }
+
+  return (NULL);
+}
+
+hegel_shape *
+hegel_schema_draw_at (hegel_testcase * tc, void * addr, hegel_schema_t gen)
+{
+  return (hegel_schema_draw_at_n (tc, addr, gen, HEGEL_DEFAULT_MAX_DEPTH));
+}
+
+/* ---- Typed by-value scalar draws ---------------------------------
+**
+** These consume the schema reference (free it on return), draw a
+** single scalar of the matching C type, and return it by value.
+** Intended for the `int x = HEGEL_DRAW_INT (HEGEL_INT (0, 10));`
+** one-shot style where the schema is built inline and thrown away.
+**
+** If you reuse a schema across many draws, prefer HEGEL_DRAW (&x, sch)
+** which does NOT consume the schema. */
+
+int
+hegel__draw_int_val (hegel_testcase * tc, hegel_schema_t gen)
+{
+  int result = 0;
+  hegel_shape * sh = hegel_schema_draw_at (tc, &result, gen);
+  hegel_shape_free (sh);
+  hegel_schema_free (gen);
+  return (result);
+}
+
+int64_t
+hegel__draw_i64_val (hegel_testcase * tc, hegel_schema_t gen)
+{
+  int64_t result = 0;
+  hegel_shape * sh = hegel_schema_draw_at (tc, &result, gen);
+  hegel_shape_free (sh);
+  hegel_schema_free (gen);
+  return (result);
+}
+
+uint64_t
+hegel__draw_u64_val (hegel_testcase * tc, hegel_schema_t gen)
+{
+  uint64_t result = 0;
+  hegel_shape * sh = hegel_schema_draw_at (tc, &result, gen);
+  hegel_shape_free (sh);
+  hegel_schema_free (gen);
+  return (result);
+}
+
+double
+hegel__draw_double_val (hegel_testcase * tc, hegel_schema_t gen)
+{
+  double result = 0.0;
+  hegel_shape * sh = hegel_schema_draw_at (tc, &result, gen);
+  hegel_shape_free (sh);
+  hegel_schema_free (gen);
+  return (result);
+}
+
+float
+hegel__draw_float_val (hegel_testcase * tc, hegel_schema_t gen)
+{
+  float result = 0.0f;
+  hegel_shape * sh = hegel_schema_draw_at (tc, &result, gen);
+  hegel_shape_free (sh);
+  hegel_schema_free (gen);
+  return (result);
+}
+
+bool
+hegel__draw_bool_val (hegel_testcase * tc, hegel_schema_t gen)
+{
+  uint8_t result = 0;
+  hegel_shape * sh = hegel_schema_draw_at (tc, &result, gen);
+  hegel_shape_free (sh);
+  hegel_schema_free (gen);
+  return (result != 0);
 }
 
 /* ================================================================

@@ -737,6 +737,69 @@ pub unsafe extern "C-unwind" fn hegel_assert(
     }
 }
 
+/// Emit a *health-check* failure — distinct from hegel_fail.
+///
+/// Semantics:
+///   hegel_fail         → the CODE UNDER TEST is broken; shrink and
+///                        show the user a minimal counterexample.
+///   hegel_health_fail  → the TEST SETUP is broken (e.g. the schema's
+///                        recursion probabilities mean every draw hits
+///                        the depth bound); don't shrink — just report.
+///
+/// LIMITATION (hegel-c v0, Rust-bound via hegeltest 0.4.3):
+///
+/// hegeltest 0.4.3 has **no public API** for emitting a "stop, don't
+/// shrink" signal from a test function.  The two internal sentinel
+/// strings that would suppress shrinking (`ASSUME_FAIL_STRING`,
+/// `STOP_TEST_STRING`) are `pub(crate)` and cause cases to be
+/// *discarded* rather than *failed* — wrong semantics for a health
+/// check, which must halt the test run.
+///
+/// So this function currently takes the pragmatic path:
+///
+///   1. Prefix the message with `"Health check failure: "`.
+///   2. Route through the same mechanism as hegel_fail (MSG_FAIL in
+///      fork mode; panic in nofork mode).
+///   3. Shrinking DOES run — but because every shrunk case also trips
+///      the same health-fail path, shrinking converges on the same
+///      message.  The final user-visible output is correct, and
+///      downstream tooling (e.g. the Makefile TESTS_HEALTH category)
+///      grepping stderr for `"Health check failure"` matches as
+///      expected.  Cost: some wasted shrinking cycles.
+///
+/// A proper fix requires one of:
+///   - hegeltest exposing a public `fail_health_check` API upstream,
+///   - or a pure-C hegel binding that speaks the hegeltest wire
+///     protocol directly (skips the Rust crate altogether).  In
+///     either case the C surface `hegel_health_fail` stays identical
+///     — only the implementation changes.
+///
+/// # Safety
+/// `msg` must be a valid null-terminated C string, or NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn hegel_health_fail(msg: *const c_char) {
+    let message = if msg.is_null() {
+        "hegel_health_fail called".to_string()
+    } else {
+        unsafe { CStr::from_ptr(msg) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let prefixed = format!("Health check failure: {}", message);
+
+    if unsafe { IN_FORK_CHILD } {
+        let msg_bytes = prefixed.as_bytes();
+        let len = msg_bytes.len() as u32;
+        let fd = unsafe { FORK_REQ_WR };
+        pipe_write_all(fd, &[MSG_FAIL]);
+        pipe_write_all(fd, &len.to_le_bytes());
+        pipe_write_all(fd, msg_bytes);
+        unsafe { libc::_exit(1); }
+    }
+
+    panic!("{}", prefixed);
+}
+
 /// Draw a random integer in [min_val, max_val].
 ///
 /// # Safety
