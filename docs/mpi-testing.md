@@ -50,6 +50,7 @@ See `tests/mpi/test_mpi_spawn.c` for the full working example.
 **Draw all parameters BEFORE spawning.**  All `hegel_draw_*` calls
 should happen before `MPI_Init` and `MPI_Comm_spawn`:
 
+<!-- /ignore mpi-pattern: distilled illustration of "draw before spawn" rule; real example is tests/mpi/test_mpi_spawn.c -->
 ```c
 static void test_fn(hegel_testcase *tc) {
     // GOOD: draw first, spawn second
@@ -74,6 +75,7 @@ Why:
 single value and multiply by rank, you're testing arithmetic, not MPI.
 Draw N independent values and scatter them:
 
+<!-- /ignore mpi-pattern: distilled per-rank draw idiom; real example is tests/mpi/test_mpi_spawn.c -->
 ```c
 int vals[N_RANKS];
 for (int i = 0; i < N_RANKS; i++)
@@ -93,6 +95,7 @@ intercommunicator.  OpenMPI 5.x has bugs with collectives (`MPI_Bcast`,
 mode — they hang or exit with code 13.  Merging into an intracommunicator
 fixes it:
 
+<!-- /ignore mpi-pattern: intercomm merge illustration with parent/worker annotations; real example is tests/mpi/test_mpi_spawn.c -->
 ```c
 MPI_Comm intercomm, merged;
 MPI_Comm_spawn(self_path, MPI_ARGV_NULL, N_WORKERS,

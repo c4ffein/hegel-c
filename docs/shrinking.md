@@ -97,18 +97,20 @@ The test lives at
 
 ### Step 1: write a logical input type
 
+<!-- /include tests/irl/scotch/test_graph_order_shrink.c:65-74 -->
 ```c
 typedef struct EdgePair {
-  int u;
-  int v;
+  int                 u;
+  int                 v;
 } EdgePair;
 
 typedef struct Graph {
-  int          nvert;
-  EdgePair *   edges;
-  int          nedges;
+  int                 nvert;
+  EdgePair *          edges;
+  int                 nedges;
 } Graph;
 ```
+<!-- /endinclude -->
 
 A graph is a vertex count plus a list of undirected edges. Note
 that this is the **logical** input — how we want hegel to think
@@ -116,15 +118,23 @@ about graphs — not the CSR representation Scotch wants.
 
 ### Step 2: declare the schema
 
-```c
-graph_schema = HEGEL_STRUCT (Graph,
-    HEGEL_INT (3, 20),
-    HEGEL_ARRAY_INLINE (edge_schema, sizeof (EdgePair), 0, 30));
-```
+where `MAX_VERT = 20` and `MAX_EDGES = 30`:
 
-The schema generates graphs with 3–20 vertices and 0–30 edges.
-We deliberately keep the ranges small so that shrunken
-counterexamples are easy to read.
+<!-- /include tests/irl/scotch/test_graph_order_shrink.c:85-91 -->
+```c
+  hegel_schema_t edge_schema = HEGEL_STRUCT (EdgePair,
+      HEGEL_INT (0, MAX_VERT - 1),
+      HEGEL_INT (0, MAX_VERT - 1));
+
+  graph_schema = HEGEL_STRUCT (Graph,
+      HEGEL_INT (3, MAX_VERT),
+      HEGEL_ARRAY_INLINE (edge_schema, sizeof (EdgePair), 0, MAX_EDGES));
+```
+<!-- /endinclude -->
+
+The schema generates graphs with 3–20 vertices and 0–30 edges,
+with edge endpoints drawn in `[0, nvert)`.  Ranges deliberately
+small so that shrunken counterexamples are easy to read.
 
 ### Step 3: write a property
 
@@ -132,6 +142,7 @@ The property is: **`SCOTCH_graphOrder` must produce a valid
 permutation of `[0, nvert)`** — every value in range, no
 duplicates, all positions written.
 
+<!-- /ignore worked-example: Scotch-reducer narrative step with inline prose placeholders (...) and (/* out of range, fail */) -->
 ```c
 SCOTCH_graphInit (&grafdat);
 SCOTCH_graphBuild (&grafdat, ...);
@@ -159,6 +170,7 @@ write stays as `0xBBBBBBBB`, which is detectably out of range.
 
 This is the bit that makes the demo useful:
 
+<!-- /ignore worked-example: Scotch-reducer narrative step with inline prose placeholder (/* ... append ... */) -->
 ```c
 char note_buf[512];
 snprintf (note_buf, sizeof (note_buf),
@@ -247,6 +259,7 @@ the dangerous operation, with a description of the input shape.
 It only prints on the final replay, so generation-time output is
 clean.
 
+<!-- /ignore illustration: crash-prone test pattern, generic placeholder names -->
 ```c
 hegel_note (tc, "input shape: ...");
 some_function_that_may_crash (input);
@@ -260,6 +273,7 @@ once before crashing, so the input shape lands in stderr.
 
 If your test does:
 
+<!-- /ignore counter-example: uses libc rand() outside hegel's byte stream, breaks shrinking -->
 ```c
 int n = hegel_draw_int (tc, 1, 100);
 char *s = malloc (n);
@@ -275,6 +289,7 @@ maybe, eventually."
 
 The fix is to draw all randomness through hegel:
 
+<!-- /ignore illustration: fixed version of the counter-example above -->
 ```c
 char *s = malloc (n);
 for (int i = 0; i < n; i++) s[i] = hegel_draw_int (tc, 0, 255);
@@ -315,6 +330,7 @@ the first failure stops the test. The shrinker will optimize for
 necessarily the structurally smallest counterexample. Aggregate
 the check:
 
+<!-- /ignore counter-example: /* worse */ vs /* better */ assertion-placement comparison -->
 ```c
 /* worse */
 for (int i = 0; i < n; i++) HEGEL_ASSERT (process (xs[i]) >= 0, ...);

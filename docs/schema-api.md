@@ -9,37 +9,81 @@ property-based testing over C data structures.
 
 ## Overview
 
-Writing a property test manually looks like this:
+A hegel-c property test typically uses one of two draw shapes.
 
+**Scalars — direct by value.** For a primitive you want right now:
+
+<!-- /include tests/docs/test_doc_schema_api.c:26-31 -->
 ```c
-static void my_test (hegel_testcase *tc) {
-  int x = hegel_draw_int (tc, 0, 100);
-  int y = hegel_draw_int (tc, 0, 100);
-  Thing *t = malloc (sizeof (Thing));
-  t->x = x; t->y = y;
-  HEGEL_ASSERT (my_function (t) >= 0, "x=%d y=%d", x, y);
-  free (t);
+static void opener_primitive (hegel_testcase * tc)
+{
+  int x = HEGEL_DRAW_INT (0, 100);
+  int y = HEGEL_DRAW_INT (0, 100);
+  HEGEL_ASSERT (my_function (x, y) >= 0, "x=%d y=%d", x, y);
 }
 ```
+<!-- /endinclude -->
 
-That works for one-off cases, but when your tested function takes a
-recursive tree, a tagged union, or an array of polymorphic pointers,
-the hand-written generator grows into hundreds of lines.
+**Composed input types — build a schema once, draw instances per case.**
+When your tested function takes a struct, a tagged union, a
+recursive tree, or an array of polymorphic pointers:
 
-The schema API lets you **describe your C type declaratively** and
-get generation, allocation, span annotation (for better shrinking),
-and cleanup for free:
-
+<!-- /include tests/docs/test_doc_schema_api.c:35-46 -->
 ```c
-static hegel_schema_t thing_schema;  /* build once in main() */
+typedef struct { int x; int y; char * name; } Thing;
+static hegel_schema_t thing_schema;
 
-static void my_test (hegel_testcase *tc) {
-  Thing *t;
-  hegel_shape *sh = hegel_schema_draw (tc, thing_schema, (void **) &t);
-  HEGEL_ASSERT (my_function (t) >= 0, "...");
-  hegel_shape_free (sh);  /* frees t and every allocation it transitively owns */
+static void opener_composed (hegel_testcase * tc)
+{
+  Thing *             t;
+  hegel_shape *       sh = HEGEL_DRAW (&t, thing_schema);
+  HEGEL_ASSERT (t != NULL, "alloc");
+  HEGEL_ASSERT (t->x >= 0 && t->y >= 0,
+                "x=%d y=%d name=%s", t->x, t->y, t->name);
+  hegel_shape_free (sh);
 }
 ```
+<!-- /endinclude -->
+
+The schema is built once in `main()` via `HEGEL_STRUCT`:
+
+<!-- /include tests/docs/test_doc_schema_api.c:196-199 -->
+```c
+  thing_schema = HEGEL_STRUCT (Thing,
+      HEGEL_INT  (0, 100),
+      HEGEL_INT  (0, 100),
+      HEGEL_TEXT (1, 20));
+```
+<!-- /endinclude -->
+
+### The three layers under the macros
+
+`HEGEL_DRAW_INT` and `HEGEL_DRAW` are ergonomic macros — they
+capture `tc` from enclosing scope and dispatch to three layers of
+underlying API that you can also call directly if you need to:
+
+1. **Primitive draws** (`hegel_c.h`) — `hegel_draw_int`, `_i64`,
+   `_u64`, `_float`, `_double`, `_text`, `_regex`. These consume
+   directly from the Hegel byte stream.  `HEGEL_DRAW_INT(0, 10)`
+   forwards verbatim to `hegel_draw_int(tc, 0, 10)`.
+
+2. **Schema constructors** (`hegel_gen.h`) — functions and macros
+   that build a `hegel_schema_t` value describing what to generate.
+   `HEGEL_STRUCT`, `HEGEL_ARRAY`, `HEGEL_OPTIONAL`, and the scalar
+   field macros `HEGEL_INT` / `HEGEL_U8` / etc.  The schema is a
+   pure value you reuse across many draws.
+
+3. **Schema-driven draws** (`hegel_gen.h`) — `HEGEL_DRAW(&addr,
+   sch)` for any kind of composed schema, plus
+   `hegel_schema_draw(tc, sch, (void **)&ptr)` as the older
+   struct-only form.  These walk the schema, consume the byte
+   stream recursively, allocate and fill the value memory, and
+   return a `hegel_shape *` that owns the whole tree.
+
+The scalar by-value family (`HEGEL_DRAW_INT` / `_I64` / `_U64` /
+`_DOUBLE` / `_FLOAT` / `_BOOL`) is sugar for layer 1 — no schema
+needed.  Everything else routes through layer 3 with a schema
+built from layer 2.
 
 ## The three layers
 
@@ -66,9 +110,11 @@ the variant tag in an untagged-union pattern — see
 `hegel_schema_t` is a thin wrapper around a pointer to the internal
 node struct:
 
+<!-- /include hegel_gen.h:146-146 -->
 ```c
-typedef struct { hegel_schema *_raw; } hegel_schema_t;
+typedef struct { hegel_schema * _raw; } hegel_schema_t;
 ```
+<!-- /endinclude -->
 
 Zero runtime cost — `sizeof(hegel_schema_t) == sizeof(void*)`, and
 the compiler optimizes the struct wrapping away. Distinct from
@@ -85,6 +131,7 @@ internal handle.
 type and a **positional** list of field-schema descriptions — one
 per field, in declaration order.
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 typedef struct { int x; int y; char *name; } Thing;
 
@@ -128,6 +175,7 @@ the element type of an `ARRAY_INLINE` — each array slot is then a
 self-contained tag+body block. To unwrap the layout entry and get
 a raw `hegel_schema_t`, use `hegel_schema_of()`:
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 hegel_schema_t shape_union = hegel_schema_of (HEGEL_UNION (
     HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
@@ -174,25 +222,35 @@ into macros and runtime, which is the C way.
 Every integer type has a **full-range** version (no args) and a
 **range-constrained** version:
 
+<!-- /include hegel_gen.h:508-509 -->
 ```c
-hegel_schema_t hegel_schema_i8 (void);               /* [-128, 127] */
-hegel_schema_t hegel_schema_i8_range (int64_t lo, int64_t hi);
-/* likewise: i16, i32, i64, u8, u16, u32, u64, int, long */
+hegel_schema_t hegel_schema_i8          (void);  /* [-128, 127] */
+hegel_schema_t hegel_schema_i8_range    (int64_t lo, int64_t hi);
 ```
+<!-- /endinclude -->
+
+Same shape for `i16`, `i32`, `i64`, `int`, `long`, `u8`, `u16`, `u32`,
+`u64` — each with a no-arg full-range version and a `_range` variant.
 
 Floats:
+
+<!-- /include hegel_gen.h:533-536 -->
 ```c
-hegel_schema_t hegel_schema_float  (void);           /* [-FLT_MAX, FLT_MAX] */
+hegel_schema_t hegel_schema_float        (void);  /* [-FLT_MAX, FLT_MAX] */
 hegel_schema_t hegel_schema_float_range  (double lo, double hi);
-hegel_schema_t hegel_schema_double (void);
+hegel_schema_t hegel_schema_double       (void);  /* [-DBL_MAX, DBL_MAX] */
 hegel_schema_t hegel_schema_double_range (double lo, double hi);
 ```
+<!-- /endinclude -->
 
 Text (currently char-by-char from `[a-z]`, see TODO.md for the
 `hegel_draw_regex` fullmatch fix):
+
+<!-- /include hegel_gen.h:542-542 -->
 ```c
 hegel_schema_t hegel_schema_text (int min_len, int max_len);
 ```
+<!-- /endinclude -->
 
 These all produce "field schemas" you plug into a struct via the
 convenience macros (next section).
@@ -202,6 +260,7 @@ convenience macros (next section).
 Each scalar macro has a full-range form (no args) and a constrained
 form (`lo`, `hi`):
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 HEGEL_INT   ()                    /* full int range  */
 HEGEL_INT   (-1000, 1000)         /* constrained     */
@@ -219,6 +278,7 @@ by argument count (via `__VA_OPT__`).
 
 ## Struct constructor
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 hegel_schema_t s = HEGEL_STRUCT (MyStruct,
     HEGEL_INT  (0, 100),
@@ -234,6 +294,7 @@ a trailing NULL**. The top-level schema you pass to
 
 ### `HEGEL_OPTIONAL` — 50/50 nullable pointer
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 HEGEL_OPTIONAL (inner_schema)
 ```
@@ -246,6 +307,7 @@ enclosing `HEGEL_STRUCT`.
 
 ### `HEGEL_INLINE` / `HEGEL_INLINE_REF` — inline-by-value sub-struct
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 typedef struct { uint8_t r, g, b; }   RGB;
 typedef struct { RGB fg; RGB bg; }    Palette;
@@ -286,6 +348,7 @@ of inline nesting and returns the leaf scalar shape.
 
 ### `HEGEL_SELF` — optional recursive pointer
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 HEGEL_SELF ()    /* Tree *left; — optional recursive */
 ```
@@ -294,10 +357,12 @@ Shorthand for `HEGEL_OPTIONAL (hegel_schema_self ())`. Must be used
 inside a `HEGEL_STRUCT` that declares the type. The field must be
 a pointer to the enclosing struct type. Automatically optional
 (50/50 NULL) because recursive chains need termination — unbounded
-recursion is capped at `HEGEL_DEFAULT_MAX_DEPTH = 5`.
+recursion is capped at `HEGEL_DEFAULT_MAX_DEPTH = 50` (see
+[Recursion depth](#recursion-depth) below for why 50).
 
 ### `HEGEL_ARRAY` — variable-length array, projected via facets
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 typedef struct { int *items; int n_items; } Bag;
 
@@ -340,6 +405,7 @@ array and use `HEGEL_FACET`.
 
 ### `HEGEL_FACET` — project a facet of a composite
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 HEGEL_FACET (hat, value)    /* ARRAY's data pointer */
 HEGEL_FACET (hat, size)     /* ARRAY's length */
@@ -354,6 +420,7 @@ See `HEGEL_ARRAY` for the complete usage pattern.
 
 ### `HEGEL_ARRAY_INLINE` — contiguous array of inline structs
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 typedef struct { Point *points; int n_points; } Path;
 
@@ -367,6 +434,7 @@ allocated separately. The `elem` schema must be a struct or union.
 
 ### `HEGEL_UNION` — tagged union with tag field in the struct
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 typedef struct {
   int tag;
@@ -394,6 +462,7 @@ Same as `HEGEL_UNION` but **writes no tag** — the cluster is just
 the union body. Read the chosen variant from the shape tree via
 `hegel_shape_tag()`.
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 HEGEL_UNION_UNTAGGED (
     HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
@@ -403,6 +472,7 @@ HEGEL_UNION_UNTAGGED (
 
 ### `HEGEL_VARIANT` — tag + pointer to separately allocated struct
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 typedef struct { int tag; void *value; } ShapeVar;
 
@@ -421,6 +491,7 @@ arrays, unions). For *functional* composition — transforming drawn
 values, filtering, dependent generation — use these combinators.
 They each occupy a single slot sized for their target type.
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 /* Map: draw an int, transform through fn, store result. */
 int square_fn (int x, void *ctx) { return x * x; }
@@ -464,6 +535,7 @@ When a single range doesn't capture the distribution you want,
 `HEGEL_ONE_OF` picks between multiple scalar schemas — e.g.,
 "small int OR large int" to exercise both ends of a function:
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 HEGEL_ONE_OF(hegel_schema_int_range(0, 10),
              hegel_schema_int_range(1000, 9999))
@@ -476,22 +548,26 @@ from the first case's kind at layout time.
 
 ### `HEGEL_BOOL` — 1-byte `bool` field
 
+<!-- /ignore api-literal: one-line macro call shape, correct-syntax form -->
 ```c
-HEGEL_BOOL(MyStruct, is_active)   /* 1-byte unsigned int in [0,1] */
+HEGEL_BOOL()   /* 1-byte bool field, drawn as 0 or 1 */
 ```
 
-Expands to a binding that places `hegel_schema_u8_range(0, 1)` at
-`offsetof(T, f)`. The field should be `bool` or `_Bool` from
-`stdbool.h` (1 byte).
+Used positionally inside `HEGEL_STRUCT`; the enclosing struct
+field should be `bool` or `_Bool` from `stdbool.h` (1 byte).
+Under the hood it's `hegel_schema_u8_range(0, 1)` specialized for
+the boolean slot.
 
 ### `HEGEL_REGEX` — regex-generated text
 
+<!-- /ignore api-literal: one-line macro call shape, correct-syntax form -->
 ```c
-HEGEL_REGEX(MyStruct, text, "[a-z]+", 64)
+HEGEL_REGEX("[a-z]+", 64)
 ```
 
-Generates a `char *` string matching the pattern, with buffer
-capacity 64. **Warning:** the underlying primitive uses hegeltest's
+Used positionally inside `HEGEL_STRUCT`; the enclosing struct
+field is a `char *`.  Generates a string matching the regex, with
+buffer capacity 64. **Warning:** the underlying primitive uses hegeltest's
 "contains a match" semantics, not full-match. For permissive
 patterns (matching the empty string), the generator returns
 arbitrary bytes. For stricter constraints, use `hegel_schema_text`
@@ -500,6 +576,7 @@ FFI-level fix status.
 
 ### `HEGEL_ONE_OF_STRUCT` — polymorphic pointer producer
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
@@ -517,6 +594,7 @@ an optional pointer-to-polymorphic-struct.
 
 ## Running tests
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 static hegel_schema_t my_schema;
 
@@ -541,12 +619,124 @@ int main (void) {
 - `hegel_schema_free(schema)` cleans up the schema itself (at
   program exit — decrements refcount, frees if zero).
 
+### `HEGEL_DRAW` — unified write-at-address
+
+`hegel_schema_draw` is designed for structs: the `void **` out
+parameter works because the framework allocates and hands you back
+a pointer. For scalars and other non-allocating kinds, the
+`HEGEL_DRAW(&addr, sch)` macro is a more ergonomic entry point:
+
+<!-- /include tests/docs/test_doc_schema_api.c:170-176 -->
+```c
+static void draw_scalar_demo (hegel_testcase * tc)
+{
+  int                 x;
+  hegel_shape *       sh = HEGEL_DRAW (&x, int_sch);
+  HEGEL_ASSERT (x >= 0, "got %d", x);
+  hegel_shape_free (sh);
+}
+```
+<!-- /endinclude -->
+
+Dispatch rules:
+
+- **STRUCT kind** — allocates, writes the struct pointer at `*addr`,
+  returns the owning shape. Pass `&p` where `p` is `MyStruct *` —
+  same as the classic form but with a single `void *` out-parameter.
+- **Scalar / text / optional / union / variant kinds** — writes the
+  drawn value directly at `addr`. Returns a shape (informational
+  leaf for scalars; real tree for composites). You still call
+  `hegel_shape_free` on it — not NULL for scalars, contrary to a
+  previous doc claim.
+- **ARRAY / ARRAY_INLINE / SELF / ONE_OF_STRUCT** — abort at the top
+  level. These kinds only make sense inside a parent struct (see
+  `HEGEL_FACET` for the array composition story).
+
+`HEGEL_DRAW` captures `tc` from the enclosing scope by convention,
+so the enclosing function's parameter must be named `tc` — matches
+existing test style. The schema is **not consumed** — the caller
+keeps ownership and must still call `hegel_schema_free` when done.
+
+### Scalar by-value shortcuts
+
+`HEGEL_DRAW_<T>` takes range arguments directly (or none, for the
+full type range) and dispatches to the `hegel_draw_*` primitive —
+**no schema allocation, no composition**. Same `(lo, hi)` / `()`
+overloading as the schema macros `HEGEL_INT` / etc.:
+
+<!-- /include tests/docs/test_doc_schema_api.c:182-186 -->
+```c
+  int                 x = HEGEL_DRAW_INT    (0, 10);
+  int                 y = HEGEL_DRAW_INT    ();           /* INT_MIN..INT_MAX */
+  int64_t             a = HEGEL_DRAW_I64    (-100, 100);
+  double              d = HEGEL_DRAW_DOUBLE (0.0, 1.0);
+  bool                b = HEGEL_DRAW_BOOL   ();           /* no range — 0 or 1 */
+```
+<!-- /endinclude -->
+
+Variants: `_INT`, `_I64`, `_U64`, `_DOUBLE`, `_FLOAT`, `_BOOL`.
+
+**For composed scalar schemas** — `HEGEL_MAP_INT`, `HEGEL_FILTER_INT`,
+`HEGEL_FLAT_MAP_INT`, `HEGEL_ONE_OF` — there's no by-value shortcut.
+Hoist the schema and use the general form:
+
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
+```c
+static hegel_schema_t squared;   /* built in main(), reused per call */
+
+static void my_test (hegel_testcase *tc) {
+  int x;
+  hegel_shape *sh = HEGEL_DRAW (&x, squared);
+  /* ... use x ... */
+  hegel_shape_free (sh);
+}
+
+int main (void) {
+  squared = HEGEL_MAP_INT (hegel_schema_int_range (0, 100),
+                           square_fn, NULL);
+  hegel_run_test (my_test);
+  hegel_schema_free (squared);
+  return 0;
+}
+```
+
+**No `HEGEL_DRAW_ARRAY` by design.** The typed family is
+deliberately scalar-only: C has no way to return a composite "by
+value" without re-inventing a `{ptr, len}` struct and its lifetime
+story. For anything non-scalar, use `HEGEL_DRAW(&ptr, sch)` — the
+general mechanism carries the shape-or-not distinction in its return
+type, not in the macro name.
+
+### Recursion depth
+
+Schemas with `HEGEL_SELF` need a termination strategy.
+`HEGEL_SELF()` expands to a 50/50 `HEGEL_OPTIONAL(self)`, but for
+schemas with branching factor ≥ 2 (e.g. a binary tree with left +
+right self-references), the branching process is **critical** under
+uniform 50/50 probabilities — a non-trivial fraction of draws would
+recurse arbitrarily deep.
+
+`HEGEL_DEFAULT_MAX_DEPTH = 50` is the cap. When a draw hits the
+bound, it calls `hegel_health_fail` — signalling a **test-setup**
+failure, not a code-under-test failure. The 50 is the empirical
+value at which the selftest's binary-tree schema draws reliably
+(>1000 consecutive runs without tripping the cap).
+
+For schemas with lower branching (single `HEGEL_SELF`, linear
+chains) smaller caps work fine; for heavier branching, increase the
+cap with `hegel_schema_draw_n(tc, schema, &out, max_depth)` or
+`hegel_schema_draw_at_n(tc, addr, schema, max_depth)`.
+
+This isn't a shrinking-quality concern — the cap does most of the
+termination work for deep recursive schemas, and that's by design.
+
 ## Shape accessors
 
 Most of the time you read data straight from your struct. When the
 struct doesn't carry the information (e.g., untagged unions, or
 array lengths in parallel parameters), read from the shape tree:
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 int tag     = hegel_shape_tag       (hegel_shape_field (sh, 0));
 int len     = hegel_shape_array_len (hegel_shape_field (sh, 2));
@@ -559,6 +749,7 @@ Counting field positions is error-prone when the struct grows.
 Since every struct binding carries its field offset, shapes can
 also be looked up by offset:
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 hegel_shape * field = HEGEL_SHAPE_GET (sh, MyStruct, some_field);
 int len = hegel_shape_array_len (HEGEL_SHAPE_GET (sh, MyStruct, items));
@@ -591,6 +782,7 @@ count. After passing, the caller no longer owns the child.
 For sharing a schema across multiple parents, explicitly call
 `hegel_schema_ref()` to add a reference before passing:
 
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
 hegel_schema_t color = HEGEL_STRUCT (Color, ...);
 hegel_schema_ref (color);  /* +1 for second use */

@@ -225,6 +225,7 @@ gcc -O2 -DHEGEL_BENCH_NOFORK -I/path/to/hegel-c -o my_test_nofork my_test.c \
 
 In the test source, guard the runner call:
 
+<!-- /ignore bench-template: ifdef-guarded main() pattern, not from any fixed source file -->
 ```c
 int main (void) {
 #ifdef HEGEL_BENCH_NOFORK
