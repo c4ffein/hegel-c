@@ -217,5 +217,5 @@ MPI_Comm_spawn in singleton mode works with OpenMPI 5.x inside hegel fork childr
 ## Important notes
 
 - Generator combinators take ownership of sub-generators — don't free sub-generators after passing them to a combinator
-- The `from-hegel-rust` test suite uses `RUST_SOURCE:` comments to map each C test to its Rust original. `make verify` uses Claude (haiku) to semantically compare them.
+- The `from-hegel-rust` test suite uses `RUST_SOURCE:` comments to map each C test to its Rust original. `make verify` uses Claude (opus) to semantically compare them.
 - The `from-hegel-rust` integer tests use `hegel_run_test_result_n(..., 1000)` for `find_any` edge cases — Rust's `find_any` uses `max_attempts=1000`.
