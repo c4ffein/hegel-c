@@ -192,7 +192,7 @@ verify:
 		rust_src=$$(grep 'RUST_SOURCE:' $$f | head -1 | sed 's/.*RUST_SOURCE: *//'); \
 		rust_file=$$(echo "$$rust_src" | sed 's/::.*//' ); \
 		rust_fn=$$(echo "$$rust_src" | sed 's/.*:://'); \
-		verdict=$$(cd $(REPO_ROOT) && claude -p --model haiku \
+		verdict=$$(cd $(REPO_ROOT) && claude -p --model opus \
 			--system-prompt "$$prompt" \
 			--allowedTools "Read,Glob,Grep" \
 			--dangerously-skip-permissions \
