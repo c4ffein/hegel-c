@@ -619,6 +619,17 @@ int main (void) {
 - `hegel_schema_free(schema)` cleans up the schema itself (at
   program exit — decrements refcount, frees if zero).
 
+**Schema placement — either works.** The pattern above keeps the
+schema as a file-scope static built once in `main`; you can also
+build it inside the testcase function and free it at the end of each
+call. Schema constructors are pure allocators and don't touch hegel's
+draw state, so both produce identical draws. Building in-testcase is
+slightly wasteful — the tree gets rebuilt per case, and in fork mode
+every child re-allocates it — but schema allocation is tiny next to a
+full test case's round-trip cost, so for most schemas the overhead is
+in the noise. Hoist to `main` when it matters (deeply nested
+composites, large arrays) or when you just want less ceremony per test.
+
 ### `HEGEL_DRAW` — unified write-at-address
 
 `hegel_schema_draw` is designed for structs: the `void **` out
