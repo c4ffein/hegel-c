@@ -2,7 +2,7 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: composing multiple combinators works correctly.
+** Test: composing multiple schema combinators works correctly.
 **
 ** Layer 1: is_divisible_by() checks divisibility.
 ** Layer 2: chain int(0,50) -> filter(even) -> map(x*3).
@@ -15,6 +15,7 @@
 #include <stdlib.h>
 
 #include "hegel_c.h"
+#include "hegel_gen.h"
 
 /* ---- Layer 1: function under test ----
 ** Returns non-zero if x is divisible by d. */
@@ -48,26 +49,24 @@ triple_it (int val, void * ctx)
 
 /* ---- Layer 2: hegel test ---- */
 
+static hegel_schema_t  composed_schema;
+
 static
 void
 testComposed (
 hegel_testcase *            tc)
 {
-  hegel_gen *          gn;
-  int                  result;
+  int                  result = 0;
+  hegel_shape *        sh;
 
-  /* filter first, then map — both take ownership of source */
-  gn = hegel_gen_filter_int (hegel_gen_int (0, 50), is_even, NULL);
-  gn = hegel_gen_map_int (gn, triple_it, NULL);
-
-  result = hegel_gen_draw_int (tc, gn);
+  sh = HEGEL_DRAW (&result, composed_schema);
 
   HEGEL_ASSERT (is_divisible_by (result, 6),
                 "filter(even) -> map(*3) produced %d, not divisible by 6", result);
   HEGEL_ASSERT (result >= 0 && result <= 150,
                 "composed result %d out of range [0,150]", result);
 
-  hegel_gen_free (gn);
+  hegel_shape_free (sh);
 }
 
 /* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
@@ -80,9 +79,16 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  printf ("Testing composed generators (filter -> map)...\n");
+  /* filter first, then map — both take ownership of source */
+  composed_schema = hegel_schema_filter_int (
+      hegel_schema_int_range (0, 50), is_even, NULL);
+  composed_schema = hegel_schema_map_int (
+      composed_schema, triple_it, NULL);
+
+  printf ("Testing composed schemas (filter -> map)...\n");
   hegel_run_test (testComposed);
   printf ("PASSED\n");
 
+  hegel_schema_free (composed_schema);
   return (0);
 }
