@@ -5,7 +5,7 @@
 ** Test: inline array of bare unions using the C common-initial-sequence
 ** rule.
 **
-** Unlike test_gen_schema_array_inline_of_tagged_unions.c (which wraps
+** Unlike test_schema_array_inline_of_tagged_unions.c (which wraps
 ** the union in a struct with an outer tag field), this test uses a
 ** *bare* union where each variant starts with the same `int tag` field
 ** at offset 0.  The C standard's "common initial sequence" rule lets

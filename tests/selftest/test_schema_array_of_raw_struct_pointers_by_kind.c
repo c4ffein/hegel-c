@@ -4,7 +4,7 @@
 /*
 ** Test: raw pointer array with heterogeneous struct targets.
 **
-** Unlike test_gen_schema_array_of_variant_struct_pointers.c (which
+** Unlike test_schema_array_of_variant_struct_pointers.c (which
 ** uses an `Elem { which; void*ptr; }` wrapper per slot), this test
 ** uses a bare `void **items` — no wrapper, no per-slot tag field.
 ** Each pointer lands directly in the array, and the user discriminates

@@ -16,7 +16,7 @@ TESTS_PASS = test_pass_simple \
              test_gen_flatmap \
              test_schema_oneof \
              test_schema_optional \
-             test_schema_list_of_ints \
+             test_schema_array_of_ints \
              test_gen_map_ctx \
              test_gen_composed \
              test_result_api \
@@ -24,23 +24,23 @@ TESTS_PASS = test_pass_simple \
              test_strategy_gen \
              test_span_basic \
              test_span_tree_json_passes \
-             test_gen_schema_recursive_tree_json_roundtrip \
-             test_gen_schema_union_variant_tagged_untagged \
-             test_gen_schema_array_of_variant_struct_pointers \
-             test_gen_schema_nested_array_of_arrays_matrix \
-             test_gen_schema_array_all_composition_patterns \
-             test_gen_schema_array_inline_of_tagged_unions \
-             test_gen_schema_array_of_raw_struct_pointers_by_kind \
-             test_gen_schema_array_inline_of_bare_unions_common_prefix \
-             test_gen_schema_functional_combinators \
-             test_gen_schema_shape_get_and_reuse \
-             test_gen_schema_inline_struct \
-             test_gen_schema_facets_nonadjacent \
-             test_gen_schema_facets_reversed \
-             test_gen_schema_facets_nested \
-             test_gen_schema_facets_self_recursion \
-             test_gen_schema_top_level_draw \
-             test_gen_schema_map_of_one_of
+             test_schema_recursive_tree_json_roundtrip \
+             test_schema_union_variant_tagged_untagged \
+             test_schema_array_of_variant_struct_pointers \
+             test_schema_nested_array_of_arrays_matrix \
+             test_schema_array_all_composition_patterns \
+             test_schema_array_inline_of_tagged_unions \
+             test_schema_array_of_raw_struct_pointers_by_kind \
+             test_schema_array_inline_of_bare_unions_common_prefix \
+             test_schema_functional_combinators \
+             test_schema_shape_get_and_reuse \
+             test_schema_inline_struct \
+             test_schema_facets_nonadjacent \
+             test_schema_facets_reversed \
+             test_schema_facets_nested \
+             test_schema_facets_self_recursion \
+             test_schema_top_level_draw \
+             test_schema_map_of_one_of
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -67,7 +67,7 @@ TESTS_HEALTH = test_filter_too_much \
                test_filter_too_much_suite \
                test_overflow_too_much \
                test_overflow_too_much_suite \
-               test_gen_schema_depth_health
+               test_schema_depth_health
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)
 
