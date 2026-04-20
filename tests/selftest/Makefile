@@ -16,7 +16,7 @@ TESTS_PASS = test_pass_simple \
              test_gen_flatmap \
              test_schema_oneof \
              test_schema_optional \
-             test_gen_list \
+             test_schema_list_of_ints \
              test_gen_map_ctx \
              test_gen_composed \
              test_result_api \
