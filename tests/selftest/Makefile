@@ -15,7 +15,7 @@ TESTS_PASS = test_pass_simple \
              test_gen_filter \
              test_gen_flatmap \
              test_gen_oneof \
-             test_gen_optional \
+             test_schema_optional \
              test_gen_list \
              test_gen_map_ctx \
              test_gen_composed \
@@ -39,7 +39,8 @@ TESTS_PASS = test_pass_simple \
              test_gen_schema_facets_reversed \
              test_gen_schema_facets_nested \
              test_gen_schema_facets_self_recursion \
-             test_gen_schema_top_level_draw
+             test_gen_schema_top_level_draw \
+             test_gen_schema_map_of_one_of
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
