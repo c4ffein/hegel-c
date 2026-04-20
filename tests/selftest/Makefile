@@ -14,7 +14,7 @@ TESTS_PASS = test_pass_simple \
              test_gen_map \
              test_gen_filter \
              test_gen_flatmap \
-             test_gen_oneof \
+             test_schema_oneof \
              test_schema_optional \
              test_gen_list \
              test_gen_map_ctx \
