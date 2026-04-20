@@ -1265,6 +1265,22 @@ hegel__draw_integer_into (hegel_testcase * tc, hegel_schema * gen, void * dst)
     return;
   }
 
+  case HEGEL_SCH_ONE_OF_SCALAR: {
+    /* Pick one case by index, recurse into it.  Emit the same two
+    ** spans as the top-level ONE_OF_SCALAR path in hegel__draw_field
+    ** so shrink quality is preserved when ONE_OF is wrapped in a
+    ** combinator (map/filter/flat_map). */
+    int nc = gen->one_of_scalar_def.n_cases;
+    hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
+    int choice = hegel_draw_int (tc, 0, nc - 1);
+    hegel_schema * chosen = gen->one_of_scalar_def.cases[choice];
+    hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
+    hegel__draw_integer_into (tc, chosen, dst);
+    hegel_stop_span (tc, 0);
+    hegel_stop_span (tc, 0);
+    return;
+  }
+
   default:
     /* Non-integer source in an integer context — leave dst zero. */
     return;
@@ -1312,6 +1328,22 @@ hegel__draw_fp_into (hegel_testcase * tc, hegel_schema * gen, void * dst)
       hegel__draw_fp_into (tc, next._raw, &result);
     *(double *) dst = result;
     hegel_schema_free (next);
+    return;
+  }
+
+  case HEGEL_SCH_ONE_OF_SCALAR: {
+    /* Pick one case by index, recurse into it.  Emit the same two
+    ** spans as the top-level ONE_OF_SCALAR path in hegel__draw_field
+    ** so shrink quality is preserved when ONE_OF is wrapped in a
+    ** combinator (map/filter/flat_map). */
+    int nc = gen->one_of_scalar_def.n_cases;
+    hegel_start_span (tc, HEGEL_SPAN_ONE_OF);
+    int choice = hegel_draw_int (tc, 0, nc - 1);
+    hegel_schema * chosen = gen->one_of_scalar_def.cases[choice];
+    hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
+    hegel__draw_fp_into (tc, chosen, dst);
+    hegel_stop_span (tc, 0);
+    hegel_stop_span (tc, 0);
     return;
   }
 
