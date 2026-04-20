@@ -1189,22 +1189,85 @@ hegel__draw_array_standalone (hegel_testcase * tc, hegel_schema * src,
 static void
 hegel__draw_integer_into (hegel_testcase * tc, hegel_schema * gen, void * dst)
 {
-  if (gen->integer.is_signed) {
-    int64_t v = hegel_draw_i64 (tc, gen->integer.min_s, gen->integer.max_s);
-    switch (gen->integer.width) {
-      case 1: *(int8_t *)  dst = (int8_t)  v; break;
-      case 2: *(int16_t *) dst = (int16_t) v; break;
-      case 4: *(int32_t *) dst = (int32_t) v; break;
-      case 8: *(int64_t *) dst = v;            break;
+  switch (gen->kind) {
+
+  case HEGEL_SCH_INTEGER:
+    if (gen->integer.is_signed) {
+      int64_t v = hegel_draw_i64 (tc, gen->integer.min_s, gen->integer.max_s);
+      switch (gen->integer.width) {
+        case 1: *(int8_t *)  dst = (int8_t)  v; break;
+        case 2: *(int16_t *) dst = (int16_t) v; break;
+        case 4: *(int32_t *) dst = (int32_t) v; break;
+        case 8: *(int64_t *) dst = v;            break;
+      }
+    } else {
+      uint64_t v = hegel_draw_u64 (tc, gen->integer.min_u, gen->integer.max_u);
+      switch (gen->integer.width) {
+        case 1: *(uint8_t *)  dst = (uint8_t)  v; break;
+        case 2: *(uint16_t *) dst = (uint16_t) v; break;
+        case 4: *(uint32_t *) dst = (uint32_t) v; break;
+        case 8: *(uint64_t *) dst = v;             break;
+      }
     }
-  } else {
-    uint64_t v = hegel_draw_u64 (tc, gen->integer.min_u, gen->integer.max_u);
-    switch (gen->integer.width) {
-      case 1: *(uint8_t *)  dst = (uint8_t)  v; break;
-      case 2: *(uint16_t *) dst = (uint16_t) v; break;
-      case 4: *(uint32_t *) dst = (uint32_t) v; break;
-      case 8: *(uint64_t *) dst = v;             break;
-    }
+    return;
+
+  case HEGEL_SCH_MAP_INT: {
+    int raw;
+    hegel__draw_integer_into (tc, gen->map_int_def.source, &raw);
+    *(int *) dst = gen->map_int_def.fn (raw, gen->map_int_def.ctx);
+    return;
+  }
+  case HEGEL_SCH_FILTER_INT: {
+    int raw;
+    hegel__draw_integer_into (tc, gen->filter_int_def.source, &raw);
+    if (! gen->filter_int_def.pred (raw, gen->filter_int_def.ctx))
+      hegel_assume (tc, 0);
+    *(int *) dst = raw;
+    return;
+  }
+  case HEGEL_SCH_FLAT_MAP_INT: {
+    int raw;
+    hegel__draw_integer_into (tc, gen->flat_map_int_def.source, &raw);
+    hegel_schema_t next = gen->flat_map_int_def.fn (raw,
+        gen->flat_map_int_def.ctx);
+    int result = 0;
+    if (next._raw != NULL)
+      hegel__draw_integer_into (tc, next._raw, &result);
+    *(int *) dst = result;
+    hegel_schema_free (next);
+    return;
+  }
+
+  case HEGEL_SCH_MAP_I64: {
+    int64_t raw;
+    hegel__draw_integer_into (tc, gen->map_i64_def.source, &raw);
+    *(int64_t *) dst = gen->map_i64_def.fn (raw, gen->map_i64_def.ctx);
+    return;
+  }
+  case HEGEL_SCH_FILTER_I64: {
+    int64_t raw;
+    hegel__draw_integer_into (tc, gen->filter_i64_def.source, &raw);
+    if (! gen->filter_i64_def.pred (raw, gen->filter_i64_def.ctx))
+      hegel_assume (tc, 0);
+    *(int64_t *) dst = raw;
+    return;
+  }
+  case HEGEL_SCH_FLAT_MAP_I64: {
+    int64_t raw;
+    hegel__draw_integer_into (tc, gen->flat_map_i64_def.source, &raw);
+    hegel_schema_t next = gen->flat_map_i64_def.fn (raw,
+        gen->flat_map_i64_def.ctx);
+    int64_t result = 0;
+    if (next._raw != NULL)
+      hegel__draw_integer_into (tc, next._raw, &result);
+    *(int64_t *) dst = result;
+    hegel_schema_free (next);
+    return;
+  }
+
+  default:
+    /* Non-integer source in an integer context — leave dst zero. */
+    return;
   }
 }
 
@@ -1213,12 +1276,48 @@ hegel__draw_integer_into (hegel_testcase * tc, hegel_schema * gen, void * dst)
 static void
 hegel__draw_fp_into (hegel_testcase * tc, hegel_schema * gen, void * dst)
 {
-  if (gen->fp.width == 4) {
-    float v = hegel_draw_float (tc, (float) gen->fp.min, (float) gen->fp.max);
-    *(float *) dst = v;
-  } else {
-    double v = hegel_draw_double (tc, gen->fp.min, gen->fp.max);
-    *(double *) dst = v;
+  switch (gen->kind) {
+
+  case HEGEL_SCH_FLOAT:
+    if (gen->fp.width == 4) {
+      float v = hegel_draw_float (tc, (float) gen->fp.min, (float) gen->fp.max);
+      *(float *) dst = v;
+    } else {
+      double v = hegel_draw_double (tc, gen->fp.min, gen->fp.max);
+      *(double *) dst = v;
+    }
+    return;
+
+  case HEGEL_SCH_MAP_DOUBLE: {
+    double raw;
+    hegel__draw_fp_into (tc, gen->map_double_def.source, &raw);
+    *(double *) dst = gen->map_double_def.fn (raw, gen->map_double_def.ctx);
+    return;
+  }
+  case HEGEL_SCH_FILTER_DOUBLE: {
+    double raw;
+    hegel__draw_fp_into (tc, gen->filter_double_def.source, &raw);
+    if (! gen->filter_double_def.pred (raw, gen->filter_double_def.ctx))
+      hegel_assume (tc, 0);
+    *(double *) dst = raw;
+    return;
+  }
+  case HEGEL_SCH_FLAT_MAP_DOUBLE: {
+    double raw;
+    hegel__draw_fp_into (tc, gen->flat_map_double_def.source, &raw);
+    hegel_schema_t next = gen->flat_map_double_def.fn (raw,
+        gen->flat_map_double_def.ctx);
+    double result = 0.0;
+    if (next._raw != NULL)
+      hegel__draw_fp_into (tc, next._raw, &result);
+    *(double *) dst = result;
+    hegel_schema_free (next);
+    return;
+  }
+
+  default:
+    /* Non-float source in a float context — leave dst zero. */
+    return;
   }
 }
 
