@@ -98,6 +98,26 @@ confident the approach stands).
 
 ## rn
 
+- **Filter retry + discardable span parity with `hegel-rust`.**  Both
+  `HEGEL_FILTER_INT/I64/DOUBLE` draw paths — the originals in
+  `hegel__draw_field` and the composition cases in
+  `hegel__draw_integer_into` / `_fp_into` — do one draw attempt and
+  call `hegel_assume(tc, 0)` on predicate failure, with no span
+  around the attempt.  Reference hegel-rust
+  (`inspiration/hegel-rust/src/generators/generators.rs::Filtered::do_draw`)
+  retries 3 times, wrapping each attempt in a `labels::FILTER` span
+  that is **discarded** (`stop_span(true)`) on rejection — keeps
+  shrink quality clean by not polluting the span tree with rejected
+  byte ranges.  hegeltest's legacy `gen_draw_int_impl` got the
+  3-retry count right but skipped the span; the schema API did
+  neither.  Practical effect: a filter rejecting 50% trips
+  `filter_too_much` ~4× sooner under the schema API than under
+  either Rust implementation (0.5 vs 0.5³ = 12.5% discard rate).
+  Fix: loop 3× in each of 3 arms × 2 sites, emit `HEGEL_SPAN_FILTER`
+  around each attempt with the discard flag set on predicate
+  failure.  `HEGEL_SPAN_FILTER` already exists in `hegel_c.h`
+  (line 149), no infrastructure gap.  ~40 lines total, standalone.
+
 - **Harden `HEGEL_ONE_OF`.**  After the primitive-macro refactor,
   `HEGEL_ONE_OF` dispatches on the first case's kind for slot
   size/align, and the draw path at `hegel_gen.c` `HEGEL_SCH_ONE_OF_SCALAR`
@@ -357,7 +377,7 @@ matter for "does the API handle arbitrary foreign C code".
 | Item | Status |
 |---|---|
 | Fix `HEGEL_ARRAY_INLINE` fork-mode orphan leak | done — see "Known bugs" below |
-| `HEGEL_INLINE` / `HEGEL_INLINE_REF` — inline-by-value sub-struct | done — `test_gen_schema_inline_struct.c`, shared helper `hegel__draw_struct_into_slot`, `HEGEL_SHAPE_GET` now recurses through nested structs |
+| `HEGEL_INLINE` / `HEGEL_INLINE_REF` — inline-by-value sub-struct | done — `test_schema_inline_struct.c`, shared helper `hegel__draw_struct_into_slot`, `HEGEL_SHAPE_GET` now recurses through nested structs |
 | Real-world demo: schema-API on actual Scotch | done — `test_graph_part_schema.c` |
 | Shrinker demo: reducer on a real Scotch bug | done — `test_graph_order_shrink.c` + `docs/shrinking.md` |
 | Health-check failure path coverage in CI | done — `TESTS_HEALTH` selftests (filter_too_much, large_base_example, single + suite versions) |
@@ -606,7 +626,7 @@ eventually remove once existing tests (`from-hegel-rust`, etc.)
 that use it get migrated to the schema API. Not urgent for V0 —
 the two systems coexist without conflict. Migration is mechanical.
 
-Feature-parity proof: `tests/selftest/test_gen_schema_functional_combinators.c`
+Feature-parity proof: `tests/selftest/test_schema_functional_combinators.c`
 has 7 sub-tests covering optional-int pointer, map/filter/flat_map
 for int/i64/double, one-of-scalar (small-OR-large distributions),
 bool, and regex.
