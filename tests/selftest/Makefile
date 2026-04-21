@@ -12,7 +12,8 @@ LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 TESTS_PASS = test_pass_simple \
              test_assume \
              test_gen_map \
-             test_schema_filter \
+             test_schema_filter_ints \
+             test_schema_filter_floats \
              test_schema_ints \
              test_schema_floats \
              test_gen_flatmap \
