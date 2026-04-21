@@ -4,15 +4,16 @@
 /*
 ** Test: top-level HEGEL_DRAW + typed by-value scalar draws.
 **
-** Exercises the three patterns that the top-level entry points
-** support:
+** Exercises the top-level entry-point patterns:
 **
 **   1. HEGEL_DRAW_INT (lo, hi)                   — direct primitive
 **      dispatch, no schema allocation, returns by value.
-**   2. HEGEL_DRAW (&x, int_schema)               — scalar written at
-**      caller address, reused schema stays alive.
-**   3. MyStruct *p; HEGEL_DRAW (&p, struct_sch)  — allocating path,
+**   2. MyStruct *p; HEGEL_DRAW (&p, struct_sch)  — allocating path,
 **      pointer lands at &p, returned shape owns the allocation.
+**
+** The HEGEL_DRAW (&x, scalar_schema) pattern (scalar by-reference via
+** a reused schema) is exercised by test_schema_ints.c and
+** test_schema_floats.c — not re-tested here.
 **
 ** Layer 1 function under test: check_in_range — standalone predicate.
 ** Expected: EXIT 0.
@@ -76,30 +77,7 @@ hegel_testcase *            tc)
   HEGEL_ASSERT (check_bool_value (b),    "bool garbage: %d", (int) b);
 }
 
-/* ---- Layer 2c: HEGEL_DRAW (&x, schema) reusing a global schema ---- */
-
-static hegel_schema_t  reused_int_schema;
-
-static
-void
-testDrawIntoReused (
-hegel_testcase *            tc)
-{
-  int                  x = 0;
-  hegel_shape *        sh;
-
-  sh = HEGEL_DRAW (&x, reused_int_schema);
-
-  /* Scalar kinds return a leaf shape (not NULL) that must still be
-  ** freed — the shape records metadata for shrinking book-keeping.
-  ** hegel_shape_free is NULL-safe either way. */
-  HEGEL_ASSERT (check_in_range (x, -50, 50),
-                "HEGEL_DRAW scalar out of range: %d", x);
-
-  hegel_shape_free (sh);
-}
-
-/* ---- Layer 2d: HEGEL_DRAW (&p, struct_schema) allocating path ---- */
+/* ---- Layer 2c: HEGEL_DRAW (&p, struct_schema) allocating path ---- */
 
 typedef struct {
   int               a;
@@ -140,8 +118,6 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  reused_int_schema = hegel_schema_int_range (-50, 50);
-
   triplet_schema = HEGEL_STRUCT (Triplet,
       HEGEL_INT    (0, 10),
       HEGEL_I64    (0, 1000),
@@ -155,15 +131,10 @@ char *              argv[])
   hegel_run_test (testDrawTypedInline);
   printf ("    PASSED\n");
 
-  printf ("  HEGEL_DRAW (&x, reused scalar schema)...\n");
-  hegel_run_test (testDrawIntoReused);
-  printf ("    PASSED\n");
-
   printf ("  HEGEL_DRAW (&p, struct schema)...\n");
   hegel_run_test (testDrawStruct);
   printf ("    PASSED\n");
 
-  hegel_schema_free (reused_int_schema);
   hegel_schema_free (triplet_schema);
   return (0);
 }
