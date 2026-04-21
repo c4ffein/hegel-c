@@ -93,21 +93,9 @@ int main (void) {
 
 MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [docs/mpi-testing.md](docs/mpi-testing.md).
 
-The selftest suite doubles as example code — 11 of the 38 tests are focused schema-pattern demonstrations (`test_gen_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
+The selftest suite doubles as example code — 11 of the 38 tests are focused schema-pattern demonstrations (`test_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
 
 The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part_schema.c`](tests/irl/scotch/test_graph_part_schema.c) shows the schema API generating graphs for `SCOTCH_graphPart`; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from a random schema and shrinks to a 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
-
-## TODO
-- [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
-- [ ] `hegel_target(tc, value, label)` — property-directed testing. Not in hegeltest 0.1.18 or 0.4.3, blocked upstream.
-- [ ] Pool hegel server across test binaries — hegeltest pools within a process, but separate binaries each pay ~1s. Suite API partially addresses this.
-- [ ] Parallel test execution
-- [ ] Verify Hegel's database replay of failing cases across runs with fork mode
-- [ ] More Scotch IRL tests — strategy string fuzzing against real parser, mesh partitioning
-- [ ] More IRL targets beyond Scotch in `tests/irl/`
-- [ ] Real C implementation (pure C wire protocol, no Rust bridge)
-  - [ ] Compare with Rust bridge using PBT
-- [ ] Clean up `graph_gen.h` / `scotch_helpers.h` — currently in the Scotch test harness, contain general patterns (CSR builders, strategy generators) worth extracting or generalizing. See `TODO.md`.
 
 ## License
 

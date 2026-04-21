@@ -669,3 +669,15 @@ does the orphan check via `grep -c 'ppid=1 '` on stderr after a
 work: bash-wrap the repro into a Makefile target that asserts
 zero orphans, add to selftest CI.  Cheap (~30 min) and would
 catch the most subtle regressions.
+
+## TODO
+- [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
+- [ ] `hegel_target(tc, value, label)` — property-directed testing. Not in hegeltest 0.1.18 or 0.4.3, blocked upstream.
+- [ ] Pool hegel server across test binaries — hegeltest pools within a process, but separate binaries each pay ~1s. Suite API partially addresses this.
+- [ ] Parallel test execution
+- [ ] Verify Hegel's database replay of failing cases across runs with fork mode
+- [ ] More Scotch IRL tests — strategy string fuzzing against real parser, mesh partitioning
+- [ ] More IRL targets beyond Scotch in `tests/irl/`
+- [ ] Real C implementation (pure C wire protocol, no Rust bridge)
+  - [ ] Compare with Rust bridge using PBT
+- [ ] Clean up `graph_gen.h` / `scotch_helpers.h` — currently in the Scotch test harness, contain general patterns (CSR builders, strategy generators) worth extracting or generalizing. See `TODO.md`.
