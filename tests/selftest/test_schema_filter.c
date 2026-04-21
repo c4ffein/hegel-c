@@ -2,34 +2,36 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: hegel_schema_filter_int only produces values satisfying the predicate.
+** Test: HEGEL_FILTER_INT — predicate enforced, source range preserved,
+** value variation on successful draws.
 **
-** Layer 1: divides_evenly() checks if x is exactly divisible by d.
-** Layer 2: filter(x % 3 == 0) on int(0, 99) — result must satisfy
-**          divides_evenly(result, 3) and be in [0, 99].
-**          This test should PASS.
+** Two sub-tests, each running N cases in nofork mode so a file-scope
+** counter can aggregate across cases:
+**
+**   1. Range + variation — FILTER_INT(int(0, 99), x % 3 == 0).  Asserts
+**      each result satisfies the predicate, stays in [0, 99], and that
+**      at least two distinct values are seen across N cases.  The
+**      variation check catches a regression that returned the same
+**      value every case — a bug the pure predicate assertion would miss.
+**
+**   2. Pinned — FILTER_INT(int(42, 42), x == 42).  Every kept value
+**      must equal 42 exactly.  The 1-value source + trivially-true
+**      predicate sharpens the plumbing check: a bug in the filter
+**      dispatch that wrote the wrong offset, truncated, or dropped
+**      the value would fail here even if a range-based test passed.
 **
 ** Expected: EXIT 0.
 */
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "hegel_c.h"
 #include "hegel_gen.h"
 
-/* ---- Layer 1: function under test ----
-** Returns non-zero if x divides evenly by d (no remainder). */
+#define N_CASES   4
 
-static
-int
-divides_evenly (
-int                         x,
-int                         d)
-{
-  return (x == (x / d) * d);
-}
-
-/* ---- filter predicate ---- */
+/* ---- Test 1: x % 3 == 0 over [0, 99] ---- */
 
 static
 int
@@ -39,29 +41,63 @@ mod3_eq0 (int val, void * ctx)
   return (val % 3 == 0);
 }
 
-/* ---- Layer 2: hegel test ---- */
-
-static hegel_schema_t  filter_schema;
+static hegel_schema_t  range_schema;
+static int             range_total;
+static int             range_min_val = INT_MAX;
+static int             range_max_val = INT_MIN;
 
 static
 void
-testFilterDiv3 (
+testFilterRange (
 hegel_testcase *            tc)
 {
   int                  result = 0;
   hegel_shape *        sh;
 
-  sh = HEGEL_DRAW (&result, filter_schema);
+  sh = HEGEL_DRAW (&result, range_schema);
 
-  HEGEL_ASSERT (divides_evenly (result, 3),
-                "filter(x%%3==0) produced %d", result);
+  range_total++;
+  HEGEL_ASSERT (result % 3 == 0,
+                "filter predicate violated: %d %% 3 != 0", result);
   HEGEL_ASSERT (result >= 0 && result <= 99,
                 "filter result out of source range: %d", result);
+  if (result < range_min_val) range_min_val = result;
+  if (result > range_max_val) range_max_val = result;
 
   hegel_shape_free (sh);
 }
 
-/* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
+/* ---- Test 2: x == 42 over [42, 42] ---- */
+
+static
+int
+eq42 (int val, void * ctx)
+{
+  (void) ctx;
+  return (val == 42);
+}
+
+static hegel_schema_t  pinned_schema;
+static int             pinned_total;
+
+static
+void
+testFilterPinned (
+hegel_testcase *            tc)
+{
+  int                  result = 0;
+  hegel_shape *        sh;
+
+  sh = HEGEL_DRAW (&result, pinned_schema);
+
+  pinned_total++;
+  HEGEL_ASSERT (result == 42,
+                "pinned filter produced %d, expected 42", result);
+
+  hegel_shape_free (sh);
+}
+
+/* ---- Runner ---- */
 
 int
 main (
@@ -71,13 +107,25 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  filter_schema = hegel_schema_filter_int (
-      hegel_schema_int_range (0, 99), mod3_eq0, NULL);
+  range_schema  = HEGEL_FILTER_INT (HEGEL_INT (0, 99),  mod3_eq0, NULL);
+  pinned_schema = HEGEL_FILTER_INT (HEGEL_INT (42, 42), eq42,     NULL);
 
-  printf ("Testing schema filter_int...\n");
-  hegel_run_test (testFilterDiv3);
-  printf ("PASSED\n");
+  printf ("Testing HEGEL_FILTER_INT (x %% 3 == 0 over [0,99])...\n");
+  hegel_run_test_nofork_n (testFilterRange, N_CASES);
+  if (range_max_val <= range_min_val) {
+    fprintf (stderr,
+             "filter range: only value %d seen across %d cases\n",
+             range_min_val, range_total);
+    return (1);
+  }
+  printf ("  PASSED (values %d..%d in %d cases)\n",
+          range_min_val, range_max_val, range_total);
 
-  hegel_schema_free (filter_schema);
+  printf ("Testing HEGEL_FILTER_INT (pinned to 42)...\n");
+  hegel_run_test_nofork_n (testFilterPinned, N_CASES);
+  printf ("  PASSED (%d cases)\n", pinned_total);
+
+  hegel_schema_free (range_schema);
+  hegel_schema_free (pinned_schema);
   return (0);
 }
