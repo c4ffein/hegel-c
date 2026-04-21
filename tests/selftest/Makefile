@@ -12,7 +12,7 @@ LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 TESTS_PASS = test_pass_simple \
              test_assume \
              test_gen_map \
-             test_gen_filter \
+             test_schema_filter \
              test_gen_flatmap \
              test_schema_oneof \
              test_schema_optional \
