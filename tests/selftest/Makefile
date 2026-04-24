@@ -43,7 +43,8 @@ TESTS_PASS = test_pass_simple \
              test_schema_facets_nested \
              test_schema_facets_self_recursion \
              test_schema_top_level_draw \
-             test_schema_map_of_one_of
+             test_schema_map_of_one_of \
+             test_binding_basic
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -55,7 +56,8 @@ TESTS_FAIL = test_shrink_boundary \
 # Tests that should FAIL via crash isolation (exit non-zero)
 TESTS_CRASH = test_crash_segfault \
               test_crash_abort \
-              test_crash_stackoverflow
+              test_crash_stackoverflow \
+              test_binding_unresolved
 
 # Tests that should fail via a HEGEL HEALTH-CHECK panic (e.g.
 # filter_too_much, large_base_example) — must exit non-zero AND

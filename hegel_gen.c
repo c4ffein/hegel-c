@@ -218,6 +218,16 @@ hegel__schema_slot_info (const hegel_schema * s,
         hegel__abort ("hegel__schema_slot_info: HEGEL_FACET BODY "
                       "not yet supported");
       break;
+    case HEGEL_SCH_BIND:
+      /* Delegate to inner: BIND just wraps a draw, slot dimensions
+      ** match what the inner schema would occupy on its own. */
+      hegel__schema_slot_info (s->bind_def.inner, out_size, out_align);
+      return;
+    case HEGEL_SCH_USE:
+      /* Stage 1: int-only bindings. */
+      *out_size  = sizeof (int);
+      *out_align = _Alignof (int);
+      return;
   }
   *out_size = 0;
   *out_align = 1;
@@ -714,6 +724,40 @@ hegel_schema_self (void)
   return (hegel_schema_t){s};
 }
 
+hegel_schema_t
+hegel_schema_bind (int binding_id, hegel_schema_t inner)
+{
+  hegel_schema * s;
+  if (inner._raw == NULL)
+    hegel__abort ("hegel_schema_bind: inner schema is NULL");
+  /* Stage 1 restriction: int-width INTEGER only.  Wider integer kinds
+  ** (i64, etc.) share the HEGEL_SCH_INTEGER enum tag but have a larger
+  ** slot — letting them through would silently truncate on read-back. */
+  if (inner._raw->kind != HEGEL_SCH_INTEGER
+      || inner._raw->integer.width != (int) sizeof (int))
+    hegel__abort ("hegel_schema_bind: Stage 1 requires int-width "
+                  "HEGEL_SCH_INTEGER inner schema (got kind=%d width=%d)",
+                  (int) inner._raw->kind,
+                  inner._raw->kind == HEGEL_SCH_INTEGER
+                    ? inner._raw->integer.width : 0);
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_BIND;
+  s->refcount = 1;
+  s->bind_def.binding_id = binding_id;
+  s->bind_def.inner = inner._raw;   /* transfer ownership */
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_use (int binding_id)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_USE;
+  s->refcount = 1;
+  s->use_def.binding_id = binding_id;
+  return (hegel_schema_t){s};
+}
+
 /* One-of-struct: pick one of several STRUCT schemas.  No parent
 ** offsets — this is a standalone pointer-producing generator. */
 hegel_schema_t
@@ -974,6 +1018,13 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
       ** self_ref.target to the same value. */
       hegel__resolve_self (node->subschema_def.source, target);
       break;
+    case HEGEL_SCH_BIND:
+      /* Recurse through inner so SELF inside a HEGEL_LET resolves. */
+      hegel__resolve_self (node->bind_def.inner, target);
+      break;
+    case HEGEL_SCH_USE:
+      /* Leaf — no inner schema to recurse into. */
+      break;
     default:
       break;
   }
@@ -1110,12 +1161,25 @@ hegel_shape_get_offset (hegel_shape * s, size_t offset)
 ** Struct is stack-allocated; the three parallel arrays are malloc'd
 ** by hegel__draw_ctx_init, grown by push, freed by _free. */
 
+/* Binding table kind tags (Stage 1: int only). */
+#define HEGEL__BKIND_INT   1
+
+#define HEGEL__MAX_BINDINGS_PER_SCOPE 16
+
 typedef struct {
   hegel_schema **  sources;
   void **          values;
   int *            lengths;
   int              n;
   int              cap;
+  /* Stage 1 let-bindings (same-struct scope only): fixed-size
+  ** inline table keyed by compile-time binding id (HEGEL_BINDING
+  ** = __COUNTER__).  Values cached as int64_t for now; kind tag
+  ** reserved for later type-check at USE. */
+  int              binding_ids   [HEGEL__MAX_BINDINGS_PER_SCOPE];
+  int64_t          binding_values[HEGEL__MAX_BINDINGS_PER_SCOPE];
+  int              binding_kinds [HEGEL__MAX_BINDINGS_PER_SCOPE];
+  int              binding_n;
 } hegel__draw_ctx;
 
 static void
@@ -1126,6 +1190,7 @@ hegel__draw_ctx_init (hegel__draw_ctx * ctx, int cap)
   ctx->lengths = (int *)           malloc ((size_t) cap * sizeof (int));
   ctx->n = 0;
   ctx->cap = cap;
+  ctx->binding_n = 0;
 }
 
 static void
@@ -1139,6 +1204,45 @@ hegel__draw_ctx_free (hegel__draw_ctx * ctx)
   ctx->lengths = NULL;
   ctx->n = 0;
   ctx->cap = 0;
+  ctx->binding_n = 0;
+}
+
+static void
+hegel__draw_ctx_bind (hegel__draw_ctx * ctx, int binding_id,
+                      int kind, int64_t value)
+{
+  int i;
+  /* Overwrite on re-bind within the same scope. */
+  for (i = 0; i < ctx->binding_n; i ++) {
+    if (ctx->binding_ids[i] == binding_id) {
+      ctx->binding_values[i] = value;
+      ctx->binding_kinds [i] = kind;
+      return;
+    }
+  }
+  if (ctx->binding_n >= HEGEL__MAX_BINDINGS_PER_SCOPE)
+    hegel__abort ("hegel__draw_ctx_bind: more than %d bindings in one "
+                  "scope (raise HEGEL__MAX_BINDINGS_PER_SCOPE)",
+                  HEGEL__MAX_BINDINGS_PER_SCOPE);
+  ctx->binding_ids   [ctx->binding_n] = binding_id;
+  ctx->binding_values[ctx->binding_n] = value;
+  ctx->binding_kinds [ctx->binding_n] = kind;
+  ctx->binding_n ++;
+}
+
+static int
+hegel__draw_ctx_lookup (hegel__draw_ctx * ctx, int binding_id,
+                        int * out_kind, int64_t * out_value)
+{
+  int i;
+  for (i = 0; i < ctx->binding_n; i ++) {
+    if (ctx->binding_ids[i] == binding_id) {
+      *out_kind  = ctx->binding_kinds [i];
+      *out_value = ctx->binding_values[i];
+      return (1);
+    }
+  }
+  return (0);
 }
 
 static int
@@ -2024,6 +2128,52 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
         return (shape);
       }
     }
+
+    case HEGEL_SCH_BIND: {
+      /* Draw inner into the field slot via the existing INTEGER path,
+      ** then cache the written int under the binding id for sibling
+      ** HEGEL_USE lookups.  Stage 1: inner kind is asserted INTEGER
+      ** by the constructor, so this read-back is safe. */
+      hegel_schema * inner = gen->bind_def.inner;
+      int            drawn;
+      if (ctx == NULL)
+        hegel__abort ("hegel__draw_field: HEGEL_LET reached without a "
+                      "draw ctx — HEGEL_LET only makes sense inside a "
+                      "HEGEL_STRUCT.");
+      hegel__draw_integer_into (tc, inner, dst);
+      drawn = *(int *) dst;
+      hegel__draw_ctx_bind (ctx, gen->bind_def.binding_id,
+                            HEGEL__BKIND_INT, (int64_t) drawn);
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
+      return (shape);
+    }
+
+    case HEGEL_SCH_USE: {
+      int       kind;
+      int64_t   value;
+      if (ctx == NULL)
+        hegel__abort ("hegel__draw_field: HEGEL_USE reached without a "
+                      "draw ctx — HEGEL_USE only makes sense inside a "
+                      "HEGEL_STRUCT.");
+      if (!hegel__draw_ctx_lookup (ctx, gen->use_def.binding_id,
+                                   &kind, &value))
+        hegel__abort ("hegel__draw_field: HEGEL_USE(id=%d) references a "
+                      "binding that has not been HEGEL_LET in the "
+                      "enclosing HEGEL_STRUCT.  Check draw order and "
+                      "binding scope.",
+                      gen->use_def.binding_id);
+      if (kind != HEGEL__BKIND_INT)
+        hegel__abort ("hegel__draw_field: HEGEL_USE(id=%d) expected INT "
+                      "binding kind, got kind=%d",
+                      gen->use_def.binding_id, kind);
+      *(int *) dst = (int) value;
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind = HEGEL_SHAPE_SCALAR;
+      shape->schema = gen;
+      return (shape);
+    }
   }
 
   return (NULL);
@@ -2286,6 +2436,13 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
                     "a parent struct's facet ctx — unreachable at top "
                     "level.");
       break;
+
+    case HEGEL_SCH_BIND:
+    case HEGEL_SCH_USE:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_LET / HEGEL_USE only "
+                    "make sense inside HEGEL_STRUCT — the binding scope "
+                    "is the enclosing struct.");
+      break;
   }
 
   return (NULL);
@@ -2431,6 +2588,12 @@ hegel__schema_free_raw (hegel_schema * s)
       free (s->regex_def.pattern);
       break;
     case HEGEL_SCH_SELF:
+      break;
+    case HEGEL_SCH_BIND:
+      hegel__schema_free_raw (s->bind_def.inner);
+      break;
+    case HEGEL_SCH_USE:
+      /* Leaf — no owned children. */
       break;
     default:
       break;

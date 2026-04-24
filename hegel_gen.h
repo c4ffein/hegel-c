@@ -135,8 +135,10 @@ typedef enum {
   HEGEL_SCH_FLAT_MAP_DOUBLE,
   HEGEL_SCH_ONE_OF_SCALAR,   /* pick one of several scalar schemas   */
   HEGEL_SCH_SELF,
-  HEGEL_SCH_SUBSCHEMA        /* facet leaf: projects one slot of a composite
+  HEGEL_SCH_SUBSCHEMA,       /* facet leaf: projects one slot of a composite
                                 source schema (e.g. ARRAY's size or value) */
+  HEGEL_SCH_BIND,            /* HEGEL_LET: draw inner, cache under binding id */
+  HEGEL_SCH_USE              /* HEGEL_USE: read cached value for binding id */
 } hegel_schema_kind;
 
 /* Forward declarations + typedefs so wrapper types can be defined
@@ -395,6 +397,19 @@ struct hegel_schema {
       struct hegel_schema * source;
       int                   offset;   /* HEGEL_FACET_OFF_{SIZE,VALUE,TAG,BODY} */
     }                                                  subschema_def;
+    struct {
+      /* HEGEL_LET: draws `inner` into the field slot, then caches the
+      ** drawn value under `binding_id` in the enclosing struct's draw
+      ** ctx.  Slot size/align come from `inner`. */
+      int                   binding_id;
+      struct hegel_schema * inner;
+    }                                                  bind_def;
+    struct {
+      /* HEGEL_USE: reads the cached value for `binding_id` from the
+      ** enclosing struct's draw ctx and writes it to the field slot.
+      ** Stage 1: int-only; slot is always sizeof(int). */
+      int                   binding_id;
+    }                                                  use_def;
   };
 };
 
@@ -652,6 +667,30 @@ hegel_schema_t hegel_schema_one_of_scalar_v (hegel_schema_t * case_list);
 hegel_schema_t hegel_schema_regex (const char * pattern, int capacity);
 
 hegel_schema_t hegel_schema_self (void);
+
+/* ================================================================
+** Let-bindings — name a drawn value, reference it elsewhere
+** ================================================================
+**
+** STAGE 1: same-struct scope only (no parent-scope walk yet), int only.
+**
+**     HEGEL_BINDING (n);                  // declare a compile-time id
+**     HEGEL_STRUCT (Pair,
+**         HEGEL_LET (n, HEGEL_INT (2, 5)),
+**         HEGEL_USE (n));
+**
+** HEGEL_BINDING expands to an enum constant whose value is __COUNTER__
+** at declaration point.  Typos become undefined-identifier compile
+** errors — no string-based lookup.  Function-local scope is the pit
+** of success (see TODO_NEXT_MUSING.md for the scoping discussion). */
+
+#define HEGEL_BINDING(name) enum { name = __COUNTER__ }
+
+hegel_schema_t hegel_schema_bind (int binding_id, hegel_schema_t inner);
+hegel_schema_t hegel_schema_use  (int binding_id);
+
+#define HEGEL_LET(name, inner) hegel_schema_bind ((name), (inner))
+#define HEGEL_USE(name)        hegel_schema_use  ((name))
 
 /* ================================================================
 ** Positional macro helpers
