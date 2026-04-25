@@ -2,11 +2,12 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: HEGEL_BINDING / HEGEL_LET / HEGEL_USE — Stage 1 prototype.
+** Test: HEGEL_BINDING / HEGEL_LET / HEGEL_USE — same-struct scope.
 **
-** Same-struct scope only.  A Pair { int n; int copy_of_n; } where
-** copy_of_n is read from the same binding n drew into.  After every
-** draw: n == copy_of_n (always), and 2 <= n <= 5 (HEGEL_INT range).
+** HEGEL_LET is non-positional: declares + draws + caches, but does
+** not occupy a slot.  Both fields of Pair { int n; int copy_of_n; }
+** are filled via HEGEL_USE(n) — they read the single drawn value.
+** After every draw: n == copy_of_n, and 2 <= n <= 5.
 **
 ** Expected: EXIT 0.
 */
@@ -30,8 +31,9 @@ void
 init_schema (void)
 {
   pair_schema = HEGEL_STRUCT (Pair,
-      HEGEL_LET (n, HEGEL_INT (2, 5)),
-      HEGEL_USE (n));
+      HEGEL_LET (n, HEGEL_INT (2, 5)),   /* non-positional: draws n */
+      HEGEL_USE (n),                     /* field 0: int n */
+      HEGEL_USE (n));                    /* field 1: int copy_of_n */
 }
 
 static

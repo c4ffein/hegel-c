@@ -40,13 +40,7 @@ hegel_schema_t
 hegel_schema_ref (hegel_schema_t s)
 {
   if (s._raw == NULL) return (s);
-  /* SUBSCHEMA nodes don't carry their own refcount — their lifetime
-  ** is tied to the composite source via source->refcount.  External
-  ** wrappers of a subschema bump the source instead. */
-  if (s._raw->kind == HEGEL_SCH_SUBSCHEMA)
-    s._raw->subschema_def.source->refcount ++;
-  else
-    s._raw->refcount ++;
+  s._raw->refcount ++;
   return (s);
 }
 
@@ -77,7 +71,7 @@ hegel__inline_ref_check (size_t declared_size, hegel_schema_t sch)
 ** Given a list of `hegel_schema_t` entries describing ordered fields
 ** of a struct, compute each entry's byte offset in the parent struct
 ** using C's layout rules, fix up kind-specific sub-offsets inside
-** each schema (array_def.len_offset), and build children + offsets
+** each schema (array_inline_def.len_offset), and build children + offsets
 ** arrays.  Size and alignment for each entry are derived from its
 ** schema kind via `hegel__schema_slot_info`.
 **
@@ -126,17 +120,6 @@ hegel__schema_slot_info (const hegel_schema * s,
     case HEGEL_SCH_OPTIONAL_PTR:
       *out_size  = sizeof (void *);
       *out_align = _Alignof (void *);
-      return;
-    case HEGEL_SCH_ARRAY:
-      /* HEGEL_ARRAY is no longer a direct layout entry under the
-      ** facets model — users must project via HEGEL_FACET(hat, value)
-      ** and HEGEL_FACET(hat, size).  Fail loudly to catch unmigrated
-      ** call sites at schema-build time. */
-      hegel__abort ("hegel__schema_slot_info: HEGEL_ARRAY cannot be "
-                    "used directly inside HEGEL_STRUCT — name the "
-                    "array (hegel_schema_t hat = HEGEL_ARRAY(...);) "
-                    "and project its facets via HEGEL_FACET(hat, "
-                    "value) + HEGEL_FACET(hat, size).");
       return;
     case HEGEL_SCH_ARRAY_INLINE:
       /* Primary slot only: the pointer.  Callers that need the
@@ -198,33 +181,27 @@ hegel__schema_slot_info (const hegel_schema * s,
       *out_size  = sizeof (void *);
       *out_align = _Alignof (void *);
       return;
-    case HEGEL_SCH_SUBSCHEMA:
-      /* Facet leaf — slot dimensions derived from which facet of the
-      ** source we project.  Under V1 only SIZE (int) and VALUE (ptr)
-      ** are used; TAG is int, BODY depends on the source kind and is
-      ** not yet supported. */
-      if (s->subschema_def.offset == HEGEL_FACET_OFF_VALUE) {
-        *out_size  = sizeof (void *);
-        *out_align = _Alignof (void *);
-        return;
-      }
-      if (s->subschema_def.offset == HEGEL_FACET_OFF_SIZE
-          || s->subschema_def.offset == HEGEL_FACET_OFF_TAG) {
-        *out_size  = sizeof (int);
-        *out_align = _Alignof (int);
-        return;
-      }
-      if (s->subschema_def.offset == HEGEL_FACET_OFF_BODY)
-        hegel__abort ("hegel__schema_slot_info: HEGEL_FACET BODY "
-                      "not yet supported");
-      break;
     case HEGEL_SCH_BIND:
-      /* Delegate to inner: BIND just wraps a draw, slot dimensions
-      ** match what the inner schema would occupy on its own. */
-      hegel__schema_slot_info (s->bind_def.inner, out_size, out_align);
+      /* Non-positional: HEGEL_LET declares + draws + caches, but does
+      ** not occupy a parent slot.  Place the value in the struct via
+      ** a separate HEGEL_USE entry.  The layout pass treats size=0 as
+      ** "skip, don't advance offset." */
+      *out_size  = 0;
+      *out_align = 1;
       return;
     case HEGEL_SCH_USE:
       /* Stage 1: int-only bindings. */
+      *out_size  = sizeof (int);
+      *out_align = _Alignof (int);
+      return;
+    case HEGEL_SCH_ARR_OF:
+      /* Single pointer slot in the parent.  Length does not occupy
+      ** a field here — pair with HEGEL_LET / HEGEL_USE if the
+      ** struct needs to store the length elsewhere. */
+      *out_size  = sizeof (void *);
+      *out_align = _Alignof (void *);
+      return;
+    case HEGEL_SCH_CONST_INT:
       *out_size  = sizeof (int);
       *out_align = _Alignof (int);
       return;
@@ -274,6 +251,16 @@ hegel__struct_build (size_t declared_size, size_t declared_align,
 
     hegel__schema_slot_info (e, &slot0_size, &slot0_align);
 
+    /* Zero-size entries (HEGEL_LET) are non-positional — they run
+    ** as side effects during draw but don't contribute to layout.
+    ** Record SIZE_MAX as an offset sentinel so draw iteration can
+    ** distinguish them. */
+    if (slot0_size == 0) {
+      children[i] = e;
+      offsets[i]  = SIZE_MAX;
+      continue;
+    }
+
     slot0_off = hegel__align_up (cur, slot0_align);
     cur       = slot0_off + slot0_size;
     if (slot0_align > max_align) max_align = slot0_align;
@@ -283,9 +270,7 @@ hegel__struct_build (size_t declared_size, size_t declared_align,
 
     /* ARRAY_INLINE has a second slot: the int count that follows the
     ** ptr.  Hardcode {sizeof(int), _Alignof(int)} and write the
-    ** computed length-slot offset back into the schema.  HEGEL_ARRAY
-    ** no longer uses this path — it's unreachable as a direct layout
-    ** entry thanks to the hegel__schema_slot_info abort. */
+    ** computed length-slot offset back into the schema. */
     if (e->kind == HEGEL_SCH_ARRAY_INLINE) {
       size_t slot1_off = hegel__align_up (cur, _Alignof (int));
       cur = slot1_off + sizeof (int);
@@ -649,44 +634,6 @@ hegel_schema_optional_ptr (hegel_schema_t inner)
 }
 
 hegel_schema_t
-hegel_schema_array (hegel_schema_t elem, int min_len, int max_len)
-{
-  hegel_schema *       s;
-  hegel_schema *       size_node;
-  hegel_schema *       value_node;
-
-  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  s->kind = HEGEL_SCH_ARRAY;
-  s->refcount = 1;
-  s->array_def.elem = elem._raw;  /* transfer ownership, unwrap */
-  s->array_def.min_len = min_len;
-  s->array_def.max_len = max_len;
-
-  /* Build the facets struct and its two subschema leaves (size + value).
-  ** The subschema nodes live inside the facets struct; their storage is
-  ** freed directly when the source's refcount hits 0 (see the
-  ** HEGEL_SCH_ARRAY case of hegel__schema_free_raw). */
-  s->facets = (hegel_schema_facets *)
-      calloc (1, sizeof (hegel_schema_facets));
-
-  size_node = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  size_node->kind = HEGEL_SCH_SUBSCHEMA;
-  size_node->refcount = 0;  /* subschema nodes don't use their own refcount */
-  size_node->subschema_def.source = s;
-  size_node->subschema_def.offset = HEGEL_FACET_OFF_SIZE;
-  s->facets->size = (hegel_schema_t){ size_node };
-
-  value_node = (hegel_schema *) calloc (1, sizeof (hegel_schema));
-  value_node->kind = HEGEL_SCH_SUBSCHEMA;
-  value_node->refcount = 0;
-  value_node->subschema_def.source = s;
-  value_node->subschema_def.offset = HEGEL_FACET_OFF_VALUE;
-  s->facets->value = (hegel_schema_t){ value_node };
-
-  return (hegel_schema_t){s};
-}
-
-hegel_schema_t
 hegel_schema_array_inline (size_t len_offset, hegel_schema_t elem,
                            size_t elem_size, int min_len, int max_len)
 {
@@ -694,7 +641,7 @@ hegel_schema_array_inline (size_t len_offset, hegel_schema_t elem,
   /* Runtime check: ARRAY_INLINE elements must be STRUCT or UNION.
   ** Passing a VARIANT or scalar schema here would be silently wrong
   ** (VARIANT stores a pointer, which defeats "inline"; scalars should
-  ** use HEGEL_ARRAY). Fail loudly at setup time. */
+  ** use HEGEL_ARR_OF). Fail loudly at setup time. */
   if (e->kind != HEGEL_SCH_STRUCT
       && e->kind != HEGEL_SCH_UNION
       && e->kind != HEGEL_SCH_UNION_UNTAGGED) {
@@ -755,6 +702,32 @@ hegel_schema_use (int binding_id)
   s->kind = HEGEL_SCH_USE;
   s->refcount = 1;
   s->use_def.binding_id = binding_id;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_const_int (int value)
+{
+  hegel_schema * s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_CONST_INT;
+  s->refcount = 1;
+  s->const_int_def.value = value;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_arr_of (hegel_schema_t length, hegel_schema_t elem)
+{
+  hegel_schema * s;
+  if (length._raw == NULL)
+    hegel__abort ("hegel_schema_arr_of: length schema is NULL");
+  if (elem._raw == NULL)
+    hegel__abort ("hegel_schema_arr_of: element schema is NULL");
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_ARR_OF;
+  s->refcount = 1;
+  s->arr_of_def.length = length._raw;   /* transfer ownership */
+  s->arr_of_def.elem   = elem._raw;     /* transfer ownership */
   return (hegel_schema_t){s};
 }
 
@@ -957,9 +930,6 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
     case HEGEL_SCH_OPTIONAL_PTR:
       hegel__resolve_self (node->optional_ptr.inner, target);
       break;
-    case HEGEL_SCH_ARRAY:
-      hegel__resolve_self (node->array_def.elem, target);
-      break;
     case HEGEL_SCH_ARRAY_INLINE:
       hegel__resolve_self (node->array_inline_def.elem, target);
       break;
@@ -1008,22 +978,19 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
       for (int i = 0; i < node->one_of_scalar_def.n_cases; i ++)
         hegel__resolve_self (node->one_of_scalar_def.cases[i], target);
       break;
-    case HEGEL_SCH_SUBSCHEMA:
-      /* SELF nested inside a facet'd composite's element schema:
-      ** descend through the source so e.g. HEGEL_ARRAY(HEGEL_SELF(),
-      ** ...) projected via HEGEL_FACET into a struct gets its SELF
-      ** target patched to the enclosing struct.  The same source may
-      ** be reached through multiple SUBSCHEMA wrappers (one per
-      ** facet use); the walk is idempotent because it just sets
-      ** self_ref.target to the same value. */
-      hegel__resolve_self (node->subschema_def.source, target);
-      break;
     case HEGEL_SCH_BIND:
       /* Recurse through inner so SELF inside a HEGEL_LET resolves. */
       hegel__resolve_self (node->bind_def.inner, target);
       break;
     case HEGEL_SCH_USE:
       /* Leaf — no inner schema to recurse into. */
+      break;
+    case HEGEL_SCH_ARR_OF:
+      hegel__resolve_self (node->arr_of_def.length, target);
+      hegel__resolve_self (node->arr_of_def.elem,   target);
+      break;
+    case HEGEL_SCH_CONST_INT:
+      /* Leaf — no children. */
       break;
     default:
       break;
@@ -1046,15 +1013,17 @@ int
 hegel_shape_array_len (hegel_shape * s)
 {
   /* Abort loudly rather than return a silent 0.  A common footgun is
-  ** calling this on a facet'd array's size-slot shape (a trivial
-  ** scalar leaf), when you meant the value-slot shape (which owns
-  ** the HEGEL_SHAPE_ARRAY).  A silent 0 there masks the mistake. */
+  ** calling this on the int-slot shape (the HEGEL_USE writing the
+  ** count, a trivial scalar leaf), when you meant the pointer-slot
+  ** shape (which owns the HEGEL_SHAPE_ARRAY).  A silent 0 there
+  ** masks the mistake. */
   if (s == NULL)
     hegel__abort ("hegel_shape_array_len: NULL shape");
   if (s->kind != HEGEL_SHAPE_ARRAY)
     hegel__abort ("hegel_shape_array_len: shape kind=%d, not "
-                  "HEGEL_SHAPE_ARRAY — did you pass the size-facet "
-                  "slot instead of the value-facet slot?", s->kind);
+                  "HEGEL_SHAPE_ARRAY — did you pass the count slot "
+                  "instead of the HEGEL_ARR_OF pointer slot?",
+                  s->kind);
   return (s->array_shape.len);
 }
 
@@ -1144,67 +1113,39 @@ hegel_shape_get_offset (hegel_shape * s, size_t offset)
 ** Draw
 ** ================================================================ */
 
-/* Per-draw scratch registry, scoped to one struct instance.  A fresh
+/* Per-draw binding registry, scoped to one struct instance.  A fresh
 ** instance is created on the stack at each hegel__draw_struct /
 ** _into_slot entry and threaded as an explicit parameter through
-** hegel__draw_field and its recursive descendants.  When the struct
-** finishes drawing, its ctx goes out of scope — any nested struct
-** already created its own ctx, so facets of the same `hat` that span
-** two different struct instances get independent draws.
-**
-** On a HEGEL_SCH_SUBSCHEMA leaf, the draw path looks up the facet's
-** source in `sources[]`.  Miss = first facet for this source this
-** struct instance — draw the composite, push (source, ptr, len).
-** Hit = read the cached ptr/len back and write the appropriate one
-** to the slot.
-**
-** Struct is stack-allocated; the three parallel arrays are malloc'd
-** by hegel__draw_ctx_init, grown by push, freed by _free. */
+** hegel__draw_field and its recursive descendants.  Chained via
+** `parent` so an inner HEGEL_USE can resolve an outer HEGEL_LET.
+** Struct is stack-allocated; the binding table is inline (fixed
+** size HEGEL__MAX_BINDINGS_PER_SCOPE). */
 
 /* Binding table kind tags (Stage 1: int only). */
 #define HEGEL__BKIND_INT   1
 
 #define HEGEL__MAX_BINDINGS_PER_SCOPE 16
 
-typedef struct {
-  hegel_schema **  sources;
-  void **          values;
-  int *            lengths;
-  int              n;
-  int              cap;
-  /* Stage 1 let-bindings (same-struct scope only): fixed-size
-  ** inline table keyed by compile-time binding id (HEGEL_BINDING
-  ** = __COUNTER__).  Values cached as int64_t for now; kind tag
-  ** reserved for later type-check at USE. */
+typedef struct hegel__draw_ctx_s {
+  /* Let-bindings: fixed-size inline table keyed by compile-time
+  ** binding id (HEGEL_BINDING = __COUNTER__).  Values cached as
+  ** int64_t; kind tag drives runtime type-check at USE. */
   int              binding_ids   [HEGEL__MAX_BINDINGS_PER_SCOPE];
   int64_t          binding_values[HEGEL__MAX_BINDINGS_PER_SCOPE];
   int              binding_kinds [HEGEL__MAX_BINDINGS_PER_SCOPE];
   int              binding_n;
+  /* Lexical scope chain.  Set at init to the enclosing struct's ctx
+  ** (or NULL at top level).  hegel__draw_ctx_lookup walks this chain
+  ** when a binding isn't found locally, so a HEGEL_USE in an inner
+  ** struct can resolve an outer HEGEL_LET. */
+  struct hegel__draw_ctx_s * parent;
 } hegel__draw_ctx;
 
 static void
-hegel__draw_ctx_init (hegel__draw_ctx * ctx, int cap)
+hegel__draw_ctx_init (hegel__draw_ctx * ctx, hegel__draw_ctx * parent)
 {
-  ctx->sources = (hegel_schema **) malloc ((size_t) cap * sizeof (hegel_schema *));
-  ctx->values  = (void **)         malloc ((size_t) cap * sizeof (void *));
-  ctx->lengths = (int *)           malloc ((size_t) cap * sizeof (int));
-  ctx->n = 0;
-  ctx->cap = cap;
   ctx->binding_n = 0;
-}
-
-static void
-hegel__draw_ctx_free (hegel__draw_ctx * ctx)
-{
-  free (ctx->sources);
-  free (ctx->values);
-  free (ctx->lengths);
-  ctx->sources = NULL;
-  ctx->values  = NULL;
-  ctx->lengths = NULL;
-  ctx->n = 0;
-  ctx->cap = 0;
-  ctx->binding_n = 0;
+  ctx->parent = parent;
 }
 
 static void
@@ -1212,12 +1153,19 @@ hegel__draw_ctx_bind (hegel__draw_ctx * ctx, int binding_id,
                       int kind, int64_t value)
 {
   int i;
-  /* Overwrite on re-bind within the same scope. */
+  /* Re-binding the same name in the same scope is almost always a
+  ** user mistake (typo'd name collided with an earlier LET, or a
+  ** copy-paste left two HEGEL_LETs with the same id).  Abort loudly
+  ** rather than silently overwriting — silent overwrite would mask
+  ** the bug and let the second LET "win" with no warning. */
   for (i = 0; i < ctx->binding_n; i ++) {
     if (ctx->binding_ids[i] == binding_id) {
-      ctx->binding_values[i] = value;
-      ctx->binding_kinds [i] = kind;
-      return;
+      hegel__abort ("hegel__draw_ctx_bind: HEGEL_LET for binding id=%d "
+                    "appears twice in the same scope.  Each binding id "
+                    "may only be HEGEL_LET once per struct instance; "
+                    "use a separate HEGEL_BINDING declaration for a "
+                    "second value.",
+                    binding_id);
     }
   }
   if (ctx->binding_n >= HEGEL__MAX_BINDINGS_PER_SCOPE)
@@ -1234,59 +1182,57 @@ static int
 hegel__draw_ctx_lookup (hegel__draw_ctx * ctx, int binding_id,
                         int * out_kind, int64_t * out_value)
 {
-  int i;
-  for (i = 0; i < ctx->binding_n; i ++) {
-    if (ctx->binding_ids[i] == binding_id) {
-      *out_kind  = ctx->binding_kinds [i];
-      *out_value = ctx->binding_values[i];
-      return (1);
+  /* Walk the scope chain from innermost outward: if the binding
+  ** isn't bound in the current struct's ctx, try the enclosing
+  ** struct's, and so on up to the root.  First hit wins (shadowing
+  ** by inner scopes is a consequence, not an explicit feature). */
+  hegel__draw_ctx *  s;
+  int                i;
+  for (s = ctx; s != NULL; s = s->parent) {
+    for (i = 0; i < s->binding_n; i ++) {
+      if (s->binding_ids[i] == binding_id) {
+        *out_kind  = s->binding_kinds [i];
+        *out_value = s->binding_values[i];
+        return (1);
+      }
     }
   }
   return (0);
 }
 
-static int
-hegel__draw_ctx_find (hegel__draw_ctx * ctx, hegel_schema * src)
-{
-  int i;
-  for (i = 0; i < ctx->n; i ++)
-    if (ctx->sources[i] == src) return (i);
-  return (-1);
-}
-
-static void
-hegel__draw_ctx_push (hegel__draw_ctx * ctx, hegel_schema * src,
-                      void * ptr, int len)
-{
-  if (ctx->n == ctx->cap) {
-    int new_cap = ctx->cap * 2;
-    ctx->sources = (hegel_schema **) realloc (ctx->sources,
-        (size_t) new_cap * sizeof (hegel_schema *));
-    ctx->values  = (void **) realloc (ctx->values,
-        (size_t) new_cap * sizeof (void *));
-    ctx->lengths = (int *) realloc (ctx->lengths,
-        (size_t) new_cap * sizeof (int));
-    ctx->cap = new_cap;
-  }
-  ctx->sources[ctx->n] = src;
-  ctx->values [ctx->n] = ptr;
-  ctx->lengths[ctx->n] = len;
-  ctx->n ++;
-}
-
 static hegel_shape *
 hegel__draw_struct (hegel_testcase * tc, hegel_schema * gen, void ** out,
-                    int depth);
+                    int depth, hegel__draw_ctx * parent_ctx);
 static hegel_shape *
 hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
                    void * parent, size_t offset, int depth,
                    hegel__draw_ctx * ctx);
+static void hegel__draw_integer_into (hegel_testcase * tc,
+                                      hegel_schema * gen, void * dst);
+
+/* Side-effect-only draw for HEGEL_SCH_BIND (non-positional LET):
+** draws the inner int into a stack scratch and caches the value in
+** the ctx's binding table.  No slot in the parent struct, no shape
+** field emitted. */
+static void
+hegel__draw_let_side_effect (hegel_testcase * tc, hegel_schema * gen,
+                             hegel__draw_ctx * ctx)
+{
+  int drawn = 0;
+  if (gen->kind != HEGEL_SCH_BIND)
+    hegel__abort ("hegel__draw_let_side_effect: expected HEGEL_SCH_BIND, "
+                  "got kind=%d", (int) gen->kind);
+  if (ctx == NULL)
+    hegel__abort ("hegel__draw_let_side_effect: HEGEL_LET needs a draw "
+                  "ctx (only valid inside HEGEL_STRUCT).");
+  hegel__draw_integer_into (tc, gen->bind_def.inner, &drawn);
+  hegel__draw_ctx_bind (ctx, gen->bind_def.binding_id,
+                        HEGEL__BKIND_INT, (int64_t) drawn);
+}
 static hegel_shape *
 hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
-                              void * slot, int depth);
-static hegel_shape *
-hegel__draw_array_standalone (hegel_testcase * tc, hegel_schema * src,
-                              int depth, void ** out_ptr, int * out_len);
+                              void * slot, int depth,
+                              hegel__draw_ctx * parent_ctx);
 
 /* ---- Draw an integer into memory at `dst` ---- */
 
@@ -1475,7 +1421,7 @@ hegel__draw_text (hegel_testcase * tc, int min_len, int max_len)
 
 static hegel_shape *
 hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
-                   int depth)
+                   int depth, hegel__draw_ctx * parent_ctx)
 {
   hegel_schema *      actual;
   hegel_shape *       shape;
@@ -1487,7 +1433,7 @@ hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
   switch (actual->kind) {
 
     case HEGEL_SCH_STRUCT:
-      return (hegel__draw_struct (tc, actual, out, depth));
+      return (hegel__draw_struct (tc, actual, out, depth, parent_ctx));
 
     case HEGEL_SCH_TEXT: {
       char * buf = hegel__draw_text (tc,
@@ -1524,7 +1470,7 @@ hegel__draw_alloc (hegel_testcase * tc, hegel_schema * gen, void ** out,
       chosen = actual->variant_def.cases[tag];
 
       hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
-      inner = hegel__draw_struct (tc, chosen, &child, depth - 1);
+      inner = hegel__draw_struct (tc, chosen, &child, depth - 1, parent_ctx);
       hegel_stop_span (tc, 0);
       hegel_stop_span (tc, 0);
 
@@ -1585,7 +1531,8 @@ hegel__alloc_struct_fields (hegel_shape * shape, int n)
 
 static hegel_shape *
 hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
-                              void * slot, int depth)
+                              void * slot, int depth,
+                              hegel__draw_ctx * parent_ctx)
 {
   int                 nf = gen->struct_def.n_children;
   hegel_shape *       sh;
@@ -1598,23 +1545,29 @@ hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
   sh->owned = NULL;
   hegel__alloc_struct_fields (sh, nf);
 
-  /* Per-struct-instance ctx: facets within this struct share, but
-  ** sub-structs drawn from within (inline, array elements, variant
-  ** cases) get their own ctx so they don't inherit our drawn
-  ** composites. */
-  hegel__draw_ctx_init (&local_ctx, 4);
+  /* Per-struct-instance ctx: sub-structs drawn from within (inline,
+  ** array elements, variant cases) get their own ctx so their
+  ** bindings are scoped locally.  `parent_ctx` links the scope
+  ** chain — a HEGEL_USE here can reach a HEGEL_LET in the
+  ** enclosing struct. */
+  hegel__draw_ctx_init (&local_ctx, parent_ctx);
 
   hegel_start_span (tc, HEGEL_SPAN_TUPLE);
   for (f = 0; f < nf; f ++) {
     size_t          field_off = gen->struct_def.offsets[f];
     hegel_schema *  field_sch = gen->struct_def.children[f];
-    sh->struct_shape.fields[f] =
-        hegel__draw_field (tc, field_sch, slot, field_off, depth - 1,
-                           &local_ctx);
+    if (field_sch->kind == HEGEL_SCH_BIND) {
+      /* Non-positional LET — run as side effect, no slot write,
+      ** no shape field emitted. */
+      hegel__draw_let_side_effect (tc, field_sch, &local_ctx);
+      sh->struct_shape.fields[f] = NULL;
+    } else {
+      sh->struct_shape.fields[f] =
+          hegel__draw_field (tc, field_sch, slot, field_off, depth - 1,
+                             &local_ctx);
+    }
   }
   hegel_stop_span (tc, 0);
-
-  hegel__draw_ctx_free (&local_ctx);
 
   return (sh);
 }
@@ -1623,7 +1576,7 @@ hegel__draw_struct_into_slot (hegel_testcase * tc, hegel_schema * gen,
 
 static hegel_shape *
 hegel__draw_struct (hegel_testcase * tc, hegel_schema * gen, void ** out,
-                    int depth)
+                    int depth, hegel__draw_ctx * parent_ctx)
 {
   void *              ptr;
   hegel_shape *       shape;
@@ -1640,22 +1593,23 @@ hegel__draw_struct (hegel_testcase * tc, hegel_schema * gen, void ** out,
   shape->owned = ptr;
   hegel__alloc_struct_fields (shape, n);
 
-  /* Per-struct-instance ctx: facets within this struct share, but
-  ** sub-structs drawn from within (inline, array elements, variant
-  ** cases) get their own ctx so they don't inherit our drawn
-  ** composites. */
-  hegel__draw_ctx_init (&local_ctx, 4);
+  /* Per-struct-instance ctx with local binding table.  Chained via
+  ** `parent_ctx` so nested USE sites can reach outer LETs. */
+  hegel__draw_ctx_init (&local_ctx, parent_ctx);
 
   hegel_start_span (tc, HEGEL_SPAN_TUPLE);
   for (i = 0; i < n; i ++) {
     size_t          field_off = gen->struct_def.offsets[i];
     hegel_schema *  field_sch = gen->struct_def.children[i];
-    shape->struct_shape.fields[i] =
-        hegel__draw_field (tc, field_sch, ptr, field_off, depth, &local_ctx);
+    if (field_sch->kind == HEGEL_SCH_BIND) {
+      hegel__draw_let_side_effect (tc, field_sch, &local_ctx);
+      shape->struct_shape.fields[i] = NULL;
+    } else {
+      shape->struct_shape.fields[i] =
+          hegel__draw_field (tc, field_sch, ptr, field_off, depth, &local_ctx);
+    }
   }
   hegel_stop_span (tc, 0);
-
-  hegel__draw_ctx_free (&local_ctx);
 
   *out = ptr;
   return (shape);
@@ -1725,7 +1679,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
         void * child;
         shape->optional_shape.inner =
             hegel__draw_alloc (tc, gen->optional_ptr.inner, &child,
-                               depth - 1);
+                               depth - 1, ctx);
         shape->optional_shape.is_some =
             (shape->optional_shape.inner != NULL);
         if (shape->optional_shape.is_some)
@@ -1738,16 +1692,6 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       hegel_stop_span (tc, 0);
       return (shape);
     }
-
-    case HEGEL_SCH_ARRAY:
-      /* Unreachable as a direct layout entry — the layout pass
-      ** rejects HEGEL_ARRAY via hegel__schema_slot_info.  Kept here
-      ** only to exhaust the switch; if it ever fires, something has
-      ** bypassed the layout pass. */
-      hegel__abort ("hegel__draw_field: HEGEL_ARRAY cannot be drawn "
-                    "as a direct struct field; use HEGEL_FACET(hat, "
-                    "value) + HEGEL_FACET(hat, size) instead.");
-      break;
 
     case HEGEL_SCH_ARRAY_INLINE: {
       int             n;
@@ -1787,7 +1731,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
           /* Inline struct: draw each field into slot.  Shared with
           ** the HEGEL_INLINE field path via hegel__draw_struct_into_slot. */
           shape->array_shape.elems[i] =
-              hegel__draw_struct_into_slot (tc, elem, slot, depth);
+              hegel__draw_struct_into_slot (tc, elem, slot, depth, ctx);
 
         } else if (elem->kind == HEGEL_SCH_UNION
                 || elem->kind == HEGEL_SCH_UNION_UNTAGGED) {
@@ -1802,7 +1746,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
         } else {
           /* Scalar element in inline array — shouldn't happen
-          ** (use HEGEL_ARRAY for scalar arrays), but handle it. */
+          ** (use HEGEL_ARR_OF for scalar arrays), but handle it. */
           shape->array_shape.elems[i] =
               hegel__draw_field (tc, elem, slot, 0, depth - 1, ctx);
         }
@@ -1845,7 +1789,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       chosen = gen->union_def.cases[tag];
       hegel_start_span (tc, HEGEL_SPAN_ENUM_VARIANT);
       shape->variant_shape.inner =
-          hegel__draw_struct_into_slot (tc, chosen, dst, depth + 1);
+          hegel__draw_struct_into_slot (tc, chosen, dst, depth + 1, ctx);
 
       hegel_stop_span (tc, 0);
       hegel_stop_span (tc, 0);
@@ -1878,7 +1822,7 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       {
         void * child;
         shape->variant_shape.inner =
-            hegel__draw_struct (tc, chosen, &child, depth - 1);
+            hegel__draw_struct (tc, chosen, &child, depth - 1, ctx);
         *(void **) ((char *) dst + gen->variant_def.ptr_offset) = child;
       }
       hegel_stop_span (tc, 0);
@@ -2073,8 +2017,10 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
     case HEGEL_SCH_STRUCT:
       /* Inline-by-value sub-struct: draw the nested struct's fields
       ** directly into the parent slot at `dst`.  Storage is owned by
-      ** the parent struct block; the returned shape has owned=NULL. */
-      return (hegel__draw_struct_into_slot (tc, gen, dst, depth));
+      ** the parent struct block; the returned shape has owned=NULL.
+      ** Pass `ctx` as the inner struct's parent_ctx so HEGEL_USE in
+      ** the inner can resolve a HEGEL_LET in this enclosing struct. */
+      return (hegel__draw_struct_into_slot (tc, gen, dst, depth, ctx));
 
     case HEGEL_SCH_SELF:
     case HEGEL_SCH_ONE_OF_STRUCT:
@@ -2083,67 +2029,18 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       ** element or inside HEGEL_OPTIONAL (handled via draw_alloc). */
       break;
 
-    case HEGEL_SCH_SUBSCHEMA: {
-      /* Facet leaf — dynamic primary/secondary via the per-struct
-      ** ctx threaded in by the caller.  First use of a given source
-      ** in this struct instance is PRIMARY: draw the composite, push
-      ** the result onto the ctx, write the appropriate facet value
-      ** (ptr or len) to the current slot, return the composite's
-      ** shape (ownership transfers to the slot).  Subsequent uses
-      ** are SECONDARY: read cached ptr/len from ctx, write to slot,
-      ** return a trivial leaf shape. */
-      hegel_schema *  src = gen->subschema_def.source;
-      int             offset = gen->subschema_def.offset;
-      int             idx;
+    case HEGEL_SCH_BIND:
+      /* HEGEL_LET is non-positional: handled as a side effect by
+      ** hegel__draw_struct / _into_slot directly, never via this
+      ** slot-writing path.  Reaching here means the struct draw
+      ** iterator didn't detect the BIND kind — a bug. */
+      hegel__abort ("hegel__draw_field: HEGEL_SCH_BIND is non-positional "
+                    "and must be handled by hegel__draw_let_side_effect, "
+                    "not through the slot-draw path.");
+      break;
 
-      if (ctx == NULL)
-        hegel__abort ("hegel__draw_field: SUBSCHEMA reached without "
-                      "a draw ctx — caller forgot to thread ctx");
-      if (src == NULL || src->kind != HEGEL_SCH_ARRAY)
-        hegel__abort ("hegel__draw_field: SUBSCHEMA source must be "
-                      "HEGEL_SCH_ARRAY in V1");
-
-      idx = hegel__draw_ctx_find (ctx, src);
-      if (idx < 0) {
-        /* Primary. */
-        void *  ptr;
-        int     n;
-        hegel_shape * arr_shape =
-            hegel__draw_array_standalone (tc, src, depth, &ptr, &n);
-        hegel__draw_ctx_push (ctx, src, ptr, n);
-        if (offset == HEGEL_FACET_OFF_VALUE)
-          *(void **) dst = ptr;
-        else /* HEGEL_FACET_OFF_SIZE */
-          *(int *) dst = n;
-        return (arr_shape);
-      } else {
-        /* Secondary — reuse cached ptr/len; emit a trivial leaf. */
-        if (offset == HEGEL_FACET_OFF_VALUE)
-          *(void **) dst = ctx->values[idx];
-        else /* HEGEL_FACET_OFF_SIZE */
-          *(int *) dst = ctx->lengths[idx];
-        shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
-        shape->kind = HEGEL_SHAPE_SCALAR;
-        shape->schema = gen;
-        return (shape);
-      }
-    }
-
-    case HEGEL_SCH_BIND: {
-      /* Draw inner into the field slot via the existing INTEGER path,
-      ** then cache the written int under the binding id for sibling
-      ** HEGEL_USE lookups.  Stage 1: inner kind is asserted INTEGER
-      ** by the constructor, so this read-back is safe. */
-      hegel_schema * inner = gen->bind_def.inner;
-      int            drawn;
-      if (ctx == NULL)
-        hegel__abort ("hegel__draw_field: HEGEL_LET reached without a "
-                      "draw ctx — HEGEL_LET only makes sense inside a "
-                      "HEGEL_STRUCT.");
-      hegel__draw_integer_into (tc, inner, dst);
-      drawn = *(int *) dst;
-      hegel__draw_ctx_bind (ctx, gen->bind_def.binding_id,
-                            HEGEL__BKIND_INT, (int64_t) drawn);
+    case HEGEL_SCH_CONST_INT: {
+      *(int *) dst = gen->const_int_def.value;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_SCALAR;
       shape->schema = gen;
@@ -2174,132 +2071,128 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
       shape->schema = gen;
       return (shape);
     }
+
+    case HEGEL_SCH_ARR_OF: {
+      /* Evaluate the length schema into a local int by reusing the
+      ** field-draw path with &local_len as the "parent".  HEGEL_USE
+      ** reads from ctx, HEGEL_SCH_INTEGER draws fresh — both land as
+      ** int at offset 0. */
+      int             n = 0;
+      size_t          esz;
+      hegel_schema *  elem;
+      void *          arr;
+      hegel_shape *   len_shape;
+      int             i;
+
+      if (ctx == NULL)
+        hegel__abort ("hegel__draw_field: HEGEL_ARR_OF requires a draw "
+                      "ctx — only valid inside HEGEL_STRUCT.");
+
+      len_shape = hegel__draw_field (tc, gen->arr_of_def.length,
+                                     &n, 0, depth, ctx);
+      hegel_shape_free (len_shape);     /* length lives on the stack */
+
+      if (n < 0)
+        hegel__abort ("hegel__draw_field: HEGEL_ARR_OF length produced "
+                      "negative n=%d", n);
+
+      elem = gen->arr_of_def.elem;
+      esz  = hegel__elem_size (elem);
+      arr  = calloc ((size_t) n + 1, esz);
+
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind   = HEGEL_SHAPE_ARRAY;
+      shape->schema = gen;
+      shape->owned  = arr;
+      shape->array_shape.len   = n;
+      shape->array_shape.elems = (hegel_shape **) calloc (
+          (size_t) n + 1, sizeof (hegel_shape *));
+
+      *(void **) dst = arr;
+
+      hegel_start_span (tc, HEGEL_SPAN_LIST);
+      for (i = 0; i < n; i ++) {
+        hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
+        if (elem->kind == HEGEL_SCH_INTEGER
+            || elem->kind == HEGEL_SCH_MAP_INT
+            || elem->kind == HEGEL_SCH_FILTER_INT
+            || elem->kind == HEGEL_SCH_FLAT_MAP_INT) {
+          /* All these kinds produce an int via hegel__draw_integer_into. */
+          hegel__draw_integer_into (tc, elem,
+              (char *) arr + (size_t) i * esz);
+          shape->array_shape.elems[i] = (hegel_shape *) calloc (
+              1, sizeof (hegel_shape));
+          shape->array_shape.elems[i]->kind   = HEGEL_SHAPE_SCALAR;
+          shape->array_shape.elems[i]->schema = elem;
+        } else if (elem->kind == HEGEL_SCH_STRUCT) {
+          /* Array of pointers to separately-allocated structs.  Pass
+          ** `ctx` as the element struct's parent so its HEGEL_USE
+          ** can reach outer bindings; the element's own HEGEL_LETs
+          ** get a fresh per-element ctx inside hegel__draw_struct,
+          ** so bindings in different elements don't collide. */
+          void * child;
+          shape->array_shape.elems[i] =
+              hegel__draw_struct (tc, elem, &child, depth - 1, ctx);
+          ((void **) arr)[i] = child;
+        } else if (elem->kind == HEGEL_SCH_ONE_OF_STRUCT) {
+          /* Each element: pick a case, allocate its struct, store raw
+          ** void*.  hegel__draw_alloc handles the ONE_OF_STRUCT path. */
+          void * child;
+          shape->array_shape.elems[i] =
+              hegel__draw_alloc (tc, elem, &child, depth, ctx);
+          ((void **) arr)[i] = child;
+        } else if (elem->kind == HEGEL_SCH_OPTIONAL_PTR) {
+          /* Per-element NULL-or-drawn-inner.  Used for
+          ** HEGEL_ARR_OF(length, HEGEL_SELF()) n-ary trees. */
+          hegel_shape * opt_sh = (hegel_shape *) calloc (
+              1, sizeof (hegel_shape));
+          int           present;
+
+          opt_sh->kind   = HEGEL_SHAPE_OPTIONAL;
+          opt_sh->schema = elem;
+
+          hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
+          present = hegel_draw_int (tc, 0, 1);
+
+          if (present && depth == 0) {
+            hegel_health_fail ("max recursion depth reached in "
+                               "HEGEL_ARR_OF element — raise "
+                               "max_depth or terminate recursion.");
+            /* unreachable */
+          }
+
+          if (present) {
+            void * child;
+            opt_sh->optional_shape.inner =
+                hegel__draw_alloc (tc, elem->optional_ptr.inner,
+                                   &child, depth - 1, ctx);
+            opt_sh->optional_shape.is_some =
+                (opt_sh->optional_shape.inner != NULL);
+            ((void **) arr)[i] =
+                opt_sh->optional_shape.is_some ? child : NULL;
+          } else {
+            opt_sh->optional_shape.is_some = 0;
+            opt_sh->optional_shape.inner   = NULL;
+            ((void **) arr)[i] = NULL;
+          }
+
+          hegel_stop_span (tc, 0);
+          shape->array_shape.elems[i] = opt_sh;
+        } else {
+          hegel__abort ("hegel__draw_field: HEGEL_ARR_OF supports "
+                        "INTEGER, STRUCT, ONE_OF_STRUCT, and "
+                        "OPTIONAL_PTR elements (got kind=%d)",
+                        (int) elem->kind);
+        }
+        hegel_stop_span (tc, 0);
+      }
+      hegel_stop_span (tc, 0);
+
+      return (shape);
+    }
   }
 
   return (NULL);
-}
-
-/* ---- Standalone ARRAY draw ------------------------------------------
-** Allocates the element buffer, draws the elements, builds the array
-** shape.  Does NOT write to a parent slot — that's the caller's job
-** (either the legacy HEGEL_SCH_ARRAY case in hegel__draw_field, or the
-** SUBSCHEMA primary path in the same function). */
-
-static hegel_shape *
-hegel__draw_array_standalone (hegel_testcase * tc, hegel_schema * src,
-                              int depth, void ** out_ptr, int * out_len)
-{
-  int             n;
-  size_t          esz;
-  hegel_schema *  elem;
-  void *          arr;
-  hegel_shape *   shape;
-
-  elem = src->array_def.elem;
-  if (elem->kind == HEGEL_SCH_SELF && elem->self_ref.target)
-    elem = elem->self_ref.target;
-  esz = hegel__elem_size (elem);
-
-  shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
-  shape->kind = HEGEL_SHAPE_ARRAY;
-  shape->schema = src;
-
-  hegel_start_span (tc, HEGEL_SPAN_LIST);
-  n = hegel_draw_int (tc, src->array_def.min_len,
-                          src->array_def.max_len);
-  arr = calloc ((size_t) n + 1, esz);
-
-  shape->array_shape.len = n;
-  shape->array_shape.elems = (hegel_shape **) calloc (
-      (size_t) n + 1, sizeof (hegel_shape *));
-  shape->owned = arr;
-
-  for (int i = 0; i < n; i ++) {
-    hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
-
-    if (elem->kind == HEGEL_SCH_INTEGER) {
-      hegel__draw_integer_into (tc, elem,
-          (char *) arr + (size_t) i * esz);
-      shape->array_shape.elems[i] =
-          (hegel_shape *) calloc (1, sizeof (hegel_shape));
-      shape->array_shape.elems[i]->kind = HEGEL_SHAPE_SCALAR;
-      shape->array_shape.elems[i]->schema = elem;
-
-    } else if (elem->kind == HEGEL_SCH_FLOAT) {
-      hegel__draw_fp_into (tc, elem,
-          (char *) arr + (size_t) i * esz);
-      shape->array_shape.elems[i] =
-          (hegel_shape *) calloc (1, sizeof (hegel_shape));
-      shape->array_shape.elems[i]->kind = HEGEL_SHAPE_SCALAR;
-      shape->array_shape.elems[i]->schema = elem;
-
-    } else if (elem->kind == HEGEL_SCH_TEXT) {
-      void * txt;
-      shape->array_shape.elems[i] =
-          hegel__draw_alloc (tc, elem, &txt, depth);
-      ((char **) arr)[i] = (char *) txt;
-
-    } else if (elem->kind == HEGEL_SCH_STRUCT) {
-      void * child;
-      shape->array_shape.elems[i] =
-          hegel__draw_struct (tc, elem, &child, depth - 1);
-      ((void **) arr)[i] = child;
-
-    } else if (elem->kind == HEGEL_SCH_ONE_OF_STRUCT) {
-      void * child;
-      shape->array_shape.elems[i] =
-          hegel__draw_alloc (tc, elem, &child, depth);
-      ((void **) arr)[i] = child;
-
-    } else if (elem->kind == HEGEL_SCH_OPTIONAL_PTR) {
-      /* Each slot is a `void *` — NULL or a freshly-drawn inner.
-      ** Used by HEGEL_ARRAY(HEGEL_SELF(), ...) for n-ary recursive
-      ** trees where every child is optionally absent. */
-      hegel_shape *  opt_sh = (hegel_shape *) calloc (1, sizeof (hegel_shape));
-      int            present;
-
-      opt_sh->kind   = HEGEL_SHAPE_OPTIONAL;
-      opt_sh->schema = elem;
-
-      hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
-      present = hegel_draw_int (tc, 0, 1);
-
-      if (present && depth == 0) {
-        /* Array element wanted to recurse but depth bound stopped it.
-        ** Same health-check semantics as the field-level path above. */
-        hegel_health_fail ("max recursion depth reached in array "
-                           "element — raise max_depth via "
-                           "hegel_schema_draw_n, or adjust schema so "
-                           "recursion terminates earlier");
-        /* unreachable */
-      }
-
-      if (present) {
-        void * child;
-        opt_sh->optional_shape.inner =
-            hegel__draw_alloc (tc, elem->optional_ptr.inner, &child,
-                               depth - 1);
-        opt_sh->optional_shape.is_some =
-            (opt_sh->optional_shape.inner != NULL);
-        ((void **) arr)[i] =
-            opt_sh->optional_shape.is_some ? child : NULL;
-      } else {
-        opt_sh->optional_shape.is_some = 0;
-        opt_sh->optional_shape.inner   = NULL;
-        ((void **) arr)[i] = NULL;
-      }
-      hegel_stop_span (tc, 0);
-      shape->array_shape.elems[i] = opt_sh;
-    }
-
-    hegel_stop_span (tc, 0);
-  }
-
-  hegel_stop_span (tc, 0);
-
-  *out_ptr = arr;
-  *out_len = n;
-  return (shape);
 }
 
 /* ================================================================
@@ -2318,9 +2211,10 @@ hegel_schema_draw_n (hegel_testcase * tc, hegel_schema_t gen,
     return (NULL);
   }
   /* hegel__draw_struct installs its own ctx — per-struct-instance
-  ** scoping, so facets in different struct instances (even of the
-  ** same schema) don't clobber each other's drawn arrays. */
-  return (hegel__draw_struct (tc, g, out, max_depth));
+  ** scoping, so bindings in different struct instances (even of the
+  ** same schema) stay independent.  NULL parent_ctx marks this as
+  ** the root of the scope chain. */
+  return (hegel__draw_struct (tc, g, out, max_depth, NULL));
 }
 
 hegel_shape *
@@ -2351,17 +2245,14 @@ hegel_schema_draw (hegel_testcase * tc, hegel_schema_t gen, void ** out)
 **
 ** Kinds explicitly rejected at top level (abort with a diagnostic):
 **
-**   ARRAY:             needs two projected slots (value + size) via
-**                      HEGEL_FACET in a parent struct; no sensible
-**                      top-level form.
 **   ARRAY_INLINE:      len_offset is relative to a parent struct; at
 **                      top level it would collide with the pointer
 **                      slot at offset 0.  Wrap in a struct.
 **   SELF:              only meaningful inside a recursive struct.
-**   ONE_OF_STRUCT:     intended as an ARRAY element or OPTIONAL inner.
-**   SUBSCHEMA:         requires the per-struct facet ctx.  Unreachable
-**                      from top level — wrap the host composite in a
-**                      parent struct that uses HEGEL_FACET.
+**   ONE_OF_STRUCT:     intended as an HEGEL_ARR_OF element or OPTIONAL
+**                      inner.
+**   BIND / USE /
+**   ARR_OF:            need a parent struct for their draw ctx.
 */
 
 hegel_shape *
@@ -2381,7 +2272,7 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
       ** what lands there is a pointer to the allocation. */
       void *         ptr = NULL;
       hegel_shape *  sh;
-      sh = hegel__draw_struct (tc, g, &ptr, max_depth);
+      sh = hegel__draw_struct (tc, g, &ptr, max_depth, NULL);
       *(void **) addr = ptr;
       return (sh);
     }
@@ -2404,15 +2295,10 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
     case HEGEL_SCH_FILTER_DOUBLE:
     case HEGEL_SCH_FLAT_MAP_DOUBLE:
     case HEGEL_SCH_ONE_OF_SCALAR:
-      /* Direct write at addr.  No facet ctx — SUBSCHEMA can't be
-      ** reached from these kinds, so passing NULL is safe. */
+    case HEGEL_SCH_CONST_INT:
+      /* Direct write at addr.  No binding ctx needed — these kinds
+      ** don't touch the binding table. */
       return (hegel__draw_field (tc, g, addr, 0, max_depth, NULL));
-
-    case HEGEL_SCH_ARRAY:
-      hegel__abort ("hegel_schema_draw_at: HEGEL_ARRAY cannot be drawn "
-                    "at top level — use HEGEL_FACET(hat, value) + "
-                    "HEGEL_FACET(hat, size) inside a parent struct.");
-      break;
 
     case HEGEL_SCH_ARRAY_INLINE:
       hegel__abort ("hegel_schema_draw_at: HEGEL_ARRAY_INLINE cannot be "
@@ -2428,13 +2314,7 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
     case HEGEL_SCH_ONE_OF_STRUCT:
       hegel__abort ("hegel_schema_draw_at: HEGEL_ONE_OF_STRUCT is a "
                     "pointer-producing element schema — use it as an "
-                    "HEGEL_ARRAY element or inside HEGEL_OPTIONAL.");
-      break;
-
-    case HEGEL_SCH_SUBSCHEMA:
-      hegel__abort ("hegel_schema_draw_at: SUBSCHEMA facet leaf requires "
-                    "a parent struct's facet ctx — unreachable at top "
-                    "level.");
+                    "HEGEL_ARR_OF element or inside HEGEL_OPTIONAL.");
       break;
 
     case HEGEL_SCH_BIND:
@@ -2442,6 +2322,12 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
       hegel__abort ("hegel_schema_draw_at: HEGEL_LET / HEGEL_USE only "
                     "make sense inside HEGEL_STRUCT — the binding scope "
                     "is the enclosing struct.");
+      break;
+
+    case HEGEL_SCH_ARR_OF:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_ARR_OF needs a parent "
+                    "struct for its draw ctx and binding lookups — wrap "
+                    "it in HEGEL_STRUCT.");
       break;
   }
 
@@ -2503,15 +2389,6 @@ hegel__schema_free_raw (hegel_schema * s)
 
   if (s == NULL) return;
 
-  /* SUBSCHEMA wrappers have no independent lifetime: their storage
-  ** lives inside the source's facets struct.  Forward the free to
-  ** the source (which decrements source->refcount and frees when it
-  ** hits 0), then return — don't decrement or free `s` itself. */
-  if (s->kind == HEGEL_SCH_SUBSCHEMA) {
-    hegel__schema_free_raw (s->subschema_def.source);
-    return;
-  }
-
   /* Decrement refcount; only actually free when it hits 0. */
   s->refcount --;
   if (s->refcount > 0) return;
@@ -2525,17 +2402,6 @@ hegel__schema_free_raw (hegel_schema * s)
       break;
     case HEGEL_SCH_OPTIONAL_PTR:
       hegel__schema_free_raw (s->optional_ptr.inner);
-      break;
-    case HEGEL_SCH_ARRAY:
-      hegel__schema_free_raw (s->array_def.elem);
-      if (s->facets) {
-        /* Subschema nodes are embedded — free directly, don't route
-        ** through the normal source-forwarding path. */
-        free (s->facets->size._raw);
-        free (s->facets->value._raw);
-        /* tag/body remain NULL for ARRAY; nothing else to free. */
-        free (s->facets);
-      }
       break;
     case HEGEL_SCH_ARRAY_INLINE:
       hegel__schema_free_raw (s->array_inline_def.elem);
@@ -2593,6 +2459,13 @@ hegel__schema_free_raw (hegel_schema * s)
       hegel__schema_free_raw (s->bind_def.inner);
       break;
     case HEGEL_SCH_USE:
+      /* Leaf — no owned children. */
+      break;
+    case HEGEL_SCH_ARR_OF:
+      hegel__schema_free_raw (s->arr_of_def.length);
+      hegel__schema_free_raw (s->arr_of_def.elem);
+      break;
+    case HEGEL_SCH_CONST_INT:
       /* Leaf — no owned children. */
       break;
     default:

@@ -12,7 +12,7 @@ figure out "how do I generate X?".
 For the API reference itself, see [schema-api.md](schema-api.md).
 
 All test files are in `tests/selftest/` and start with
-`test_gen_schema_`. Each one uses real C struct layouts and verifies
+`test_schema_`. Each one uses real C struct layouts and verifies
 the generated data matches its declared constraints.
 
 ---
@@ -40,11 +40,11 @@ tree_schema = HEGEL_STRUCT (Tree,
     HEGEL_SELF     ());
 ```
 
-**Test:** [`test_gen_schema_recursive_tree_json_roundtrip.c`](../tests/selftest/test_gen_schema_recursive_tree_json_roundtrip.c)
+**Test:** [`test_schema_recursive_tree_json_roundtrip.c`](../tests/selftest/test_schema_recursive_tree_json_roundtrip.c)
 
 Exercises: `HEGEL_OPTIONAL`, `HEGEL_SELF`, JSON round-trip as a
 canonical PBT property. Also contains two other test functions
-showing `HEGEL_ARRAY` (`Bag` with `int *items`) and the full set of
+showing `HEGEL_ARR_OF` (`Bag` with `int *items`) and the full set of
 typed integer macros (`Sensor` with u8/i16/u32/i64/float/double).
 
 ---
@@ -77,8 +77,8 @@ palette_schema = HEGEL_STRUCT (Palette,
 ```
 
 **Tests:**
-- [`test_gen_schema_inline_struct.c`](../tests/selftest/test_gen_schema_inline_struct.c) — fresh form, mixed inline + `HEGEL_OPTIONAL`, and three-level nesting
-- [`test_gen_schema_shape_get_and_reuse.c`](../tests/selftest/test_gen_schema_shape_get_and_reuse.c) — shared form + `HEGEL_SHAPE_GET` resolving through nested shapes
+- [`test_schema_inline_struct.c`](../tests/selftest/test_schema_inline_struct.c) — fresh form, mixed inline + `HEGEL_OPTIONAL`, and three-level nesting
+- [`test_schema_shape_get_and_reuse.c`](../tests/selftest/test_schema_shape_get_and_reuse.c) — shared form + `HEGEL_SHAPE_GET` resolving through nested shapes
 
 Exercises: `HEGEL_INLINE` / `HEGEL_INLINE_REF`. Sub-struct storage is
 carved out of the parent's own allocation (no extra malloc per
@@ -113,7 +113,7 @@ shape_schema = HEGEL_STRUCT (Shape,
                     HEGEL_DOUBLE (0.1, 100.0))));
 ```
 
-**Test:** [`test_gen_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_gen_schema_union_variant_tagged_untagged.c) (Test 1)
+**Test:** [`test_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_schema_union_variant_tagged_untagged.c) (Test 1)
 
 Exercises: `HEGEL_UNION` in the classic C tagged-union idiom — tag
 field adjacent to the union, inside a wrapping struct. Standard way
@@ -148,7 +148,7 @@ raw_shape_schema = HEGEL_STRUCT (RawShape,
 int tag = hegel_shape_tag (hegel_shape_field (sh, 0));
 ```
 
-**Test:** [`test_gen_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_gen_schema_union_variant_tagged_untagged.c) (Test 2)
+**Test:** [`test_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_schema_union_variant_tagged_untagged.c) (Test 2)
 
 Exercises: `HEGEL_UNION_UNTAGGED`. Use when your C code doesn't
 store a tag field (e.g., the tested function takes the discriminator
@@ -184,7 +184,7 @@ shapevar_schema = HEGEL_STRUCT (ShapeVar,
     HEGEL_VARIANT (circle_s, rect_s));
 ```
 
-**Test:** [`test_gen_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_gen_schema_union_variant_tagged_untagged.c) (Test 3)
+**Test:** [`test_schema_union_variant_tagged_untagged.c`](../tests/selftest/test_schema_union_variant_tagged_untagged.c) (Test 3)
 
 Exercises: `HEGEL_VARIANT`. Use when variants are genuinely
 different-size types and you want each in its own allocation
@@ -206,20 +206,23 @@ typedef struct {
 **Schema:**
 <!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
 ```c
-hegel_schema_t items_arr =
-    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
+HEGEL_BINDING (n);
 bag_schema = HEGEL_STRUCT (Bag,
-    HEGEL_FACET (items_arr, value),
-    HEGEL_FACET (items_arr, size));
-hegel_schema_free (items_arr);
+    HEGEL_LET    (n, HEGEL_INT (0, 10)),                  /* non-positional */
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 100)),     /* int *items */
+    HEGEL_USE    (n));                                     /* int n_items */
 ```
 
 **Tests:**
-- [`test_gen_schema_recursive_tree_json_roundtrip.c`](../tests/selftest/test_gen_schema_recursive_tree_json_roundtrip.c) (`Bag` test)
-- [`test_gen_schema_array_all_composition_patterns.c`](../tests/selftest/test_gen_schema_array_all_composition_patterns.c) (`ScalarBag` test)
+- [`test_schema_array_of_ints.c`](../tests/selftest/test_schema_array_of_ints.c) (length variation, pinned, empty-allowed)
+- [`test_schema_recursive_tree_json_roundtrip.c`](../tests/selftest/test_schema_recursive_tree_json_roundtrip.c) (`Bag` test)
+- [`test_schema_array_all_composition_patterns.c`](../tests/selftest/test_schema_array_all_composition_patterns.c) (`ScalarBag` test)
 
-Exercises: `HEGEL_ARRAY` with a scalar element. `items` is one
-malloc'd block of `n * sizeof(int)` bytes.
+Exercises: `HEGEL_ARR_OF` with a scalar element. `items` is one
+malloc'd block of `n * sizeof(int)` bytes. `HEGEL_LET(n, ...)` is
+non-positional — no slot consumed — so the drawn length is reached
+by the `ARR_OF`'s length parameter and written to the `n_items`
+slot via the trailing `HEGEL_USE(n)`.
 
 ---
 
@@ -242,7 +245,7 @@ palette_s = HEGEL_STRUCT (Palette,
     HEGEL_ARRAY_INLINE (color_s, sizeof (Color), 1, 5));
 ```
 
-**Test:** [`test_gen_schema_array_all_composition_patterns.c`](../tests/selftest/test_gen_schema_array_all_composition_patterns.c) (`Palette` + others)
+**Test:** [`test_schema_array_all_composition_patterns.c`](../tests/selftest/test_schema_array_all_composition_patterns.c) (`Palette` + others)
 
 Exercises: `HEGEL_ARRAY_INLINE` with a same-type struct element. One
 contiguous allocation, each element at stride `sizeof(Color)`.
@@ -279,7 +282,7 @@ gallery_schema = HEGEL_STRUCT (Gallery,
     HEGEL_ARRAY_INLINE (shape_union, sizeof (Shape), 1, 6));
 ```
 
-**Test:** [`test_gen_schema_array_inline_of_tagged_unions.c`](../tests/selftest/test_gen_schema_array_inline_of_tagged_unions.c)
+**Test:** [`test_schema_array_inline_of_tagged_unions.c`](../tests/selftest/test_schema_array_inline_of_tagged_unions.c)
 
 Exercises: `HEGEL_ARRAY_INLINE` + `HEGEL_UNION`. Each array slot is
 `sizeof(Shape)` bytes (= max of variant sizes + tag + padding), and
@@ -319,7 +322,7 @@ hegel_schema_t bare_shape = hegel_schema_of (HEGEL_UNION_UNTAGGED (
                 HEGEL_I64    (0, 1000000000))));
 ```
 
-**Test:** [`test_gen_schema_array_inline_of_bare_unions_common_prefix.c`](../tests/selftest/test_gen_schema_array_inline_of_bare_unions_common_prefix.c)
+**Test:** [`test_schema_array_inline_of_bare_unions_common_prefix.c`](../tests/selftest/test_schema_array_inline_of_bare_unions_common_prefix.c)
 
 Exercises: `HEGEL_UNION_UNTAGGED` with each case writing its own
 tag as a constant `HEGEL_INT(min==max)` at offset 0 of the slot.
@@ -364,7 +367,7 @@ coll_schema = HEGEL_STRUCT (Collection,
     HEGEL_ARRAY_INLINE (elem_schema, sizeof (Elem), 1, 5));
 ```
 
-**Test:** [`test_gen_schema_array_of_variant_struct_pointers.c`](../tests/selftest/test_gen_schema_array_of_variant_struct_pointers.c)
+**Test:** [`test_schema_array_of_variant_struct_pointers.c`](../tests/selftest/test_schema_array_of_variant_struct_pointers.c)
 
 Exercises: `HEGEL_ARRAY_INLINE` + `HEGEL_VARIANT` inside each element
 struct. Array of fixed-size `Elem` wrappers, each holding a
@@ -392,18 +395,18 @@ typedef struct {
 **Schema:**
 <!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
 ```c
+HEGEL_BINDING (n_items);
 hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 
-hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
 coll_schema = HEGEL_STRUCT (RawCollection,
-    HEGEL_FACET (items_arr, value),
-    HEGEL_FACET (items_arr, size));
-hegel_schema_free (items_arr);
+    HEGEL_LET    (n_items, HEGEL_INT (1, 6)),
+    HEGEL_ARR_OF (HEGEL_USE (n_items), one_of),
+    HEGEL_USE    (n_items));
 ```
 
-**Test:** [`test_gen_schema_array_of_raw_struct_pointers_by_kind.c`](../tests/selftest/test_gen_schema_array_of_raw_struct_pointers_by_kind.c)
+**Test:** [`test_schema_array_of_raw_struct_pointers_by_kind.c`](../tests/selftest/test_schema_array_of_raw_struct_pointers_by_kind.c)
 
-Exercises: `HEGEL_ONE_OF_STRUCT` as the element of `HEGEL_ARRAY`.
+Exercises: `HEGEL_ONE_OF_STRUCT` as the element of `HEGEL_ARR_OF`.
 No wrapper struct — `items` is a bare `void **`, and each pointer
 goes directly to a `TypeA`, `TypeB`, or `TypeC` allocation. The
 user reads `*(int*)items[i]` to get the tag (3, 5, or 7) and casts
@@ -423,29 +426,30 @@ typedef struct { Row *rows;   int n_rows; }   Matrix;
 **Schema:**
 <!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
 ```c
-hegel_schema_t values_arr =
-    HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6);
+HEGEL_BINDING (n_values);
 hegel_schema_t row = HEGEL_STRUCT (Row,
-    HEGEL_FACET (values_arr, value),
-    HEGEL_FACET (values_arr, size));
-hegel_schema_free (values_arr);
+    HEGEL_LET    (n_values, HEGEL_INT (1, 6)),
+    HEGEL_ARR_OF (HEGEL_USE (n_values), HEGEL_INT (0, 99)),
+    HEGEL_USE    (n_values));
 
 matrix_schema = HEGEL_STRUCT (Matrix,
     HEGEL_ARRAY_INLINE (row, sizeof (Row), 1, 4));
 ```
 
-**Test:** [`test_gen_schema_nested_array_of_arrays_matrix.c`](../tests/selftest/test_gen_schema_nested_array_of_arrays_matrix.c)
+**Test:** [`test_schema_nested_array_of_arrays_matrix.c`](../tests/selftest/test_schema_nested_array_of_arrays_matrix.c)
 
 Exercises: `HEGEL_ARRAY_INLINE` containing a struct that contains
-`HEGEL_ARRAY`. Outer array is contiguous (rows packed), each row's
-`values` is its own separate allocation. Two-level memory layout in
+`HEGEL_ARR_OF`. Outer array is contiguous (rows packed), each row's
+`values` is its own separate allocation. Per-instance binding
+scope ensures each row draws its own `n_values` independently.
+Two-level memory layout in
 one schema.
 
 ---
 
 ## All five array composition patterns in one file
 
-**Test:** [`test_gen_schema_array_all_composition_patterns.c`](../tests/selftest/test_gen_schema_array_all_composition_patterns.c)
+**Test:** [`test_schema_array_all_composition_patterns.c`](../tests/selftest/test_schema_array_all_composition_patterns.c)
 
 Five sub-tests in one binary:
 1. `ARRAY` of scalars (int)
@@ -459,19 +463,20 @@ Also demonstrates `hegel_schema_ref` to share `color_s` across
 
 ---
 
-## Non-adjacent array facets
+## Non-adjacent array/count layout
 
-Sometimes the struct you're trying to generate puts the array's
-pointer and length at non-adjacent positions — maybe there's a tag
-field or some unrelated scalar between them. The 2-slot inline form
-of `HEGEL_ARRAY` can't express this; facets can.
+Sometimes the struct you're generating puts the array's pointer
+and length at non-adjacent positions — there's a tag field or
+some unrelated scalar between them. Because `HEGEL_LET` is
+non-positional, the length's draw order is decoupled from the
+slot position of the `HEGEL_USE` that writes it.
 
 **C layout:**
 <!-- /ignore layout: C struct/union declaration shown for reference -->
 ```c
 typedef struct {
   int *items;
-  int  tag;         /* unrelated field between the two facets */
+  int  tag;         /* unrelated field between the pointer and count */
   int  n;
 } Bag;
 ```
@@ -479,24 +484,23 @@ typedef struct {
 **Schema:**
 <!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
 ```c
-hegel_schema_t items_arr =
-    HEGEL_ARRAY (hegel_schema_int_range (0, 999), 0, 8);
+HEGEL_BINDING (n);
 bag_schema = HEGEL_STRUCT (Bag,
-    HEGEL_FACET (items_arr, value),
-    HEGEL_INT   (-10, 10),
-    HEGEL_FACET (items_arr, size));
-hegel_schema_free (items_arr);
+    HEGEL_LET    (n, HEGEL_INT (0, 8)),                    /* non-positional */
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 999)),      /* int *items */
+    HEGEL_INT    (-10, 10),                                /* int tag */
+    HEGEL_USE    (n));                                      /* int n — LAST */
 ```
 
 **Tests:**
-- [`test_gen_schema_facets_nonadjacent.c`](../tests/selftest/test_gen_schema_facets_nonadjacent.c) — tag field between the two facets
-- [`test_gen_schema_facets_reversed.c`](../tests/selftest/test_gen_schema_facets_reversed.c) — `size` comes before `value` in the struct
-- [`test_gen_schema_facets_nested.c`](../tests/selftest/test_gen_schema_facets_nested.c) — outer array whose elements hold their own inner array (verifies per-instance ctx scoping)
+- [`test_schema_facets_nonadjacent.c`](../tests/selftest/test_schema_facets_nonadjacent.c) — tag field between the pointer and count
+- [`test_schema_facets_reversed.c`](../tests/selftest/test_schema_facets_reversed.c) — count comes before pointer in the struct
+- [`test_schema_facets_nested.c`](../tests/selftest/test_schema_facets_nested.c) — outer array whose elements hold their own inner array (verifies per-instance ctx scoping)
 
-Exercises: `HEGEL_FACET` projecting one named `HEGEL_ARRAY` into
-separated struct positions. The two projections are resolved into
-one consistent drawn array per struct instance; across instances
-(e.g. array elements of a parent array), each gets its own draw.
+Exercises: `HEGEL_LET` declares the length once; `HEGEL_USE` reads
+it wherever it's needed. Same drawn value used as both the array
+length and the count field. Per-instance scoping ensures array
+elements with their own bindings don't cross-pollute.
 
 ---
 
@@ -537,7 +541,7 @@ HEGEL_STRUCT (DepThing,
     HEGEL_FLAT_MAP_INT (hegel_schema_int_range (1, 10), dep_fn, NULL));
 ```
 
-**Test:** [`test_gen_schema_functional_combinators.c`](../tests/selftest/test_gen_schema_functional_combinators.c)
+**Test:** [`test_schema_functional_combinators.c`](../tests/selftest/test_schema_functional_combinators.c)
 
 Exercises **all legacy `hegel_gen_*` combinator functionality**
 at the schema layer, in 7 sub-tests:
@@ -558,7 +562,7 @@ API can be deprecated once existing tests that use it get migrated.
 
 ## Top-level draws (no struct wrapper)
 
-**Test:** [`test_gen_schema_top_level_draw.c`](../tests/selftest/test_gen_schema_top_level_draw.c)
+**Test:** [`test_schema_top_level_draw.c`](../tests/selftest/test_schema_top_level_draw.c)
 
 The schema API supports top-level draws in three styles beyond the
 classic `hegel_schema_draw(tc, s, (void **)&ptr)` form:
@@ -604,12 +608,12 @@ recursion depth reached ...` to stderr and exits non-zero — a
 **test-setup** failure rather than a property failure. The selftest
 Makefile's `TESTS_HEALTH` category matches on that prefix.
 
-**Test:** [`test_gen_schema_depth_health.c`](../tests/selftest/test_gen_schema_depth_health.c)
+**Test:** [`test_schema_depth_health.c`](../tests/selftest/test_schema_depth_health.c)
 
 **Schema** (transcluded from the test — kept in sync by
 `make docs-check`):
 
-<!-- /include tests/selftest/test_gen_schema_depth_health.c:69-71 -->
+<!-- /include tests/selftest/test_schema_depth_health.c:69-71 -->
 ```c
   node_schema = HEGEL_STRUCT (Node,
       HEGEL_INT  (0, 100),

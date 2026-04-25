@@ -86,7 +86,7 @@ The schema system lets tests describe C structs declaratively and get generation
 - Floats: `hegel_schema_float` / `_range`, `hegel_schema_double` / `_range`
 - Text: `hegel_schema_text(min_len, max_len)`
 - `hegel_schema_self()` — recursive reference
-- `hegel_schema_optional_ptr(inner)`, `hegel_schema_array(elem, lo, hi)`, etc.
+- `hegel_schema_optional_ptr(inner)`, `hegel_schema_arr_of(length, elem)`, etc.
 
 **Macros (the positional user-facing surface):**
 - `HEGEL_STRUCT(T, field_entries...)` — computes offsets from the struct type at runtime, asserts `sizeof(T) == computed_total`. Top-level composition primitive.
@@ -95,19 +95,32 @@ The schema system lets tests describe C structs declaratively and get generation
 - `HEGEL_TEXT(lo, hi)` — `char *` field, pointer-sized slot
 - `HEGEL_OPTIONAL(inner)` — 50/50 nullable pointer; 1 slot
 - `HEGEL_SELF()` — optional recursive pointer; 1 slot
-- `HEGEL_ARRAY(elem, lo, hi)` — builds an array schema; not a direct layout entry. Project into the parent struct via `HEGEL_FACET(hat, value)` + `HEGEL_FACET(hat, size)`. Facets may be non-adjacent, in either order. Caller must `hegel_schema_free(hat)` after building.
-- `HEGEL_FACET(hat, value|size)` — project a facet of a composite schema (e.g. `HEGEL_ARRAY`) into a single parent slot. Bumps source refcount per use. Per-struct-instance scoping: two facets of the same `hat` in one struct share; across struct instances (e.g. array elements) each gets its own draw.
+- `HEGEL_BINDING(name)` — declares a compile-time binding id (expands to `enum { name = __COUNTER__ }`). Typo → compile error. Function-local scope is the pit of success; file-scope works; headers discouraged (per-TU `__COUNTER__` values don't match across translation units).
+- `HEGEL_LET(name, inner)` — non-positional: draws `inner` and caches the value under `name` in the enclosing struct's draw ctx. No slot consumed. Stage 1: inner must be int-width INTEGER.
+- `HEGEL_USE(name)` — reads the cached value for `name` and writes an int to the current slot (1 slot). Also usable as a length parameter to `HEGEL_ARR_OF`. Walks the scope chain outward, so a USE in an inner struct resolves a LET in any enclosing struct. Unresolved → hard abort with actionable message (schema authoring error, not a discardable filter).
+- `HEGEL_ARR_OF(length_schema, elem_schema)` — 1 slot (pointer). Length drawn from `length_schema` at draw time (use `HEGEL_USE(n)` for a bound value, or `HEGEL_INT(lo, hi)` for a drawn length). Element kinds supported today: INTEGER, STRUCT, OPTIONAL_PTR (enables `HEGEL_SELF()` for recursive trees), ONE_OF_STRUCT, MAP_INT / FILTER_INT / FLAT_MAP_INT.
 - `HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi)` — 2 slots: `void *` pointer + `int` count. Contiguous elements; user's struct must put ptr before count.
 - `HEGEL_UNION(cases...)` — cluster slot: int tag + union body (sized/aligned to widest case)
 - `HEGEL_UNION_UNTAGGED(cases...)` — cluster slot: union body only, tag in shape tree
 - `HEGEL_VARIANT(case_struct_schemas...)` — cluster slot: int tag + `void *` ptr
-- `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing schema; used as `HEGEL_ARRAY` elem or inside `HEGEL_OPTIONAL`
+- `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing schema; used as `HEGEL_ARR_OF` elem or inside `HEGEL_OPTIONAL`
 - `HEGEL_CASE(field_entries...)` — used inside `HEGEL_UNION*`; contains layout entries, NOT bindings
 - `HEGEL_MAP_INT(source, fn, ctx)` / `HEGEL_FILTER_INT(source, pred, ctx)` / `HEGEL_FLAT_MAP_INT(source, fn, ctx)` — 1 slot (int-sized); same for `_I64` and `_DOUBLE`
 - `HEGEL_ONE_OF(scalar_schemas...)` — 1 slot, size/align inferred from the first case's kind
 - `HEGEL_BOOL()` — 1-byte `bool` slot
 - `HEGEL_REGEX(pattern, capacity)` — `char *` slot
 - `hegel_schema_of(layout_entry)` — unwrap a `HEGEL_UNION` / `HEGEL_VARIANT` layout entry to a raw `hegel_schema_t` for standalone use (e.g. as an `ARRAY_INLINE` element type)
+
+**Idiomatic array + count pattern.** A struct with a pointer and a count field uses the binding system to keep them coherent:
+```c
+typedef struct { int *items; int n; } Bag;
+HEGEL_BINDING (n);
+schema = HEGEL_STRUCT (Bag,
+    HEGEL_LET    (n, HEGEL_INT (0, 10)),                 /* non-positional */
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 100)),    /* int *items */
+    HEGEL_USE    (n));                                    /* int n */
+```
+Because LET is non-positional, the USE that writes to the count field can appear in any layout position — before, between, or after the ARR_OF. Per-struct-instance scoping means nested arrays-of-structs each draw their own value (e.g. jagged 2D: see `tests/selftest/test_binding_jagged_2d.c`).
 
 The positional form means **the user writes a flat list of generators in the same order as the struct fields**, with matching types. The layout pass computes byte offsets the same way the C compiler does and asserts `sizeof(T)` matches. If a field is reordered or its type changes, the assert fires at schema-build time.
 

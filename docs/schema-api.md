@@ -69,7 +69,7 @@ underlying API that you can also call directly if you need to:
 
 2. **Schema constructors** (`hegel_gen.h`) — functions and macros
    that build a `hegel_schema_t` value describing what to generate.
-   `HEGEL_STRUCT`, `HEGEL_ARRAY`, `HEGEL_OPTIONAL`, and the scalar
+   `HEGEL_STRUCT`, `HEGEL_ARR_OF`, `HEGEL_OPTIONAL`, and the scalar
    field macros `HEGEL_INT` / `HEGEL_U8` / etc.  The schema is a
    pure value you reuse across many draws.
 
@@ -110,9 +110,9 @@ the variant tag in an untagged-union pattern — see
 `hegel_schema_t` is a thin wrapper around a pointer to the internal
 node struct:
 
-<!-- /include hegel_gen.h:146-146 -->
+<!-- /include hegel_gen.h:147-147 -->
 ```c
-typedef struct { hegel_schema * _raw; } hegel_schema_t;
+** Every HEGEL_<kind> macro produces a `hegel_schema_t` — a reference
 ```
 <!-- /endinclude -->
 
@@ -159,9 +159,11 @@ Each `HEGEL_*` macro knows its own target type:
 - `HEGEL_ARRAY_INLINE` occupies **two** consecutive slots (a
   `void *` pointer and an `int` count), matching the idiom
   `void *ptr; int n_items;`
-- `HEGEL_ARRAY` is placed via two `HEGEL_FACET` projections — a
-  pointer-sized slot and an int-sized slot — which may appear at
-  non-adjacent positions, in either order; see `HEGEL_ARRAY` below
+- `HEGEL_ARR_OF` occupies **one** pointer slot; store the length
+  (if you want it) via a sibling `HEGEL_LET` + `HEGEL_USE` pair —
+  slot positions are independent since LET is non-positional
+- `HEGEL_LET` occupies **zero** slots (non-positional side effect
+  during draw)
 - `HEGEL_UNION` / `HEGEL_UNION_UNTAGGED` / `HEGEL_VARIANT` occupy
   a "cluster" slot whose size and alignment are derived from the
   cases — tag plus internal body layout — matching the idiom
@@ -224,8 +226,8 @@ Every integer type has a **full-range** version (no args) and a
 
 <!-- /include hegel_gen.h:508-509 -->
 ```c
-hegel_schema_t hegel_schema_i8          (void);  /* [-128, 127] */
-hegel_schema_t hegel_schema_i8_range    (int64_t lo, int64_t hi);
+** tag lives inside each pointed-to struct (not in a wrapper).  The
+** generator picks a variant per element, allocates it, stores the
 ```
 <!-- /endinclude -->
 
@@ -236,10 +238,10 @@ Floats:
 
 <!-- /include hegel_gen.h:533-536 -->
 ```c
-hegel_schema_t hegel_schema_float        (void);  /* [-FLT_MAX, FLT_MAX] */
-hegel_schema_t hegel_schema_float_range  (double lo, double hi);
-hegel_schema_t hegel_schema_double       (void);  /* [-DBL_MAX, DBL_MAX] */
-hegel_schema_t hegel_schema_double_range (double lo, double hi);
+** (normal ownership semantics).  The callback's ctx must outlive
+** the combinator. */
+
+hegel_schema_t hegel_schema_map_int (
 ```
 <!-- /endinclude -->
 
@@ -248,7 +250,7 @@ Text (currently char-by-char from `[a-z]`, see TODO.md for the
 
 <!-- /include hegel_gen.h:542-542 -->
 ```c
-hegel_schema_t hegel_schema_text (int min_len, int max_len);
+    hegel_schema_t source,
 ```
 <!-- /endinclude -->
 
@@ -340,7 +342,7 @@ follows the usual "transfer on pass" rule: one reference per use,
 call `hegel_schema_ref` once per extra use.
 
 `HEGEL_INLINE` coexists with `HEGEL_OPTIONAL(pointer-to-struct)`,
-`HEGEL_ARRAY`, etc. in the same parent — they occupy their own slots
+`HEGEL_ARR_OF`, etc. in the same parent — they occupy their own slots
 and dispatch through independent schema kinds at draw time.
 
 `HEGEL_SHAPE_GET(sh, Parent, outer.leaf)` resolves through any level
@@ -360,63 +362,106 @@ a pointer to the enclosing struct type. Automatically optional
 recursion is capped at `HEGEL_DEFAULT_MAX_DEPTH = 50` (see
 [Recursion depth](#recursion-depth) below for why 50).
 
-### `HEGEL_ARRAY` — variable-length array, projected via facets
+### `HEGEL_BINDING` / `HEGEL_LET` / `HEGEL_USE` — let-bindings
 
 <!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
-typedef struct { int *items; int n_items; } Bag;
+typedef struct { int n; int copy_of_n; } Pair;
 
-hegel_schema_t items_arr =
-    HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
-HEGEL_STRUCT (Bag,
-    HEGEL_FACET (items_arr, value),     /* int *items */
-    HEGEL_FACET (items_arr, size));     /* int n_items */
-hegel_schema_free (items_arr);
+HEGEL_BINDING (n);
+
+pair_schema = HEGEL_STRUCT (Pair,
+    HEGEL_LET (n, HEGEL_INT (2, 5)),   /* non-positional: draws n */
+    HEGEL_USE (n),                      /* field 0: int n */
+    HEGEL_USE (n));                     /* field 1: int copy_of_n */
 ```
 
-`HEGEL_ARRAY(elem, lo, hi)` builds an array schema that produces
-one drawn buffer per draw. Its two projections — the data pointer
-and the length — are placed into the parent struct individually via
-`HEGEL_FACET(hat, value)` and `HEGEL_FACET(hat, size)`. The facets
-may be non-adjacent and in either order; match them to the struct's
-actual field order.
+`HEGEL_BINDING(name)` declares a binding identifier using a
+compile-time integer (`enum { name = __COUNTER__ }`). Typos are
+undefined-identifier errors at compile time; there is no string
+lookup.
 
-The element schema can be any of: `hegel_schema_int_range(...)`,
-`hegel_schema_text(...)`, a struct schema (each element separately
-allocated, array stores pointers), or `HEGEL_ONE_OF_STRUCT(...)`
-(heterogeneous pointer array).
+`HEGEL_LET(name, inner)` is **non-positional**: it runs as a side
+effect during draw — draws from `inner`, caches the value under
+`name` in the enclosing struct's draw ctx — but does not consume a
+parent-struct slot.
 
-**Ownership math:** `HEGEL_ARRAY(...)` returns `refcount = 1` for
-the user. Each `HEGEL_FACET` use bumps source refcount. Each
-`HEGEL_STRUCT` decrements source refcount at struct-free time for
-the subschema children it holds. The user must call
-`hegel_schema_free(hat)` once after building their struct(s) to
-release their own reference — without this, the array schema and
-its element schema would leak.
+`HEGEL_USE(name)` reads the cached value and writes it to the
+current slot (as a layout entry, `int` slot) or produces a value
+for a parameter position (as the length of `HEGEL_ARR_OF`). USE
+walks the scope chain outward, so a USE in an inner struct can
+resolve a LET in any enclosing struct. Unresolved → `hegel_abort`
+with the binding id and the available bindings at that point.
 
-**Scoping:** `hat`-driven facets share within one struct instance,
-but are independent across struct instances. If `hat` appears in
-an element schema of an outer array, each outer element gets an
-INDEPENDENT draw of `hat`.
+**Scoping:** each `HEGEL_STRUCT` (and `HEGEL_INLINE`, and each
+element struct of an ARR_OF) gets its own draw ctx linked to its
+parent. LETs are scoped to the ctx that declared them. Same-ID
+LETs in different ctxs do not share — each struct instance draws
+its own value. See `test_binding_jagged_2d.c` for the full
+demonstration (n groups, each with its own m_i elements).
 
-**Cannot be used directly:** `HEGEL_STRUCT(T, HEGEL_ARRAY(...))`
-aborts at schema-build time with a diagnostic. Always name the
-array and use `HEGEL_FACET`.
+**Non-positional means layout order is independent of dependency
+order.** A struct `{ int *items; int tag; int n; }` can be built
+with LET anywhere in the entry list and USE for `n` at the last
+layout position — the value has already been drawn by the time the
+USE slot is reached. See `test_schema_facets_nonadjacent.c`.
 
-### `HEGEL_FACET` — project a facet of a composite
+**Draw order is still the entry-list order.** LET is
+non-positional w.r.t. *layout* (consumes no slot), but it draws
+**where it appears in the entry list**, interleaved with other
+entries. `HEGEL_LET` at index 3 draws after entries 0, 1, 2 and
+before entries 4, 5. This matters for shrinking: each draw is
+independent in the byte stream, so the shrinker can simplify
+unrelated fields independently. Don't feel forced to move all
+LETs to the top — put each one just before the first USE that
+needs it, and the shrinker sees cleaner locality.
+
+**One LET per id per scope.** Calling `HEGEL_LET(n, ...)` twice
+in the same struct's entry list is a hard abort — almost always
+a typo'd name colliding with an earlier binding. Use a separate
+`HEGEL_BINDING` declaration for a second value. Nested structs
+*can* re-LET the same id (inner shadows outer); that's per-scope,
+not per-process.
+
+Stage-1 restriction: LET's inner schema must be int-width INTEGER
+(or a MAP/FILTER/FLAT_MAP over one). Wider kinds will be added as
+needed.
+
+### `HEGEL_ARR_OF` — array with schema-valued length
 
 <!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
-HEGEL_FACET (hat, value)    /* ARRAY's data pointer */
-HEGEL_FACET (hat, size)     /* ARRAY's length */
+typedef struct { int n; int *items; } Bag;
+
+HEGEL_BINDING (n);
+bag_schema = HEGEL_STRUCT (Bag,
+    HEGEL_LET    (n, HEGEL_INT (0, 10)),
+    HEGEL_USE    (n),
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 100)));
 ```
 
-Projects a specific facet of a named composite schema into the
-parent struct's positional field list. `hat` must be a schema with
-facets (currently only `HEGEL_ARRAY`; future kinds may expose
-`tag`, `body`, etc.). Bumps source refcount each time; the user
-keeps their original reference and must release it after building.
-See `HEGEL_ARRAY` for the complete usage pattern.
+`HEGEL_ARR_OF(length_schema, elem_schema)` occupies a single
+pointer slot in the parent struct. The length is evaluated at
+draw time from `length_schema` — `HEGEL_USE(n)` to reuse a bound
+value, or `HEGEL_INT(lo, hi)` for a drawn length. The length is
+not stored in a field by ARR_OF itself; pair it with a
+`HEGEL_USE(n)` slot elsewhere in the struct if you need it.
+
+Element kinds currently supported:
+
+- `HEGEL_INT(...)` and other int-producing schemas
+  (`HEGEL_MAP_INT`, `HEGEL_FILTER_INT`, `HEGEL_FLAT_MAP_INT`)
+- Struct schemas (each element separately allocated; array stores
+  `void *` pointers)
+- `HEGEL_OPTIONAL_PTR(...)` — each slot is NULL or a drawn inner
+- `HEGEL_SELF()` — optional pointer to enclosing struct (n-ary
+  recursive trees)
+- `HEGEL_ONE_OF_STRUCT(...)` — polymorphic pointer array
+
+**Per-instance scoping:** in a `HEGEL_ARR_OF(length, struct_elem)`,
+each element struct is drawn with its own ctx chained back to the
+parent. LETs inside the element schema are per-element; USEs can
+still reach outer bindings via the chain walk.
 
 ### `HEGEL_ARRAY_INLINE` — contiguous array of inline structs
 
@@ -428,9 +473,12 @@ HEGEL_STRUCT (Path,
     HEGEL_ARRAY_INLINE (point_schema, sizeof (Point), 1, 8));
 ```
 
-Same two-slot shape as `HEGEL_ARRAY`, but elements are laid out in
+Two-slot layout (pointer + count) where elements are laid out in
 one contiguous buffer (stride = `sizeof(elem)`) rather than each
 allocated separately. The `elem` schema must be a struct or union.
+Unlike `HEGEL_ARR_OF`, the count is written directly to the next
+slot in the parent struct — the user's fields must be pointer-then-
+int and adjacent.
 
 ### `HEGEL_UNION` — tagged union with tag field in the struct
 
@@ -578,17 +626,17 @@ FFI-level fix status.
 
 <!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
 ```c
+HEGEL_BINDING (n_items);
 hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
-hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
-HEGEL_STRUCT (Collection,
-    HEGEL_FACET (items_arr, value),
-    HEGEL_FACET (items_arr, size));
-hegel_schema_free (items_arr);
+collection_schema = HEGEL_STRUCT (Collection,
+    HEGEL_LET    (n_items, HEGEL_INT (1, 6)),
+    HEGEL_ARR_OF (HEGEL_USE (n_items), one_of),
+    HEGEL_USE    (n_items));
 ```
 
 Picks one of several struct schemas, allocates it, returns a raw
 pointer. Writes nothing to any parent (it's a "value schema," not a
-"field schema"). Used as the element type of `HEGEL_ARRAY` to get
+"field schema"). Used as the element type of `HEGEL_ARR_OF` to get
 an array of heterogeneous pointers, or inside `HEGEL_OPTIONAL` for
 an optional pointer-to-polymorphic-struct.
 
@@ -659,9 +707,9 @@ Dispatch rules:
   leaf for scalars; real tree for composites). You still call
   `hegel_shape_free` on it — not NULL for scalars, contrary to a
   previous doc claim.
-- **ARRAY / ARRAY_INLINE / SELF / ONE_OF_STRUCT** — abort at the top
-  level. These kinds only make sense inside a parent struct (see
-  `HEGEL_FACET` for the array composition story).
+- **ARRAY_INLINE / ARR_OF / SELF / ONE_OF_STRUCT / BIND / USE** —
+  abort at the top level. These kinds only make sense inside a
+  parent struct.
 
 `HEGEL_DRAW` captures `tc` from the enclosing scope by convention,
 so the enclosing function's parameter must be named `tc` — matches
@@ -772,12 +820,13 @@ the struct shape's bindings looking for a match. Returns NULL if
 the offset doesn't correspond to any bound field, or if `sh` is
 not a struct shape.
 
-**Array facets are asymmetric:** when you call
-`hegel_shape_array_len` on an `HEGEL_ARRAY`'s shape, grab the
-`value`-facet slot (the pointer field), not the `size`-facet slot.
-Only the value-facet slot owns the `HEGEL_SHAPE_ARRAY` shape; the
-size-facet slot is a trivial scalar leaf, and `array_len` returns
-0 for non-array shapes.
+**Array shape lives at the pointer slot.** When you call
+`hegel_shape_array_len` on a `HEGEL_ARR_OF` field's shape, use the
+offset of the pointer field (the one written by `HEGEL_ARR_OF`),
+not the int field holding the count. Only the pointer slot owns
+the `HEGEL_SHAPE_ARRAY` shape; the count slot (written by a sibling
+`HEGEL_USE`) is a trivial scalar leaf, and `array_len` returns 0
+for non-array shapes.
 
 Named accessors (by field name string) are still on the TODO list
 — see `TODO.md`.

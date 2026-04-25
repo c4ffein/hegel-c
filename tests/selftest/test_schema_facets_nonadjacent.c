@@ -2,17 +2,15 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: non-adjacent array facets.
+** Test: non-adjacent array layout — pointer first, count last, with
+** an unrelated field between them.  Under bindings: HEGEL_LET is
+** non-positional, so the count's draw order is decoupled from its
+** slot position.  The USE that writes to the `n` slot can come AFTER
+** the ARR_OF that consumes its value — the binding table has already
+** been populated by the LET.
 **
-** Demonstrates HEGEL_ARRAY used via HEGEL_FACET — the array's two
-** projections (value pointer + size) land at NON-ADJACENT positions
-** in the parent struct, separated by an unrelated field.  This is
-** the V2 "handles" use case that the 2-slot inline HEGEL_ARRAY form
-** can't express.
-**
-** The two facets must refer to ONE drawn array: for every test case,
-** `bag.items` must point to an int[] of exactly `bag.n` elements,
-** and the pointer must match the length drawn.
+** Previously implemented via HEGEL_ARRAY + non-adjacent HEGEL_FACET
+** calls with dynamic first-facet-primary coordination.
 **
 ** Expected: EXIT 0.
 */
@@ -37,25 +35,19 @@ typedef struct {
 
 /* ---- Schema ---- */
 
+HEGEL_BINDING (n);
+
 static hegel_schema_t bag_schema;
 
 static
 void
 init_schema (void)
 {
-  hegel_schema_t items_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 999), 0, 8);
-
   bag_schema = HEGEL_STRUCT (Bag,
-      HEGEL_FACET  (items_arr, value),   /* int * items */
-      HEGEL_INT    (-10, 10),            /* int tag */
-      HEGEL_FACET  (items_arr, size));   /* int n */
-
-  /* Release the user's own reference to the array schema — HEGEL_FACET
-  ** bumped source->refcount for each of the two uses above, and
-  ** HEGEL_STRUCT will decrement each when it frees its children.
-  ** This call drops the original refcount=1 from hegel_schema_array. */
-  hegel_schema_free (items_arr);
+      HEGEL_LET    (n, HEGEL_INT (0, 8)),                  /* non-positional */
+      HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 999)),    /* int * items */
+      HEGEL_INT    (-10, 10),                              /* int tag */
+      HEGEL_USE    (n));                                   /* int n — LAST */
 }
 
 /* ---- Test ---- */
