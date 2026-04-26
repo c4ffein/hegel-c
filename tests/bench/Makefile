@@ -25,6 +25,11 @@ WARMUPS    ?= 1
 # migration noise. Override with TASKSET= to disable.
 TASKSET    ?= $(shell command -v taskset >/dev/null 2>&1 && echo "taskset -c 0")
 
+# Core-dump size limit (1K blocks).  Default 0 suppresses cores from
+# any unexpected child crashes during bench runs.  Override with
+# `make HEGEL_TEST_ULIMIT=unlimited bench` if you need cores.
+HEGEL_TEST_ULIMIT ?= 0
+
 BENCH_BINS = test_bench_single test_bench_single_nofork \
              test_bench_suite  test_bench_suite_nofork  \
              test_bench_drawloop test_bench_drawloop_nofork \
@@ -53,6 +58,7 @@ help:
 	@echo "  ITERS=5           Measured iterations per variant"
 	@echo "  WARMUPS=1         Warmup iterations (discarded)"
 	@echo "  TASKSET='...'     Prefix used to pin runs (default: taskset -c 0 if available)"
+	@echo "  HEGEL_TEST_ULIMIT=N  Core-dump size limit (1K blocks); default 0 (suppress)"
 
 all: hegel-c-lib $(BENCH_BINS)
 
@@ -88,6 +94,7 @@ test_bench_rss: test_bench_rss.c hegel-c-lib
 # even when the shell's builtin `time` does not cooperate.
 define run_one
 	@$(TASKSET) /usr/bin/env bash -c ' \
+		ulimit -c $(HEGEL_TEST_ULIMIT); \
 		start=$$(date +%s.%N); \
 		"$(CURDIR)/$(2)" >/dev/null 2>&1; \
 		rc=$$?; \
@@ -103,6 +110,7 @@ define run_variant
 	@for i in $$(seq 1 $(WARMUPS)); do \
 		printf "    warmup %d: " $$i; \
 		$(TASKSET) /usr/bin/env bash -c ' \
+			ulimit -c $(HEGEL_TEST_ULIMIT); \
 			start=$$(date +%s.%N); \
 			"$(CURDIR)/$(2)" >/dev/null 2>&1; \
 			end=$$(date +%s.%N); \
@@ -111,6 +119,7 @@ define run_variant
 	@samples=""; \
 	for i in $$(seq 1 $(ITERS)); do \
 		t=$$($(TASKSET) /usr/bin/env bash -c ' \
+			ulimit -c $(HEGEL_TEST_ULIMIT); \
 			start=$$(date +%s.%N); \
 			"$(CURDIR)/$(2)" >/dev/null 2>&1; \
 			end=$$(date +%s.%N); \
@@ -152,7 +161,7 @@ bench-drawloop: test_bench_drawloop test_bench_drawloop_nofork
 bench-rss: test_bench_rss
 	@echo ""
 	@echo "==== RSS probe (parent RSS after hegeltest warmup) ===="
-	@$(TASKSET) "$(CURDIR)/test_bench_rss"
+	@ulimit -c $(HEGEL_TEST_ULIMIT) && $(TASKSET) "$(CURDIR)/test_bench_rss"
 
 check-license:
 	@missing=0; \

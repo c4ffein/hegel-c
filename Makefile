@@ -9,7 +9,7 @@ GITHUB_REPOS = hegeldev/hegel-rust \
 
 GITLAB_REPOS = scotch/scotch
 
-.PHONY: help inspiration clean-inspiration docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+.PHONY: help inspiration clean-inspiration clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -18,6 +18,7 @@ help:
 	@echo "  help                          Show this help (default)"
 	@echo "  inspiration                   Clone/update hegel-rust, hegel-go, hegel-cpp into inspiration/"
 	@echo "  clean-inspiration             Remove inspiration/"
+	@echo "  clean-cores                   Remove core dumps from repo root (core.*)"
 	@echo ""
 	@echo "Proxy targets (forwarded to sub-Makefiles):"
 	@echo "  selftest-<target>             Run <target> in tests/selftest/"
@@ -75,6 +76,15 @@ inspiration:
 
 clean-inspiration:
 	rm -rf $(INSPIRATION_DIR)
+
+# Remove core dumps that accumulate in the repo root during test runs.
+# Test runners cd to REPO_ROOT before exec'ing each binary, so cores
+# from deliberate-crash tests (and any unexpected child crashes during
+# shrinking) drop here.  HEGEL_TEST_ULIMIT in each test Makefile
+# defaults to 0, suppressing cores at the source — this target cleans
+# up any stragglers from older runs or hand-runs outside Make.
+clean-cores:
+	rm -f core.*
 
 docs-check:
 	python3 scripts/check_doc_includes.py

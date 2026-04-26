@@ -8,6 +8,14 @@ CC       = gcc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
 LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
+# Core-dump size limit (in 1024-byte blocks) for test invocations.
+# Defaults to 0 because TESTS_CRASH and the fork-mode parent's
+# crash-isolation path produce many expected SIGSEGV/SIGABRT signals;
+# their core dumps would otherwise pile up in REPO_ROOT.  Override
+# with `make HEGEL_TEST_ULIMIT=unlimited test` to keep cores when
+# debugging an unexpected crash.
+HEGEL_TEST_ULIMIT ?= 0
+
 # Tests that should PASS (exit 0)
 TESTS_PASS = test_pass_simple \
              test_assume \
@@ -104,6 +112,10 @@ help:
 	@echo "  hegel-c-lib       Build libhegel_c.a only"
 	@echo "  check-license     Verify SPDX headers on all source files"
 	@echo "  clean             Remove test binaries"
+	@echo ""
+	@echo "Variables:"
+	@echo "  HEGEL_TEST_ULIMIT=N  Core-dump size limit (1K blocks) for test runs"
+	@echo "                       Default 0 (suppress); set to 'unlimited' to keep cores"
 
 all: hegel-c-lib $(ALL_TESTS)
 
@@ -123,7 +135,7 @@ test: all check-license
 	for t in $(TESTS_PASS); do \
 		total=$$((total + 1)); \
 		printf "  %-30s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \
@@ -139,7 +151,7 @@ test: all check-license
 	for t in $(TESTS_FAIL); do \
 		total=$$((total + 1)); \
 		printf "  %-30s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "OK (exit $$rc)"; \
@@ -154,7 +166,7 @@ test: all check-license
 	for t in $(TESTS_CRASH); do \
 		total=$$((total + 1)); \
 		printf "  %-30s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "OK (exit $$rc)"; \
@@ -169,7 +181,7 @@ test: all check-license
 	for t in $(TESTS_HEALTH); do \
 		total=$$((total + 1)); \
 		printf "  %-30s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && timeout 30 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && timeout 30 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "FAIL — expected non-zero exit but got 0"; \

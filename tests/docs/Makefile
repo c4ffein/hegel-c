@@ -22,6 +22,11 @@ CC       = gcc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
 LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
+# Core-dump size limit (1K blocks).  Default 0 keeps the repo root
+# clean of cores from any unexpected child crashes.  Override with
+# `make HEGEL_TEST_ULIMIT=unlimited test` to keep cores when debugging.
+HEGEL_TEST_ULIMIT ?= 0
+
 TESTS = $(basename $(notdir $(wildcard $(CURDIR)/test_*.c)))
 
 .PHONY: help all clean test hegel-c-lib check-license
@@ -36,6 +41,10 @@ help:
 	@echo "  hegel-c-lib       Build libhegel_c.a only"
 	@echo "  check-license     Verify SPDX headers"
 	@echo "  clean             Remove test binaries"
+	@echo ""
+	@echo "Variables:"
+	@echo "  HEGEL_TEST_ULIMIT=N  Core-dump size limit (1K blocks) for test runs"
+	@echo "                       Default 0 (suppress); set to 'unlimited' to keep cores"
 
 all: hegel-c-lib $(TESTS)
 
@@ -59,7 +68,7 @@ test: all check-license
 	for t in $(TESTS); do \
 		total=$$((total + 1)); \
 		printf "  %-40s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \

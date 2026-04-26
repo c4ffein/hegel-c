@@ -11,6 +11,11 @@ CC           = gcc
 CFLAGS       = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
 LDFLAGS      = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
+# Core-dump size limit (1K blocks) for test invocations.  Default 0
+# suppresses cores from shrink-path child crashes.  Override with
+# `make HEGEL_TEST_ULIMIT=unlimited test` when debugging.
+HEGEL_TEST_ULIMIT ?= 0
+
 # Tests that verify all examples satisfy a predicate (should PASS, exit 0)
 TESTS_PASS = test_integers_bounds \
              test_floats_f32_bounds \
@@ -50,6 +55,10 @@ help:
 	@echo "  report            Generate correspondence report (report.md)"
 	@echo "  verify            Semantic verify C↔Rust equivalence (requires claude)"
 	@echo "  clean             Remove test binaries and reports"
+	@echo ""
+	@echo "Variables:"
+	@echo "  HEGEL_TEST_ULIMIT=N  Core-dump size limit (1K blocks) for test runs"
+	@echo "                       Default 0 (suppress); set to 'unlimited' to keep cores"
 
 all: hegel-c-lib $(ALL_TESTS)
 
@@ -69,7 +78,7 @@ test: all check-license
 	for t in $(TESTS_PASS); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \
@@ -84,7 +93,7 @@ test: all check-license
 	for t in $(TESTS_SHRINK); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			draw=$$(echo "$$output" | grep -oP 'Draw 1: \K[^ ]+' | head -1); \
@@ -134,7 +143,7 @@ report:
 	echo "|--------|-------------|--------|" >> $(CURDIR)/report.md; \
 	for t in $(TESTS_PASS); do \
 		rust_src=$$(grep 'RUST_SOURCE:' $(CURDIR)/$$t.c | head -1 | sed 's/.*RUST_SOURCE: *//'); \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "| $$t | $$rust_src | PASS |" >> $(CURDIR)/report.md; \
@@ -144,7 +153,7 @@ report:
 	done; \
 	for t in $(TESTS_SHRINK); do \
 		rust_src=$$(grep 'RUST_SOURCE:' $(CURDIR)/$$t.c | head -1 | sed 's/.*RUST_SOURCE: *//'); \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		draw=$$(echo "$$output" | grep -oP 'Draw 1: \K[^ ]+' | head -1); \
 		expected=$$(grep 'EXPECTED_SHRINK:' $(CURDIR)/$$t.c | head -1 | sed 's/.*EXPECTED_SHRINK: *//'); \

@@ -20,6 +20,11 @@ SCOTCH_LOCAL = $(REPO_ROOT)/inspiration/scotch
 SCOTCH_INC   ?=
 SCOTCH_LIB   ?=
 
+# Core-dump size limit (1K blocks).  Default 0 suppresses cores from
+# expected child crashes (TESTS_SHRINK reducer demos).  Override with
+# `make HEGEL_TEST_ULIMIT=unlimited test-local` to keep cores.
+HEGEL_TEST_ULIMIT ?= 0
+
 CC       = gcc
 MPICC    = mpicc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) $(SCOTCH_INC) -funwind-tables -fexceptions
@@ -53,6 +58,10 @@ help:
 	@echo "  hegel-c-lib       Build libhegel_c.a only"
 	@echo "  check-license     Verify SPDX headers"
 	@echo "  clean             Remove test binaries"
+	@echo ""
+	@echo "Variables:"
+	@echo "  HEGEL_TEST_ULIMIT=N  Core-dump size limit (1K blocks) for test runs"
+	@echo "                       Default 0 (suppress); set to 'unlimited' to keep cores"
 	@echo ""
 	@echo "Includes PT-Scotch MPI tests (requires mpicc + libptscotch)"
 
@@ -101,7 +110,7 @@ _run-tests: all check-license
 	for t in $(TESTS_PASS); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \
@@ -117,7 +126,7 @@ _run-tests: all check-license
 	for t in $(TESTS_SHRINK); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && timeout 120 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && timeout 120 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "FAIL — expected non-zero exit but got 0"; \
@@ -144,7 +153,7 @@ _run-tests: all check-license
 	for t in $(TESTS_MPI); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && OMPI_MCA_btl=tcp,self timeout 120 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && OMPI_MCA_btl=tcp,self timeout 120 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \

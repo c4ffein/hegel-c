@@ -23,6 +23,11 @@ REPO_ROOT    = $(abspath ../..)
 HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
 MPI_RANKS   ?= 2
 
+# Core-dump size limit (1K blocks).  Default 0 suppresses cores from
+# expected child crashes during shrinking.  Override with
+# `make HEGEL_TEST_ULIMIT=unlimited test` to keep cores when debugging.
+HEGEL_TEST_ULIMIT ?= 0
+
 CC       = mpicc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
 LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
@@ -52,7 +57,9 @@ help:
 	@echo "  clean             Remove test binaries"
 	@echo ""
 	@echo "Variables:"
-	@echo "  MPI_RANKS=N       Number of MPI ranks (default: 2)"
+	@echo "  MPI_RANKS=N          Number of MPI ranks (default: 2)"
+	@echo "  HEGEL_TEST_ULIMIT=N  Core-dump size limit (1K blocks) for test runs"
+	@echo "                       Default 0 (suppress); set to 'unlimited' to keep cores"
 	@echo ""
 	@echo "Prerequisites: mpicc, mpiexec (openmpi-bin libopenmpi-dev)"
 
@@ -74,7 +81,7 @@ test: all check-license
 	for t in $(TESTS_MPIEXEC); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && timeout 120 mpiexec --allow-run-as-root -n $(MPI_RANKS) $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && timeout 120 mpiexec --allow-run-as-root -n $(MPI_RANKS) $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \
@@ -90,7 +97,7 @@ test: all check-license
 	for t in $(TESTS_SPAWN); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && OMPI_MCA_btl=tcp,self timeout 60 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && OMPI_MCA_btl=tcp,self timeout 60 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "OK"; \
@@ -106,7 +113,7 @@ test: all check-license
 	for t in $(TESTS_SPAWN_SHRINK); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && OMPI_MCA_btl=tcp,self timeout 120 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && OMPI_MCA_btl=tcp,self timeout 120 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
 			echo "OK (exit $$rc)"; \
