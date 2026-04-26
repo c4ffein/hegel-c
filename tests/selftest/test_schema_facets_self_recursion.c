@@ -83,18 +83,19 @@ Tree *              root)
 
 /* ---- Schema ---- */
 
+HEGEL_BINDING (nk);
+
 static hegel_schema_t tree_schema;
 
 static
 void
 init_schema (void)
 {
-  hegel_schema_t kids_arr = HEGEL_ARRAY (HEGEL_SELF (), 0, 3);
   tree_schema = HEGEL_STRUCT (Tree,
-      HEGEL_INT   (-100, 100),
-      HEGEL_FACET (kids_arr, value),
-      HEGEL_FACET (kids_arr, size));
-  hegel_schema_free (kids_arr);
+      HEGEL_LET    (nk, HEGEL_INT (0, 3)),                    /* non-positional */
+      HEGEL_INT    (-100, 100),                               /* int val */
+      HEGEL_ARR_OF (HEGEL_USE (nk), HEGEL_SELF ()),           /* Tree ** kids */
+      HEGEL_USE    (nk));                                     /* int n_kids */
 }
 
 /* ---- Test ---- */

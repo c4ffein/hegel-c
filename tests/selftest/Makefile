@@ -44,7 +44,20 @@ TESTS_PASS = test_pass_simple \
              test_schema_facets_self_recursion \
              test_schema_top_level_draw \
              test_schema_map_of_one_of \
-             test_binding_basic
+             test_binding_basic \
+             test_binding_scope_walk \
+             test_binding_arr_of \
+             test_binding_jagged_2d \
+             test_binding_const_length \
+             test_binding_shadowing \
+             test_binding_arr_shadow \
+             test_binding_shrink_bag \
+             test_binding_shrink_jagged \
+             test_binding_shrink_shadow \
+             test_binding_shrink_arr_of_structs \
+             test_binding_widths \
+             test_binding_let_arr \
+             test_binding_use_path
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -57,7 +70,10 @@ TESTS_FAIL = test_shrink_boundary \
 TESTS_CRASH = test_crash_segfault \
               test_crash_abort \
               test_crash_stackoverflow \
-              test_binding_unresolved
+              test_binding_unresolved \
+              test_binding_overflow \
+              test_binding_width_mismatch \
+              test_binding_use_at_no_iter
 
 # Tests that should fail via a HEGEL HEALTH-CHECK panic (e.g.
 # filter_too_much, large_base_example) — must exit non-zero AND

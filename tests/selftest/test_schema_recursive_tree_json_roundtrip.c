@@ -222,17 +222,17 @@ typedef struct Bag {
 
 static hegel_schema_t bag_schema;
 
+HEGEL_BINDING (n_items);
+
 static
 void
 init_bag_schema (void)
 {
-  hegel_schema_t items_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
   bag_schema = HEGEL_STRUCT (Bag,
-      HEGEL_FACET (items_arr, value),
-      HEGEL_FACET (items_arr, size),
-      HEGEL_INT (0, 3));
-  hegel_schema_free (items_arr);
+      HEGEL_LET    (n_items, HEGEL_INT (0, 10)),
+      HEGEL_ARR_OF (HEGEL_USE (n_items), HEGEL_INT (0, 100)),
+      HEGEL_USE    (n_items),
+      HEGEL_INT    (0, 3));
 }
 
 static

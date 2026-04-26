@@ -2,21 +2,24 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: nested array facets — outer array whose elements themselves
-** hold a facet-driven inner array.
+** Test: nested arrays — outer array whose elements themselves hold
+** an inner array.  Both use HEGEL_LET + HEGEL_ARR_OF.
 **
 ** Topology:
-**     Bag { Chunk **chunks; int n_chunks; }
-**     Chunk { int *data; int n_data; }
+**     Bag   { Chunk **chunks; int n_chunks; }
+**     Chunk { int *data;      int n_data;   }
 **
-** Both arrays use HEGEL_ARRAY + HEGEL_FACET.  The inner array's
-** element buffer must be INDEPENDENT per chunk — if the ctx leaked
-** across chunk instances, all chunks would share one int buffer and
-** their n_data values would pair with someone else's data pointer.
+** Each struct's pointer field comes BEFORE its count field — the
+** count's USE entry appears AFTER the ARR_OF that consumes the
+** value.  That works because HEGEL_LET is non-positional: by the
+** time draw reaches the count-USE slot, the value has already been
+** drawn and cached.
 **
-** Specifically: every chunk's data[i] must fall within the inner
-** range [0, 9].  If two chunks shared one buffer of a different
-** length, indexing would read out of bounds or crash.
+** Per-instance binding scope: every Chunk created as an element of
+** the outer array gets its own ctx, so each Chunk draws its own
+** n_data independently.  If per-instance scoping leaked, all chunks
+** would share one cached n_data and buffer sizes/pointers would
+** desynchronize.
 **
 ** Expected: EXIT 0.
 */
@@ -42,26 +45,27 @@ typedef struct {
 
 /* ---- Schema ---- */
 
+HEGEL_BINDING (n_chunks);
+HEGEL_BINDING (n_data);
+
 static hegel_schema_t bag_schema;
 
 static
 void
 init_schema (void)
 {
-  /* Inner array: each Chunk has its own data buffer in [0, 9]. */
-  hegel_schema_t chunk_data =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 9), 0, 4);
+  /* Inner struct: each Chunk has its own data buffer in [0, 9].
+  ** Per-instance binding scope guarantees n_data is independent
+  ** across chunks. */
   hegel_schema_t chunk = HEGEL_STRUCT (Chunk,
-      HEGEL_FACET (chunk_data, value),
-      HEGEL_FACET (chunk_data, size));
-  hegel_schema_free (chunk_data);
+      HEGEL_LET    (n_data, HEGEL_INT (0, 4)),
+      HEGEL_ARR_OF (HEGEL_USE (n_data), HEGEL_INT (0, 9)),   /* int * data */
+      HEGEL_USE    (n_data));                                 /* int n_data */
 
-  /* Outer array: each Bag holds 1..3 chunks. */
-  hegel_schema_t chunks_arr = HEGEL_ARRAY (chunk, 1, 3);
   bag_schema = HEGEL_STRUCT (Bag,
-      HEGEL_FACET (chunks_arr, value),
-      HEGEL_FACET (chunks_arr, size));
-  hegel_schema_free (chunks_arr);
+      HEGEL_LET    (n_chunks, HEGEL_INT (1, 3)),
+      HEGEL_ARR_OF (HEGEL_USE (n_chunks), chunk),            /* Chunk ** chunks */
+      HEGEL_USE    (n_chunks));                               /* int n_chunks */
 }
 
 /* ---- Test ---- */

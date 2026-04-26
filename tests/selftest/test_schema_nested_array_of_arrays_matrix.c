@@ -39,16 +39,16 @@ typedef struct {
 
 static hegel_schema_t matrix_schema;
 
+HEGEL_BINDING (n_values);
+
 static
 void
 init_schema (void)
 {
-  hegel_schema_t values_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 99), 1, 6);
   hegel_schema_t row = HEGEL_STRUCT (Row,
-      HEGEL_FACET (values_arr, value),
-      HEGEL_FACET (values_arr, size));
-  hegel_schema_free (values_arr);
+      HEGEL_LET    (n_values, HEGEL_INT (1, 6)),
+      HEGEL_ARR_OF (HEGEL_USE (n_values), HEGEL_INT (0, 99)),
+      HEGEL_USE    (n_values));
 
   matrix_schema = HEGEL_STRUCT (Matrix,
       HEGEL_ARRAY_INLINE (row, sizeof (Row), 1, 4));

@@ -2,7 +2,7 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: hegel_gen_flat_map_int produces dependent generation.
+** Test: hegel_schema_flat_map_int produces dependent generation.
 **
 ** Layer 1: in_range() checks if x is within [lo, hi].
 ** Layer 2: flat_map(n -> int(0, n)) on int(1, 100) — result must
@@ -16,6 +16,7 @@
 #include <stdlib.h>
 
 #include "hegel_c.h"
+#include "hegel_gen.h"
 
 /* ---- Layer 1: function under test ----
 ** Returns non-zero if x is in [lo, hi] (inclusive). */
@@ -33,30 +34,31 @@ int                         hi)
 /* ---- flat_map callback ---- */
 
 static
-hegel_gen *
-make_range_gen (int n, void * ctx)
+hegel_schema_t
+make_range_schema (int n, void * ctx)
 {
   (void) ctx;
-  return (hegel_gen_int (0, n));
+  return (hegel_schema_int_range (0, n));
 }
 
 /* ---- Layer 2: hegel test ---- */
+
+static hegel_schema_t  flat_map_schema;
 
 static
 void
 testFlatMap (
 hegel_testcase *            tc)
 {
-  hegel_gen *          gn;
-  int                  result;
+  int                  result = 0;
+  hegel_shape *        sh;
 
-  gn = hegel_gen_flat_map_int (hegel_gen_int (1, 100), make_range_gen, NULL);
-  result = hegel_gen_draw_int (tc, gn);
+  sh = HEGEL_DRAW (&result, flat_map_schema);
 
   HEGEL_ASSERT (in_range (result, 0, 100),
                 "flat_map result %d not in [0, 100]", result);
 
-  hegel_gen_free (gn);
+  hegel_shape_free (sh);
 }
 
 /* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
@@ -69,9 +71,13 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  printf ("Testing gen_flat_map_int...\n");
+  flat_map_schema = hegel_schema_flat_map_int (
+      hegel_schema_int_range (1, 100), make_range_schema, NULL);
+
+  printf ("Testing schema flat_map_int...\n");
   hegel_run_test (testFlatMap);
   printf ("PASSED\n");
 
+  hegel_schema_free (flat_map_schema);
   return (0);
 }

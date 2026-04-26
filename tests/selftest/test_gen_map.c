@@ -2,7 +2,7 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: hegel_gen_map_int produces correctly transformed values.
+** Test: hegel_schema_map_int produces correctly transformed values.
 **
 ** Layer 1: is_even() checks whether a number is even.
 ** Layer 2: map(x -> x*2) on int(0, 50) — result must always be even
@@ -16,6 +16,7 @@
 #include <stdlib.h>
 
 #include "hegel_c.h"
+#include "hegel_gen.h"
 
 /* ---- Layer 1: function under test ----
 ** Returns non-zero if x is even. */
@@ -40,23 +41,24 @@ double_it (int val, void * ctx)
 
 /* ---- Layer 2: hegel test ---- */
 
+static hegel_schema_t  map_schema;
+
 static
 void
 testMapDouble (
 hegel_testcase *            tc)
 {
-  hegel_gen *          gn;
-  int                  result;
+  int                  result = 0;
+  hegel_shape *        sh;
 
-  gn = hegel_gen_map_int (hegel_gen_int (0, 50), double_it, NULL);
-  result = hegel_gen_draw_int (tc, gn);
+  sh = HEGEL_DRAW (&result, map_schema);
 
   HEGEL_ASSERT (is_even (result),
                 "map(x->x*2) produced odd number: %d", result);
   HEGEL_ASSERT (result >= 0 && result <= 100,
                 "map(x->x*2) out of range: %d", result);
 
-  hegel_gen_free (gn);
+  hegel_shape_free (sh);
 }
 
 /* ---- Layer 3: runner (see Makefile TESTS_PASS) ---- */
@@ -69,9 +71,13 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  printf ("Testing gen_map_int...\n");
+  map_schema = hegel_schema_map_int (
+      hegel_schema_int_range (0, 50), double_it, NULL);
+
+  printf ("Testing schema map_int...\n");
   hegel_run_test (testMapDouble);
   printf ("PASSED\n");
 
+  hegel_schema_free (map_schema);
   return (0);
 }

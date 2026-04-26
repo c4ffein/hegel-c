@@ -59,6 +59,8 @@ typedef struct {
 
 /* ---- Schema ---- */
 
+HEGEL_BINDING (n_items);
+
 static hegel_schema_t coll_schema;
 
 static
@@ -82,15 +84,14 @@ init_schema (void)
 
   /* HEGEL_ONE_OF_STRUCT picks one of the three struct schemas and
   ** returns a pointer to a freshly allocated instance.  Used as the
-  ** element of HEGEL_ARRAY, each slot holds a raw `void *` pointing
+  ** element of HEGEL_ARR_OF, each slot holds a raw `void *` pointing
   ** to whichever variant was chosen — TypeA, TypeB, or TypeC. */
   hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
 
-  hegel_schema_t items_arr = HEGEL_ARRAY (one_of, 1, 6);
   coll_schema = HEGEL_STRUCT (RawCollection,
-      HEGEL_FACET (items_arr, value),
-      HEGEL_FACET (items_arr, size));
-  hegel_schema_free (items_arr);
+      HEGEL_LET    (n_items, HEGEL_INT (1, 6)),
+      HEGEL_ARR_OF (HEGEL_USE (n_items), one_of),
+      HEGEL_USE    (n_items));
 }
 
 /* ---- Test ---- */

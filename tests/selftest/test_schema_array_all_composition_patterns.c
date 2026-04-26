@@ -136,6 +136,11 @@ static void test_ptr_of_inline (hegel_testcase * tc) {
 /* ---- Runner ---- */
 
 int main (void) {
+  HEGEL_BINDING (n_scalar);
+  HEGEL_BINDING (n_ptr);
+  HEGEL_BINDING (n_chunk_data);
+  HEGEL_BINDING (n_sprites);
+
   hegel_schema_t pt_s = HEGEL_STRUCT (Pt,
       HEGEL_INT (-10, 10), HEGEL_INT (-10, 10));
   hegel_schema_t color_s = HEGEL_STRUCT (Color,
@@ -144,38 +149,32 @@ int main (void) {
   ** extra reference so ownership transfer works for both. */
   hegel_schema_ref (color_s);
 
-  hegel_schema_t scalar_vals_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (-50, 50), 0, 8);
   scalar_bag_s = HEGEL_STRUCT (ScalarBag,
-      HEGEL_FACET (scalar_vals_arr, value),
-      HEGEL_FACET (scalar_vals_arr, size));
-  hegel_schema_free (scalar_vals_arr);
+      HEGEL_LET    (n_scalar, HEGEL_INT (0, 8)),
+      HEGEL_ARR_OF (HEGEL_USE (n_scalar), HEGEL_INT (-50, 50)),
+      HEGEL_USE    (n_scalar));
 
-  hegel_schema_t pts_arr = HEGEL_ARRAY (pt_s, 0, 6);
   ptr_bag_s = HEGEL_STRUCT (PtrBag,
-      HEGEL_FACET (pts_arr, value),
-      HEGEL_FACET (pts_arr, size));
-  hegel_schema_free (pts_arr);
+      HEGEL_LET    (n_ptr, HEGEL_INT (0, 6)),
+      HEGEL_ARR_OF (HEGEL_USE (n_ptr), pt_s),
+      HEGEL_USE    (n_ptr));
 
   palette_s = HEGEL_STRUCT (Palette,
       HEGEL_ARRAY_INLINE (color_s, sizeof (Color), 1, 5));
 
-  hegel_schema_t chunk_data_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 9), 0, 4);
   hegel_schema_t chunk_s = HEGEL_STRUCT (Chunk,
-      HEGEL_FACET (chunk_data_arr, value),
-      HEGEL_FACET (chunk_data_arr, size));
-  hegel_schema_free (chunk_data_arr);
+      HEGEL_LET    (n_chunk_data, HEGEL_INT (0, 4)),
+      HEGEL_ARR_OF (HEGEL_USE (n_chunk_data), HEGEL_INT (0, 9)),
+      HEGEL_USE    (n_chunk_data));
   chunklist_s = HEGEL_STRUCT (ChunkList,
       HEGEL_ARRAY_INLINE (chunk_s, sizeof (Chunk), 1, 3));
 
   hegel_schema_t sprite_s = HEGEL_STRUCT (Sprite,
       HEGEL_ARRAY_INLINE (color_s, sizeof (Color), 1, 4));
-  hegel_schema_t sprites_arr = HEGEL_ARRAY (sprite_s, 1, 3);
   scene_s = HEGEL_STRUCT (Scene,
-      HEGEL_FACET (sprites_arr, value),
-      HEGEL_FACET (sprites_arr, size));
-  hegel_schema_free (sprites_arr);
+      HEGEL_LET    (n_sprites, HEGEL_INT (1, 3)),
+      HEGEL_ARR_OF (HEGEL_USE (n_sprites), sprite_s),
+      HEGEL_USE    (n_sprites));
 
   printf ("  scalar array...\n");
   hegel_run_test (test_scalar_array);

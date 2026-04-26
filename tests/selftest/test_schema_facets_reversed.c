@@ -2,18 +2,15 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: reversed facet ordering.
+** Test: count-before-data array layout via HEGEL_LET + HEGEL_ARR_OF.
 **
-** The "natural" array layout is pointer-then-count, but C structs can
-** put them in either order.  This test uses a struct where the count
-** field comes BEFORE the pointer field — which means the SIZE facet
-** is drawn first and the VALUE facet is drawn second.
+** The struct is laid out count-first-then-pointer: `{int n; int *items;}`.
+** HEGEL_LET declares n non-positionally, HEGEL_USE fills the count
+** slot, HEGEL_ARR_OF(HEGEL_USE(n), ...) allocates exactly n elements.
 **
-** Under the per-draw ctx model, the first facet encountered becomes
-** primary (draws the array, owns the shape) and the second is
-** secondary (reuses the cached length/pointer).  This test asserts
-** that either facet can be primary — the decision is purely dynamic
-** and based on draw order, not on some build-time marking.
+** Previously implemented via HEGEL_ARRAY + HEGEL_FACET with dynamic
+** "first-facet-is-primary" coordination — the binding form expresses
+** the same coherence explicitly.
 **
 ** Expected: EXIT 0.
 */
@@ -34,20 +31,18 @@ typedef struct {
 
 /* ---- Schema ---- */
 
+HEGEL_BINDING (n);
+
 static hegel_schema_t bag_schema;
 
 static
 void
 init_schema (void)
 {
-  hegel_schema_t items_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 255), 0, 6);
-
   bag_schema = HEGEL_STRUCT (ReverseBag,
-      HEGEL_FACET (items_arr, size),     /* SIZE first → primary */
-      HEGEL_FACET (items_arr, value));   /* VALUE second → secondary */
-
-  hegel_schema_free (items_arr);
+      HEGEL_LET    (n, HEGEL_INT (0, 6)),                  /* non-positional */
+      HEGEL_USE    (n),                                     /* int n */
+      HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 255)));   /* int * items */
 }
 
 /* ---- Test ---- */

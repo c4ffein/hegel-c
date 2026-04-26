@@ -2,7 +2,7 @@
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 /*
-** Test: HEGEL_ARRAY(int, ...) — length variation, element plumbing,
+** Test: HEGEL_ARR_OF(int, ...) — length variation, element plumbing,
 ** empty-list support.
 **
 ** Three sub-tests, each running N cases in nofork mode so a file-scope
@@ -137,29 +137,33 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
+  /* Each of the three variants: Bag {int *items; int n;} — pointer
+  ** first, count last.  HEGEL_LET declares n, HEGEL_ARR_OF fills the
+  ** items slot, HEGEL_USE writes the count.  A separate binding per
+  ** variant keeps them independent. */
   {
-    hegel_schema_t arr = HEGEL_ARRAY (HEGEL_INT (0, 9), 2, 10);
+    HEGEL_BINDING (n_range);
     range_schema = HEGEL_STRUCT (Bag,
-        HEGEL_FACET (arr, value),
-        HEGEL_FACET (arr, size));
-    hegel_schema_free (arr);
+        HEGEL_LET    (n_range, HEGEL_INT (2, 10)),
+        HEGEL_ARR_OF (HEGEL_USE (n_range), HEGEL_INT (0, 9)),
+        HEGEL_USE    (n_range));
   }
   {
-    hegel_schema_t arr = HEGEL_ARRAY (HEGEL_INT (7, 7), 1, 5);
+    HEGEL_BINDING (n_pinned);
     pinned_schema = HEGEL_STRUCT (Bag,
-        HEGEL_FACET (arr, value),
-        HEGEL_FACET (arr, size));
-    hegel_schema_free (arr);
+        HEGEL_LET    (n_pinned, HEGEL_INT (1, 5)),
+        HEGEL_ARR_OF (HEGEL_USE (n_pinned), HEGEL_INT (7, 7)),
+        HEGEL_USE    (n_pinned));
   }
   {
-    hegel_schema_t arr = HEGEL_ARRAY (HEGEL_INT (0, 0), 0, 5);
+    HEGEL_BINDING (n_empty);
     empty_schema = HEGEL_STRUCT (Bag,
-        HEGEL_FACET (arr, value),
-        HEGEL_FACET (arr, size));
-    hegel_schema_free (arr);
+        HEGEL_LET    (n_empty, HEGEL_INT (0, 5)),
+        HEGEL_ARR_OF (HEGEL_USE (n_empty), HEGEL_INT (0, 0)),
+        HEGEL_USE    (n_empty));
   }
 
-  printf ("Testing HEGEL_ARRAY int (length variation)...\n");
+  printf ("Testing HEGEL_ARR_OF int (length variation)...\n");
   hegel_run_test_nofork_n (testListRange, N_CASES);
   if (range_max_len <= range_min_len) {
     fprintf (stderr,
@@ -170,11 +174,11 @@ char *              argv[])
   printf ("  PASSED (lengths %d..%d in %d cases)\n",
           range_min_len, range_max_len, range_total);
 
-  printf ("Testing HEGEL_ARRAY int (pinned element 7)...\n");
+  printf ("Testing HEGEL_ARR_OF int (pinned element 7)...\n");
   hegel_run_test_nofork_n (testListPinned, N_CASES);
   printf ("  PASSED (%d cases)\n", pinned_total);
 
-  printf ("Testing HEGEL_ARRAY int (empty-allowed)...\n");
+  printf ("Testing HEGEL_ARR_OF int (empty-allowed)...\n");
   hegel_run_test_nofork_n (testListEmpty, N_CASES);
   if (empty_zero == 0 || empty_nonzero == 0) {
     fprintf (stderr,
