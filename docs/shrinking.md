@@ -298,10 +298,10 @@ HEGEL_ASSERT (parse (s) == n, "...");
 
 Now both `n` *and* the bytes shrink coherently.
 
-The schema API does this for you automatically — `HEGEL_ARRAY*`
-draws each element through the schema, which in turn uses
-primitive draws. No extra discipline needed if you stick to the
-schema layer.
+The schema API does this for you automatically — `HEGEL_ARR_OF`
+and `HEGEL_ARRAY_INLINE` draw each element through the schema,
+which in turn uses primitive draws. No extra discipline needed if
+you stick to the schema layer.
 
 ### 4. Make the assertion message reproducer-friendly
 

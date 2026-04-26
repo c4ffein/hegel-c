@@ -423,9 +423,23 @@ a typo'd name colliding with an earlier binding. Use a separate
 *can* re-LET the same id (inner shadows outer); that's per-scope,
 not per-process.
 
-Stage-1 restriction: LET's inner schema must be int-width INTEGER
-(or a MAP/FILTER/FLAT_MAP over one). Wider kinds will be added as
-needed.
+LET's inner schema may be a scalar INTEGER (width 4 or 8), a FLOAT
+(single or double), or a composed schema producing one of those
+(`HEGEL_MAP_INT` / `_I64` / `_DOUBLE` and friends). The matching
+read-back uses the corresponding `HEGEL_USE_*` variant:
+
+| LET inner                       | Slot type   | USE variant         |
+|---------------------------------|-------------|---------------------|
+| `HEGEL_INT(...)` (width 4)      | `int`       | `HEGEL_USE`         |
+| `HEGEL_I64(...)`                | `int64_t`   | `HEGEL_USE_I64`     |
+| `HEGEL_U64(...)`                | `uint64_t`  | `HEGEL_USE_U64`     |
+| `HEGEL_FLOAT(...)`              | `float`     | `HEGEL_USE_FLOAT`   |
+| `HEGEL_DOUBLE(...)`             | `double`    | `HEGEL_USE_DOUBLE`  |
+
+Width / sign / float-ness mismatch between LET and USE is a hard
+abort at draw time — silent truncation would defeat the point.
+`HEGEL_ARR_OF` length still requires an int-width schema; the wider
+USE variants only make sense as struct slots.
 
 ### `HEGEL_ARR_OF` — array with schema-valued length
 

@@ -12,6 +12,11 @@ LDFLAGS  = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 # The suite bench uses hegeltest's default count — see test_bench_suite.c.
 N          ?= 1000
 
+# Draw-loop bench: small case count, many draws per case.  Isolates
+# per-draw IPC cost from per-case fork-setup cost.
+N_LOOP     ?= 10
+N_DRAWS    ?= 1000
+
 # Iterations and warmup for each measured run.
 ITERS      ?= 5
 WARMUPS    ?= 1
@@ -21,9 +26,11 @@ WARMUPS    ?= 1
 TASKSET    ?= $(shell command -v taskset >/dev/null 2>&1 && echo "taskset -c 0")
 
 BENCH_BINS = test_bench_single test_bench_single_nofork \
-             test_bench_suite  test_bench_suite_nofork
+             test_bench_suite  test_bench_suite_nofork  \
+             test_bench_drawloop test_bench_drawloop_nofork \
+             test_bench_rss
 
-.PHONY: help all clean bench bench-single bench-suite hegel-c-lib check-license
+.PHONY: help all clean bench bench-single bench-suite bench-drawloop bench-rss hegel-c-lib check-license
 
 help:
 	@echo "tests/bench Makefile"
@@ -31,14 +38,18 @@ help:
 	@echo "Targets:"
 	@echo "  help              Show this help (default)"
 	@echo "  all               Build libhegel_c.a + bench binaries (fork + nofork)"
-	@echo "  bench             Run bench-single and bench-suite"
+	@echo "  bench             Run bench-single, bench-suite, bench-drawloop, bench-rss"
 	@echo "  bench-single      Time the single-test bench, fork vs nofork"
 	@echo "  bench-suite       Time the suite-mode bench, fork vs nofork"
+	@echo "  bench-drawloop    Time many-draws-per-case, fork vs nofork (per-draw IPC cost)"
+	@echo "  bench-rss         Print parent RSS after hegeltest warmup (fork-duplication probe)"
 	@echo "  check-license     Verify SPDX headers on all source files"
 	@echo "  clean             Remove bench binaries"
 	@echo ""
 	@echo "Variables (override on the command line):"
 	@echo "  N=1000            Cases per run for bench-single"
+	@echo "  N_LOOP=10         Cases per run for bench-drawloop"
+	@echo "  N_DRAWS=1000      Draws per case for bench-drawloop"
 	@echo "  ITERS=5           Measured iterations per variant"
 	@echo "  WARMUPS=1         Warmup iterations (discarded)"
 	@echo "  TASKSET='...'     Prefix used to pin runs (default: taskset -c 0 if available)"
@@ -62,6 +73,15 @@ test_bench_suite: test_bench_suite.c bench_lib.h hegel-c-lib
 
 test_bench_suite_nofork: test_bench_suite.c bench_lib.h hegel-c-lib
 	$(CC) $(CFLAGS) -DHEGEL_BENCH_NOFORK -o $@ $< $(LDFLAGS)
+
+test_bench_drawloop: test_bench_drawloop.c bench_lib.h hegel-c-lib
+	$(CC) $(CFLAGS) -DBENCH_N_CASES=$(N_LOOP) -DBENCH_N_DRAWS=$(N_DRAWS) -o $@ $< $(LDFLAGS)
+
+test_bench_drawloop_nofork: test_bench_drawloop.c bench_lib.h hegel-c-lib
+	$(CC) $(CFLAGS) -DBENCH_N_CASES=$(N_LOOP) -DBENCH_N_DRAWS=$(N_DRAWS) -DHEGEL_BENCH_NOFORK -o $@ $< $(LDFLAGS)
+
+test_bench_rss: test_bench_rss.c hegel-c-lib
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # run_one NAME BIN — runs BIN once, prints the elapsed wall time in
 # seconds. Uses /usr/bin/time so we get a machine-readable number
@@ -109,7 +129,7 @@ define run_variant
 
 endef
 
-bench: bench-single bench-suite
+bench: bench-single bench-suite bench-drawloop bench-rss
 
 bench-single: test_bench_single test_bench_single_nofork
 	@echo ""
@@ -122,6 +142,17 @@ bench-suite: test_bench_suite test_bench_suite_nofork
 	@echo "==== suite bench (10 tests, hegeltest default cases, $(ITERS) iters + $(WARMUPS) warmup) ===="
 	$(call run_variant,fork,test_bench_suite)
 	$(call run_variant,nofork,test_bench_suite_nofork)
+
+bench-drawloop: test_bench_drawloop test_bench_drawloop_nofork
+	@echo ""
+	@echo "==== draw-loop bench (N_LOOP=$(N_LOOP) cases × N_DRAWS=$(N_DRAWS) draws, $(ITERS) iters + $(WARMUPS) warmup) ===="
+	$(call run_variant,fork,test_bench_drawloop)
+	$(call run_variant,nofork,test_bench_drawloop_nofork)
+
+bench-rss: test_bench_rss
+	@echo ""
+	@echo "==== RSS probe (parent RSS after hegeltest warmup) ===="
+	@$(TASKSET) "$(CURDIR)/test_bench_rss"
 
 check-license:
 	@missing=0; \

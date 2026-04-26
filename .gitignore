@@ -4,6 +4,8 @@ rust-version/target/
 .hegel/
 tests/selftest/test_*
 !tests/selftest/test_*.c
+tests/docs/test_*
+!tests/docs/test_*.c
 tests/from-hegel-rust/test_*
 !tests/from-hegel-rust/test_*.c
 tests/from-hegel-rust/report.md

@@ -215,12 +215,13 @@ main (void)
       HEGEL_INT  (0, 100),
       HEGEL_SELF ());
 
-  hegel_schema_t items_arr =
-      HEGEL_ARRAY (hegel_schema_int_range (0, 100), 0, 10);
-  bag_schema = HEGEL_STRUCT (Bag,
-      HEGEL_FACET (items_arr, value),
-      HEGEL_FACET (items_arr, size));
-  hegel_schema_free (items_arr);
+  {
+    HEGEL_BINDING (n_items);
+    bag_schema = HEGEL_STRUCT (Bag,
+        HEGEL_LET    (n_items, HEGEL_INT (0, 10)),
+        HEGEL_ARR_OF (HEGEL_USE (n_items), HEGEL_INT (0, 100)),
+        HEGEL_USE    (n_items));
+  }
 
   hegel_schema_t color_s = HEGEL_STRUCT (Color,
       HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());

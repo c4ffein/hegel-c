@@ -131,6 +131,9 @@ typedef enum {
   HEGEL_SCH_SELF,
   HEGEL_SCH_BIND,            /* HEGEL_LET: draw inner, cache under binding id */
   HEGEL_SCH_USE,             /* HEGEL_USE: read cached value for binding id */
+  HEGEL_SCH_LET_ARR,         /* HEGEL_LET_ARR: draw int array, cache under binding id */
+  HEGEL_SCH_USE_AT,          /* HEGEL_USE_AT: read cached array's element at current iter index */
+  HEGEL_SCH_USE_PATH,        /* HEGEL_USE_PATH: explicit-path scalar / indexed array read */
   HEGEL_SCH_ARR_OF,          /* HEGEL_ARR_OF: array with schema-valued length */
   HEGEL_SCH_CONST_INT        /* HEGEL_CONST: pure int constant, no byte-stream draw */
 } hegel_schema_kind;
@@ -327,8 +330,18 @@ struct hegel_schema {
     struct {
       /* HEGEL_USE: reads the cached value for `binding_id` from the
       ** enclosing struct's draw ctx and writes it to the field slot.
-      ** Stage 1: int-only; slot is always sizeof(int). */
+      ** width / is_signed / is_float select the slot type:
+      **   HEGEL_USE        -> width=4, is_signed=1, is_float=0  (int)
+      **   HEGEL_USE_I64    -> width=8, is_signed=1, is_float=0  (int64_t)
+      **   HEGEL_USE_U64    -> width=8, is_signed=0, is_float=0  (uint64_t)
+      **   HEGEL_USE_FLOAT  -> width=4, is_float=1               (float)
+      **   HEGEL_USE_DOUBLE -> width=8, is_float=1               (double)
+      ** The binding's stored kind must match — a width / sign / float
+      ** mismatch at draw time is a hard abort. */
       int                   binding_id;
+      int                   width;
+      char                  is_signed;
+      char                  is_float;
     }                                                  use_def;
     struct {
       /* HEGEL_ARR_OF: array whose length comes from evaluating a
@@ -339,6 +352,34 @@ struct hegel_schema {
       struct hegel_schema * length;   /* must produce int at draw time */
       struct hegel_schema * elem;
     }                                                  arr_of_def;
+    struct {
+      /* HEGEL_LET_ARR: non-positional.  Draws a length, then draws
+      ** that many ints from `elem`, and caches the resulting int[]
+      ** in the enclosing struct's draw ctx under `binding_id`.  No
+      ** struct slot consumed.  Read elements via HEGEL_USE_AT(name) —
+      ** the current ARR_OF iteration index of the scope WHERE the
+      ** binding was declared selects the element. */
+      int                   binding_id;
+      struct hegel_schema * length;   /* must produce int */
+      struct hegel_schema * elem;     /* int-producing scalar today */
+    }                                                  let_arr_def;
+    struct {
+      /* HEGEL_USE_AT: reads cached_arr[ctx_at_decl_scope.current_index]
+      ** and writes an int to the field slot.  Aborts if no ARR_OF is
+      ** currently iterating in the scope where the binding lives, or
+      ** if the index is out of bounds. */
+      int                   binding_id;
+    }                                                  use_at_def;
+    struct {
+      /* HEGEL_USE_PATH: explicit-depth path resolver.  `path` is a
+      ** small int[] of the form
+      **     <HEGEL__PATH_PARENT>{0,*} <binding_id> [<HEGEL__PATH_INDEX_HERE>] <HEGEL__PATH_END>
+      ** Owned by the schema; freed at hegel_schema_free time.  Sentinel
+      ** values are negative; binding ids (from __COUNTER__) are >= 0,
+      ** so disambiguation is by sign. */
+      int *                 path;
+      int                   path_len;   /* excluding terminator */
+    }                                                  use_path_def;
     struct {
       /* HEGEL_CONST: pure int constant.  Consumes no bytes from the
       ** Hegel stream — just writes the value.  Usable as HEGEL_ARR_OF
@@ -615,11 +656,50 @@ hegel_schema_t hegel_schema_self (void);
 
 #define HEGEL_BINDING(name) enum { name = __COUNTER__ }
 
-hegel_schema_t hegel_schema_bind (int binding_id, hegel_schema_t inner);
-hegel_schema_t hegel_schema_use  (int binding_id);
+hegel_schema_t hegel_schema_bind       (int binding_id, hegel_schema_t inner);
+hegel_schema_t hegel_schema_use        (int binding_id);
+hegel_schema_t hegel_schema_use_i64    (int binding_id);
+hegel_schema_t hegel_schema_use_u64    (int binding_id);
+hegel_schema_t hegel_schema_use_float  (int binding_id);
+hegel_schema_t hegel_schema_use_double (int binding_id);
+hegel_schema_t hegel_schema_let_arr    (int binding_id, hegel_schema_t length,
+                                        hegel_schema_t elem);
+hegel_schema_t hegel_schema_use_at     (int binding_id);
 
-#define HEGEL_LET(name, inner) hegel_schema_bind ((name), (inner))
-#define HEGEL_USE(name)        hegel_schema_use  ((name))
+#define HEGEL_LET(name, inner) hegel_schema_bind       ((name), (inner))
+#define HEGEL_USE(name)        hegel_schema_use        ((name))
+#define HEGEL_USE_I64(name)    hegel_schema_use_i64    ((name))
+#define HEGEL_USE_U64(name)    hegel_schema_use_u64    ((name))
+#define HEGEL_USE_FLOAT(name)  hegel_schema_use_float  ((name))
+#define HEGEL_USE_DOUBLE(name) hegel_schema_use_double ((name))
+#define HEGEL_LET_ARR(name, length, elem) \
+    hegel_schema_let_arr ((name), (length), (elem))
+#define HEGEL_USE_AT(name)     hegel_schema_use_at     ((name))
+
+/* HEGEL_USE_PATH — explicit-path scalar / indexed array read.
+**
+**     HEGEL_USE_PATH (HEGEL_PARENT, HEGEL_PARENT, sizes, HEGEL_INDEX_HERE)
+**
+** Steps:
+**   - Zero or more HEGEL_PARENT  : skip N scopes (start lookup N levels up).
+**   - One binding name           : the LET / LET_ARR target.
+**   - Optional HEGEL_INDEX_HERE  : index by current_index of the scope
+**                                  where the binding lives (LET_ARR only).
+**
+** Path sentinels are negative; binding ids from __COUNTER__ are >= 0.
+** They get assembled into a sentinel-terminated int[] compound literal.
+**
+** Plain HEGEL_USE_AT(name) is shorter for the canonical case (auto
+** scope-walk to find name).  Use HEGEL_USE_PATH only when you need to
+** SKIP a lexically closer same-named binding to reach an outer one. */
+#define HEGEL_PARENT       (-2)
+#define HEGEL_INDEX_HERE   (-3)
+#define HEGEL__PATH_END    (-1)
+
+hegel_schema_t hegel_schema_use_path (const int * path);
+
+#define HEGEL_USE_PATH(...) \
+    hegel_schema_use_path ((const int[]){ __VA_ARGS__, HEGEL__PATH_END })
 
 /* ================================================================
 ** HEGEL_ARR_OF — array with schema-valued length

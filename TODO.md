@@ -14,6 +14,7 @@
 
 - Investigate recreating something akin to the FACET system, but using the LET mechanism?
   - would only work at same level, maybe could save a let, just reuse the same name, get or create?
+  - HEGEL_ARRAY_LEN / HEGEL_ARRAY_VALUE => populate a let in param?
 
 
 Open items after the V0 schema API milestone. For what's already

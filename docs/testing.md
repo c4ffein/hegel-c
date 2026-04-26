@@ -11,6 +11,7 @@ The selftest suite (`tests/selftest/`) tests hegel-c itself. Each test has **thr
 3. **The outer runner** — the Makefile target that runs the binary and checks the *exit code* (and optionally stderr). This is the real test: it verifies that hegel-c did its job.
 
 Example structure:
+<!-- /ignore example: distilled illustration, not transcluded -->
 ```c
 /* Layer 1: function under test — has a bug when x overflows */
 int square(int x) {
