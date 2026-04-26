@@ -234,6 +234,13 @@ hegel__schema_slot_info (const hegel_schema * s,
       *out_size  = sizeof (int);
       *out_align = _Alignof (int);
       return;
+    case HEGEL_SCH_LEN_PREFIXED:
+    case HEGEL_SCH_TERMINATED:
+      /* Single pointer slot — the buffer pointer.  Length / sentinel
+      ** are inside the buffer, not in any parent struct field. */
+      *out_size  = sizeof (void *);
+      *out_align = _Alignof (void *);
+      return;
   }
   *out_size = 0;
   *out_align = 1;
@@ -921,12 +928,122 @@ hegel_schema_const_int (int value)
   return (hegel_schema_t){s};
 }
 
+/* Shared length-validation: HEGEL_ARR_OF, HEGEL_LEN_PREFIXED_ARRAY,
+** and HEGEL_TERMINATED_ARRAY all require length to be a named
+** binding or a literal (no anonymous random draws). */
+static void
+hegel__validate_array_length (hegel_schema * length, const char * caller)
+{
+  if (length == NULL)
+    hegel__abort ("%s: length schema is NULL", caller);
+  switch (length->kind) {
+    case HEGEL_SCH_USE:
+    case HEGEL_SCH_USE_AT:
+    case HEGEL_SCH_USE_PATH:
+    case HEGEL_SCH_CONST_INT:
+      return;
+    case HEGEL_SCH_INTEGER:
+      hegel__abort ("%s: length must be HEGEL_USE(name) or HEGEL_CONST(N).  "
+                    "Raw HEGEL_INT(lo,hi) is not allowed; wrap in HEGEL_LET "
+                    "first:  HEGEL_LET(name, HEGEL_INT(lo,hi)) + "
+                    "HEGEL_USE(name).", caller);
+      break;
+    default:
+      hegel__abort ("%s: length must be HEGEL_USE(name) or HEGEL_CONST(N); "
+                    "got unsupported schema kind.", caller);
+      break;
+  }
+}
+
+/* Width-aware integer write — used by LEN_PREFIXED to lay down the
+** length value at slot 0 and by TERMINATED to lay down the sentinel
+** at slot n, in the elem type's bit-width. */
+static void
+hegel__write_int_at (void * dst, int width, int64_t value)
+{
+  switch (width) {
+    case 1: { uint8_t  v = (uint8_t)  value; memcpy (dst, &v, 1); return; }
+    case 2: { uint16_t v = (uint16_t) value; memcpy (dst, &v, 2); return; }
+    case 4: { uint32_t v = (uint32_t) value; memcpy (dst, &v, 4); return; }
+    case 8: { uint64_t v = (uint64_t) value; memcpy (dst, &v, 8); return; }
+    default:
+      hegel__abort ("hegel__write_int_at: unsupported width %d", width);
+  }
+}
+
+/* Width-aware integer read — used by TERMINATED's runtime collision
+** check to read back what was just drawn for sentinel comparison. */
+static int64_t
+hegel__read_int_at (void * src, int width, int is_signed)
+{
+  switch (width) {
+    case 1: {
+      uint8_t v;  memcpy (&v, src, 1);
+      return is_signed ? (int64_t)(int8_t) v : (int64_t) v;
+    }
+    case 2: {
+      uint16_t v; memcpy (&v, src, 2);
+      return is_signed ? (int64_t)(int16_t) v : (int64_t) v;
+    }
+    case 4: {
+      uint32_t v; memcpy (&v, src, 4);
+      return is_signed ? (int64_t)(int32_t) v : (int64_t) v;
+    }
+    case 8: {
+      int64_t v;  memcpy (&v, src, 8);
+      return v;
+    }
+    default:
+      hegel__abort ("hegel__read_int_at: unsupported width %d", width);
+      return 0;
+  }
+}
+
+/* Schema-build-time best-effort sentinel-collision check.  For a
+** bounded HEGEL_INT or HEGEL_CONST elem we can prove or disprove
+** collision statically; for derived schemas (USE / MAP / FILTER /
+** FLAT_MAP) we defer to a runtime check during draw. */
+static void
+hegel__check_sentinel_collision (hegel_schema * elem, int64_t sentinel,
+                                 const char * caller)
+{
+  switch (elem->kind) {
+    case HEGEL_SCH_INTEGER: {
+      int64_t lo, hi;
+      if (elem->integer.is_signed) {
+        lo = elem->integer.min_s;
+        hi = elem->integer.max_s;
+      } else {
+        lo = (int64_t) elem->integer.min_u;
+        hi = (elem->integer.max_u > (uint64_t) INT64_MAX)
+                 ? INT64_MAX
+                 : (int64_t) elem->integer.max_u;
+      }
+      if (sentinel >= lo && sentinel <= hi)
+        hegel__abort ("%s: sentinel %lld lies within elem range [%lld, %lld] "
+                      "— would collide with drawn elements.  Pick a sentinel "
+                      "outside the elem range, or constrain the elem schema.",
+                      caller, (long long) sentinel,
+                      (long long) lo, (long long) hi);
+      break;
+    }
+    case HEGEL_SCH_CONST_INT:
+      if ((int64_t) elem->const_int_def.value == sentinel)
+        hegel__abort ("%s: sentinel %lld equals HEGEL_CONST elem value — "
+                      "every drawn element would be the sentinel.",
+                      caller, (long long) sentinel);
+      break;
+    default:
+      /* Composed/derived elem — runtime check enforces non-collision. */
+      break;
+  }
+}
+
 hegel_schema_t
 hegel_schema_arr_of (hegel_schema_t length, hegel_schema_t elem)
 {
   hegel_schema * s;
-  if (length._raw == NULL)
-    hegel__abort ("hegel_schema_arr_of: length schema is NULL");
+  hegel__validate_array_length (length._raw, "hegel_schema_arr_of");
   if (elem._raw == NULL)
     hegel__abort ("hegel_schema_arr_of: element schema is NULL");
   s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
@@ -934,6 +1051,51 @@ hegel_schema_arr_of (hegel_schema_t length, hegel_schema_t elem)
   s->refcount = 1;
   s->arr_of_def.length = length._raw;   /* transfer ownership */
   s->arr_of_def.elem   = elem._raw;     /* transfer ownership */
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_len_prefixed_array (hegel_schema_t length, hegel_schema_t elem)
+{
+  hegel_schema * s;
+  hegel__validate_array_length (length._raw,
+                                "hegel_schema_len_prefixed_array");
+  if (elem._raw == NULL)
+    hegel__abort ("hegel_schema_len_prefixed_array: element schema is NULL");
+  if (elem._raw->kind != HEGEL_SCH_INTEGER)
+    hegel__abort ("hegel_schema_len_prefixed_array: element schema must be "
+                  "HEGEL_SCH_INTEGER (got kind=%d).  v0 supports integer "
+                  "elements only — wrap a non-integer schema separately if "
+                  "you need richer payloads.", (int) elem._raw->kind);
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_LEN_PREFIXED;
+  s->refcount = 1;
+  s->len_prefixed_def.length = length._raw;
+  s->len_prefixed_def.elem   = elem._raw;
+  return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_terminated_array (hegel_schema_t length, hegel_schema_t elem,
+                               int64_t sentinel)
+{
+  hegel_schema * s;
+  hegel__validate_array_length (length._raw,
+                                "hegel_schema_terminated_array");
+  if (elem._raw == NULL)
+    hegel__abort ("hegel_schema_terminated_array: element schema is NULL");
+  if (elem._raw->kind != HEGEL_SCH_INTEGER)
+    hegel__abort ("hegel_schema_terminated_array: element schema must be "
+                  "HEGEL_SCH_INTEGER (got kind=%d).  v0 supports integer "
+                  "elements only.", (int) elem._raw->kind);
+  hegel__check_sentinel_collision (elem._raw, sentinel,
+                                   "hegel_schema_terminated_array");
+  s = (hegel_schema *) calloc (1, sizeof (hegel_schema));
+  s->kind = HEGEL_SCH_TERMINATED;
+  s->refcount = 1;
+  s->terminated_def.length   = length._raw;
+  s->terminated_def.elem     = elem._raw;
+  s->terminated_def.sentinel = sentinel;
   return (hegel_schema_t){s};
 }
 
@@ -1203,6 +1365,14 @@ hegel__resolve_self (hegel_schema * node, hegel_schema * target)
       break;
     case HEGEL_SCH_CONST_INT:
       /* Leaf — no children. */
+      break;
+    case HEGEL_SCH_LEN_PREFIXED:
+      hegel__resolve_self (node->len_prefixed_def.length, target);
+      hegel__resolve_self (node->len_prefixed_def.elem,   target);
+      break;
+    case HEGEL_SCH_TERMINATED:
+      hegel__resolve_self (node->terminated_def.length, target);
+      hegel__resolve_self (node->terminated_def.elem,   target);
       break;
     default:
       break;
@@ -2781,6 +2951,143 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
       return (shape);
     }
+
+    case HEGEL_SCH_LEN_PREFIXED:
+    case HEGEL_SCH_TERMINATED: {
+      /* Both kinds share the same shape:
+      **   - Draw a length n via the length schema
+      **   - Allocate a buffer of (n+1) * elem_size bytes
+      **   - LEN_PREFIXED: write n at slot 0, draw elements at slots 1..n
+      **   - TERMINATED:  draw elements at slots 0..n-1, write sentinel at slot n
+      ** Both place the buffer pointer in the parent slot.  */
+      int             n = 0;
+      int             prefix;
+      int             elem_w;
+      int             elem_signed;
+      int64_t         max_repr;
+      int64_t         sentinel = 0;
+      size_t          esz;
+      hegel_schema *  length_sch;
+      hegel_schema *  elem;
+      void *          arr;
+      hegel_shape *   len_shape;
+      int             i;
+
+      if (ctx == NULL)
+        hegel__abort ("hegel__draw_field: HEGEL_LEN_PREFIXED_ARRAY / "
+                      "HEGEL_TERMINATED_ARRAY require a draw ctx — only "
+                      "valid inside HEGEL_STRUCT.");
+
+      if (gen->kind == HEGEL_SCH_LEN_PREFIXED) {
+        length_sch = gen->len_prefixed_def.length;
+        elem       = gen->len_prefixed_def.elem;
+        prefix     = 1;
+      } else {
+        length_sch = gen->terminated_def.length;
+        elem       = gen->terminated_def.elem;
+        sentinel   = gen->terminated_def.sentinel;
+        prefix     = 0;
+      }
+
+      /* Length must produce int-width — same constraint as ARR_OF. */
+      if (length_sch->kind == HEGEL_SCH_USE
+          && (length_sch->use_def.is_float
+              || length_sch->use_def.width != (int) sizeof (int)))
+        hegel__abort ("hegel__draw_field: length must be int-width — got "
+                      "HEGEL_USE_* with width=%d is_float=%d.",
+                      length_sch->use_def.width,
+                      (int) length_sch->use_def.is_float);
+
+      len_shape = hegel__draw_field (tc, length_sch, &n, 0, depth, ctx);
+      hegel_shape_free (len_shape);
+
+      if (n < 0)
+        hegel__abort ("hegel__draw_field: negative length n=%d", n);
+
+      esz         = (size_t) elem->integer.width;
+      elem_w      = elem->integer.width;
+      elem_signed = elem->integer.is_signed;
+
+      /* For LEN_PREFIXED only: drawn n must fit in elem type. */
+      if (prefix) {
+        if (elem_signed)
+          max_repr = elem->integer.max_s;
+        else
+          max_repr = (elem->integer.max_u > (uint64_t) INT64_MAX)
+                         ? INT64_MAX
+                         : (int64_t) elem->integer.max_u;
+        if ((int64_t) n > max_repr)
+          hegel__abort ("HEGEL_LEN_PREFIXED_ARRAY: drawn length %d exceeds "
+                        "elem type's max representable value %lld.  "
+                        "Constrain the LET range to fit in the elem width.",
+                        n, (long long) max_repr);
+      }
+
+      arr = calloc ((size_t) n + 1, esz);
+
+      shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
+      shape->kind   = HEGEL_SHAPE_ARRAY;
+      shape->schema = gen;
+      shape->owned  = arr;
+      shape->array_shape.len   = n + 1;
+      shape->array_shape.elems = (hegel_shape **) calloc (
+          (size_t) n + 1, sizeof (hegel_shape *));
+
+      *(void **) dst = arr;
+
+      hegel_start_span (tc, HEGEL_SPAN_LIST);
+
+      if (prefix) {
+        /* Slot 0 = length, no draw — purely synthetic. */
+        hegel__write_int_at (arr, elem_w, (int64_t) n);
+        shape->array_shape.elems[0] = (hegel_shape *) calloc (
+            1, sizeof (hegel_shape));
+        shape->array_shape.elems[0]->kind   = HEGEL_SHAPE_SCALAR;
+        shape->array_shape.elems[0]->schema = elem;
+      }
+
+      /* Drawn elements: slots [prefix .. prefix + n - 1]. */
+      {
+        int saved_idx = ctx->current_index;
+        for (i = 0; i < n; i ++) {
+          char * slot = (char *) arr + (size_t) (i + prefix) * esz;
+          ctx->current_index = i;
+          hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
+          hegel__draw_integer_into (tc, elem, slot);
+          if (gen->kind == HEGEL_SCH_TERMINATED) {
+            int64_t v = hegel__read_int_at (slot, elem_w, elem_signed);
+            if (v == sentinel)
+              hegel__abort ("HEGEL_TERMINATED_ARRAY: drawn element %lld at "
+                            "index %d collides with sentinel %lld.  The "
+                            "elem schema can produce the sentinel value — "
+                            "constrain it (e.g. HEGEL_INT(1, 127) instead "
+                            "of HEGEL_INT(0, 127) for null-terminated "
+                            "strings).", (long long) v, i,
+                            (long long) sentinel);
+          }
+          shape->array_shape.elems[i + prefix] = (hegel_shape *) calloc (
+              1, sizeof (hegel_shape));
+          shape->array_shape.elems[i + prefix]->kind   = HEGEL_SHAPE_SCALAR;
+          shape->array_shape.elems[i + prefix]->schema = elem;
+          hegel_stop_span (tc, 0);
+        }
+        ctx->current_index = saved_idx;
+      }
+
+      if (!prefix) {
+        /* Slot n = sentinel, no draw — purely synthetic. */
+        hegel__write_int_at ((char *) arr + (size_t) n * esz,
+                             elem_w, sentinel);
+        shape->array_shape.elems[n] = (hegel_shape *) calloc (
+            1, sizeof (hegel_shape));
+        shape->array_shape.elems[n]->kind   = HEGEL_SHAPE_SCALAR;
+        shape->array_shape.elems[n]->schema = elem;
+      }
+
+      hegel_stop_span (tc, 0);
+
+      return (shape);
+    }
   }
 
   return (NULL);
@@ -2923,6 +3230,12 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
       hegel__abort ("hegel_schema_draw_at: HEGEL_ARR_OF needs a parent "
                     "struct for its draw ctx and binding lookups — wrap "
                     "it in HEGEL_STRUCT.");
+      break;
+    case HEGEL_SCH_LEN_PREFIXED:
+    case HEGEL_SCH_TERMINATED:
+      hegel__abort ("hegel_schema_draw_at: HEGEL_LEN_PREFIXED_ARRAY / "
+                    "HEGEL_TERMINATED_ARRAY need a parent struct for the "
+                    "draw ctx and binding lookups — wrap in HEGEL_STRUCT.");
       break;
   }
 
@@ -3072,6 +3385,14 @@ hegel__schema_free_raw (hegel_schema * s)
       break;
     case HEGEL_SCH_CONST_INT:
       /* Leaf — no owned children. */
+      break;
+    case HEGEL_SCH_LEN_PREFIXED:
+      hegel__schema_free_raw (s->len_prefixed_def.length);
+      hegel__schema_free_raw (s->len_prefixed_def.elem);
+      break;
+    case HEGEL_SCH_TERMINATED:
+      hegel__schema_free_raw (s->terminated_def.length);
+      hegel__schema_free_raw (s->terminated_def.elem);
       break;
     default:
       break;

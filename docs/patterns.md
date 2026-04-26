@@ -504,6 +504,111 @@ elements with their own bindings don't cross-pollute.
 
 ---
 
+## Length-prefixed buffer (Pascal string, BER-style)
+
+Some C interfaces carry the length inside the buffer rather than in
+a sibling struct field — the first byte (or word) of the buffer is
+the length, followed by that many elements.  `HEGEL_LEN_PREFIXED_ARRAY`
+emits this layout in one slot.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  uint8_t *data;    /* data[0] = length, data[1..data[0]] = chars */
+} PStr;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+pstr_schema = HEGEL_STRUCT (PStr,
+    HEGEL_LET (n, HEGEL_INT (0, 32)),
+    HEGEL_LEN_PREFIXED_ARRAY (HEGEL_USE (n), HEGEL_U8 ('a', 'z')));
+```
+
+**Tests:**
+- [`test_array_len_prefixed.c`](../tests/selftest/test_array_len_prefixed.c)
+
+Exercises: prefix written at offset 0 in elem's bit-width; drawn
+elements at offsets 1..n.  Pair with the LET pattern when the C
+struct also has an explicit length field elsewhere.
+
+---
+
+## Sentinel-terminated buffer (null-terminated string, argv-like)
+
+Some C interfaces use a sentinel value to terminate a buffer
+instead of carrying a length — null-terminated strings are the
+canonical case.  `HEGEL_TERMINATED_ARRAY` draws elements then
+appends the sentinel.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  char *s;          /* drawn chars 0..n-1, '\0' at index n */
+} CStr;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+cstr_schema = HEGEL_STRUCT (CStr,
+    HEGEL_LET (n, HEGEL_INT (0, 32)),
+    HEGEL_TERMINATED_ARRAY (HEGEL_USE (n), HEGEL_U8 ('a', 'z'), 0));
+```
+
+**Tests:**
+- [`test_array_terminated.c`](../tests/selftest/test_array_terminated.c)
+- [`test_terminated_sentinel_abort.c`](../tests/selftest/test_terminated_sentinel_abort.c) — schema-build-time abort when the sentinel is in elem's range
+
+Exercises: drawn elements at offsets 0..n-1; sentinel written at
+offset n.  The element schema must not be able to produce the
+sentinel value — for bounded `HEGEL_INT` / `HEGEL_CONST` the check
+fires at schema-build time, otherwise a runtime check catches the
+collision on first occurrence.
+
+---
+
+## Patterns we don't have a macro for — escape hatch
+
+For C array shapes without dedicated support (e.g. multi-byte
+big-endian length prefix, length-includes-prefix vs. length-of-
+elements-only, custom interleaving), draw the raw structural
+fields with the existing macros and post-process the value before
+passing it to the function under test.
+
+**Example: 2-byte big-endian length prefix.**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { uint8_t *data; } BERFrame;
+
+HEGEL_BINDING (n);
+ber_schema = HEGEL_STRUCT (BERFrame,
+    HEGEL_LET (n, HEGEL_INT (0, 1024)),
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_U8 (0, 255)));   /* just elements */
+
+/* In the test body, after hegel_schema_draw allocates BERFrame: */
+static void test_ber (hegel_testcase *tc) {
+    BERFrame *f;
+    hegel_shape *sh = hegel_schema_draw (tc, ber_schema, (void**)&f);
+    /* allocate a buffer with the 2-byte BE prefix prepended... */
+    /* feed the prefixed buffer to the function under test... */
+    hegel_shape_free (sh);
+}
+```
+
+The schema produces the structural payload; the test body assembles
+the wire format.  Same idiom applies to length-prefixes-encoded-as-
+varints, framing protocols with magic bytes, etc.  When the same
+post-processing recurs across multiple tests, that's a signal to
+file a TODO for a dedicated macro.
+
+---
+
 ## Functional combinators — map, filter, flat_map
 
 The schema API isn't limited to structural composition. For

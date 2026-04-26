@@ -4,44 +4,66 @@
 
 # TODO
 
-Open items after the V0 schema API milestone.  For what's already
+```
+5: make this test!
+   but also, write a todo with another more comprehensive one, for which the design must be modified to be able to solve:
+  number_of_arrays = HEGEL_LET an int from 3 to 5. then HEGEL_LET an array of number_of_array ints, from 3 to 5 themselves. then
+  HEGEL_LET an array of number_of_array, each of the size of the int from the previous array. WDYT?
+```
+
+
+- Investigate recreating something akin to the FACET system, but using the LET mechanism?
+  - would only work at same level, maybe could save a let, just reuse the same name, get or create?
+  - HEGEL_ARRAY_LEN / HEGEL_ARRAY_VALUE => populate a let in param?
+
+
+Open items after the V0 schema API milestone. For what's already
 done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
-
-## Open exploration
-
-- **FACET-like sugar on top of LET?**  The pointer+count pattern
-  (`HEGEL_LET(n) + HEGEL_ARR_OF(USE(n), ...) + HEGEL_USE(n)`) could
-  collapse into a single `HEGEL_ARRAY_LEN(name, ...)` macro that
-  emits the triplet — populate a LET as a side effect.  Would only
-  work at same level (no cross-scope sharing), and the explicit form
-  is already ~3 lines.  Open question whether the surface-area win
-  is worth a second way to spell the same thing.
 
 ## Binding system — deferred items
 
-The HEGEL_BINDING / HEGEL_LET / HEGEL_USE / HEGEL_ARR_OF system
-replaced the old facet mechanism.  Remaining gaps:
+The HEGEL_BINDING / HEGEL_LET / HEGEL_USE / HEGEL_ARR_OF system has
+replaced the old facet mechanism.  Known gaps:
 
-1. **HEGEL_USE inside HEGEL_VARIANT cases.**  Case-local bindings
+1. **Indexed USE for array-of-arrays.** Bindings today hold scalars.
+   The "jagged array where each sub-array's length comes from an
+   entry in a sizes array" case needs something like
+   `HEGEL_USE_AT(sizes_binding, i)`.  Design sketch: let LET bind
+   drawn arrays (pointer + length), expose `HEGEL_ARR_OF` with an
+   index-producing length schema, and allow USE_AT to resolve the
+   per-element length from the bound array.  Concrete target:
+   ```c
+   N     = HEGEL_LET  int in [3, 5]
+   sizes = HEGEL_LET  array[N] of int in [3, 5]
+   groups = array[N] where groups[i] = array[sizes[i]] of int
+   ```
+
+2. **Shrinking quality tests.** The jagged-2D test asserts
+   correctness but we've never watched a failure shrink.  Need
+   hegel-rust-style `minimal()` tests: intentionally fail when a
+   condition is met, assert the shrunk result equals an expected
+   minimum.  Applies especially to re-LET patterns — does the
+   shrinker treat bindings uniformly in the byte stream?
+
+3. **HEGEL_USE inside HEGEL_VARIANT cases.**  Case-local bindings
    should work (variant bodies are drawn in the parent ctx today —
    plumbing is probably there, but untested).  Add a test with
    HEGEL_USE inside a HEGEL_CASE that references an outer LET.
 
-2. **HEGEL_USE inside HEGEL_UNION cases.**  Same concern as VARIANT.
+4. **HEGEL_USE inside HEGEL_UNION cases.**  Same concern as VARIANT.
    Untested path.
 
-3. **HEGEL_OPTIONAL wrapping a struct with HEGEL_USE.**  The
+5. **HEGEL_OPTIONAL wrapping a struct with HEGEL_USE.**  The
    optional's inner struct is drawn via hegel__draw_alloc, which
    threads parent_ctx — should work, but no test exercises it.
 
-4. **Pointer-typed bindings.**  HEGEL_LET / HEGEL_USE handle
-   int / i64 / u64 / float / double widths today (covered by
-   `test_binding_widths.c`).  Pointer-valued bindings (e.g. cache
-   an allocated array, USE its pointer in a sibling field) would
-   be the natural extension — needs wider slot handling and a
-   clear ownership story for who frees the pointed-at memory.
+6. **Non-int binding kinds.**  Today LET only accepts int-width
+   INTEGER (or MAP/FILTER/FLAT_MAP over one).  Extending to i64,
+   double, and pointers is straightforward but requires wider slot
+   handling in USE.  Maybe `HEGEL_LET_I64` / `HEGEL_USE_I64` typed
+   variants, or extend the runtime kind-check.
 
-5. **Re-LET abort diagnostic could list the earlier LET's binding
+7. **Re-LET abort diagnostic could list the earlier LET's binding
    name.**  Today we have only the integer id.  Stashing names at
    BINDING declaration time would let the error print `HEGEL_LET(n)
    appears twice` instead of `id=7 appears twice`.  Nice-to-have.
@@ -80,6 +102,61 @@ replaced the old facet mechanism.  Remaining gaps:
 - Text => review de mon cote
 - metre des regles locales pour une struct? via un callbak? regenerer tant que pas A et B ou blabla?
 - on a skip aux arrays => FACET pas clair! mieux expliquer :)
+
+## V2 handles — V1 scope landed 2026-04-17
+
+**Status:** `HEGEL_ARRAY` facets model is in.  `HEGEL_ARRAY(elem, lo,
+hi)` builds an array schema projected into the parent struct via
+`HEGEL_FACET(hat, value)` + `HEGEL_FACET(hat, size)`.  Facets may be
+non-adjacent, in either order.  Per-struct-instance ctx scoping —
+facets within one struct share one drawn array; across struct
+instances (e.g. array elements) each gets its own draw.  Three new
+pattern tests (`facets_nonadjacent`, `facets_reversed`, `facets_nested`)
+plus all 7 existing `HEGEL_ARRAY` sites migrated.  Docs updated
+(`schema-api.md`, `patterns.md`, `hegel_gen.h`).  Design memo that
+drove the work is `v2-handles-handoff.md` (delete once we're
+confident the approach stands).
+
+### Remaining investigations
+
+- **`HEGEL_SELF()` nested inside an array's element schema — silently
+  broken.**  `hegel__resolve_self` has no `HEGEL_SCH_SUBSCHEMA`
+  case, so when it walks a struct's children it doesn't cross the
+  subschema→source boundary into the array's `elem`.  If the
+  element schema is `HEGEL_SELF()`, its `self_ref.target` stays
+  NULL, and `hegel__draw_array_standalone` falls through the
+  element-kind dispatch silently — the array gets zero-initialized
+  entries instead of real recursive draws.  Fix is ~3 lines (add
+  SUBSCHEMA case descending into `source`), plus a test for
+  `HEGEL_ARRAY(HEGEL_SELF(), ...)` inside a struct.  Orthogonal
+  subtlety: a schema shared across two parents would have the
+  second resolve pass overwrite the first's SELF target — that
+  pre-dates facets (same issue with `hegel_schema_ref`'d struct
+  subtrees) and is not specific to this fix.
+
+- **`hegel_shape_array_len` asymmetry on facet slot shapes.**  The
+  primary facet (first-seen for a source this draw) owns the
+  `HEGEL_SHAPE_ARRAY` shape; the secondary emits a trivial
+  `HEGEL_SHAPE_SCALAR` leaf.  So `hegel_shape_array_len` returns
+  the real length only when called on the `value`-facet slot
+  (the pointer field); on the `size`-facet slot it returns 0.
+  Currently documented in `docs/schema-api.md` as an asymmetry.
+  Options if we want symmetry: (a) secondary leaf dispatches to
+  primary's array shape via ctx lookup — but ctx is gone after
+  the draw ends, so we'd need a different linkage; (b) make the
+  secondary slot hold a non-owning reference to the primary's
+  array shape and teach `hegel_shape_array_len` to follow it;
+  (c) leave as-is and keep the doc note.  Decide once a concrete
+  use case surfaces.
+
+### Out of scope for V1 (still deferred)
+
+- `HEGEL_COPY` — shared template, independent draws.  See its own
+  section below.
+- Facets for `HEGEL_OPTIONAL` / `HEGEL_UNION` / `HEGEL_VARIANT` —
+  V1.1 once the array pattern is shaken out.
+- Schema/shape merge — exploratory; see its own section below.
+- `HEGEL_ONE_OF` hardening — tracked separately below.
 
 ## rn
 
@@ -137,19 +214,155 @@ replaced the old facet mechanism.  Remaining gaps:
   than the offsetof form, which is why it's a companion, not a
   replacement.  Skip until an actual use case shows up.
 
+## Exploratory
+
+## Reuse multiple fields of a generator (V2 rethink)
+
+```
+❯ How about something like : x = HEGEL_ARRAY(...); s = HEGEL_STRUCT(..., x.array_pointer, x.size); ??? Build the tree in a smart
+  way? Everything works on draw?
+
+● This is actually a genuinely good idea, and it generalizes beyond arrays. Let me sketch it honestly.
+
+  What you'd write
+
+  hegel_array_t x = HEGEL_ARRAY(hegel_schema_int_range(0, 100), 0, 10);
+
+  hegel_schema_t s = HEGEL_STRUCT(Bag,
+      x.array_pointer,   // goes wherever the ptr field is
+      x.size);           // goes wherever the len field is
+
+  /* Or with other fields in between: */
+  hegel_schema_t t = HEGEL_STRUCT(Thing,
+      HEGEL_INT(0, 100),  // some other field
+      x.size,             // len comes first!
+      HEGEL_TEXT(1, 5),   // another field
+      x.array_pointer);   // ptr comes later
+
+  What each accessor is
+
+  x is a handle containing two layout entries plus a shared pointer to some generation state:
+
+  typedef struct {
+    hegel_array_state *  state;      // malloc'd, shared
+    hegel_layout_entry   array_pointer;
+    hegel_layout_entry   size;
+  } hegel_array_t;
+
+  typedef struct {
+    hegel_schema *  generator;       // the underlying array schema
+    void *          drawn_ptr;       // filled at draw time
+    int             drawn_len;       // filled at draw time
+    int             drawn_this_run;  // reset per test case
+  } hegel_array_state;
+
+  Both x.array_pointer and x.size carry a pointer to the same state. They're independent layout entries from the layout pass's
+  point of view (each occupies one slot), but at draw time they collaborate.
+
+  How draw resolves the dependency
+
+  When hegel__draw_struct iterates bindings in order and hits either the x.array_pointer binding or the x.size binding:
+
+  1. Check state->drawn_this_run. If not set, call state->generator's draw — this allocates the heap buffer and picks the length,
+  storing both in state.
+  2. Write the relevant facet (drawn_ptr or drawn_len) at this binding's offset.
+  3. Mark drawn_this_run.
+
+  The second binding encountered skips step 1 because state is already populated. Order doesn't matter — whichever of
+  x.array_pointer or x.size comes first in the positional list triggers the actual generation.
+
+  At the end of each test case (or start of the next), reset drawn_this_run = 0 so the next case draws fresh. Either the struct
+  schema does this pre-draw, or the state has a "round stamp" compared against the current round.
+
+  This generalizes beautifully
+
+  Once you have "produce one value, project facets," you can do it for more than arrays:
+
+  hegel_union_t u = HEGEL_UNION(
+      HEGEL_CASE(HEGEL_DOUBLE(0.1, 100.0)),
+      HEGEL_CASE(HEGEL_INT(), HEGEL_INT()));
+
+  HEGEL_STRUCT(Weird,
+      u.tag,           // tag at field 0
+      HEGEL_FLOAT(),   // an unrelated field in between
+      u.body);         // body at field 2 — non-adjacent from the tag!
+
+  Variant, array_inline, even user-defined composites. The "2-slot adjacent" constraint of the current design is lifted entirely.
+
+  The cost
+
+  Not trivial. You need:
+  - Shared heap state per grouped generation
+  - New layout entry kinds for "read from shared state at this slot"
+  - Draw-time resolution: check-then-generate-or-reuse
+  - Per-test-case reset of the drawn_this_run flag, probably owned by the enclosing struct schema
+  - Ownership story: the shared state must be freed exactly once, even though two layout entries reference it. Refcount on the
+  state, or the struct schema takes exclusive ownership when it consumes the handle, or the array schema node itself carries the
+  state.
+
+  I'd estimate ~250–400 lines for the array case alone, maybe another 150 to generalize to unions/variants. Plus a handful of
+  tests.
+
+  The actual conceptual win
+
+  The part I find most appealing is what it says about the model:
+
+  ▎ A composite schema produces one value. That value has named facets (ptr, length, tag, body). You project facets into struct
+  ▎ fields wherever they need to land. The schema's job is the generation; the layout's job is the placement; the two are fully
+  ▎ orthogonal.
+
+  That's cleaner than today's "a composite schema occupies 2 adjacent slots in declaration order." It matches how you think about
+  the problem, not how C happens to represent it.
+
+  My honest take
+
+  I think this is the right direction for a V2 of the schema API. The positional form we just built is a clear step up from the
+  offsetof form, but it still conflates "generate a value" with "place its pieces in a parent struct." Your proposal cleanly
+  separates them. If you're building hegel-c with the "many users, upstream-blessed C binding" mindset (which your memory says you
+  are), this is probably the shape the API should land in long term.
+
+  Worth filing? Yes, strongly. Not as "nice-to-have exploratory" but as "the next major API iteration, when we're ready to revisit
+  the positional form." Want me to write it up as a TODO entry — something clearly distinct from the HEGEL_INLINE exploratory note,
+   since this is a bigger rethink rather than a gap-filler?
+```
+
+**Related symptom — `HEGEL_INLINE_REF` refcount footgun.**  Today,
+sharing a pre-built struct schema across two `HEGEL_INLINE_REF`
+slots requires the user to call `hegel_schema_ref` once before the
+second use; forgetting it is a silent double-free at
+`hegel_schema_free` time (visible under ASan, invisible otherwise).
+This is not a bug in `HEGEL_INLINE_REF` specifically — it's the
+same ownership gap this entry is trying to close.  Under the
+handle model, `INLINE_REF` becomes a "shared template, independent
+draws" facet of a handle that owns the underlying schema, and the
+ref-bumping requirement disappears because facets are non-owning.
+
+Until the V2 handle model lands: leave `INLINE_REF` semantics
+alone (matches the rest of the API's transfer-on-pass convention),
+and add an ASan-caught deliberate-misuse selftest that pins the
+current behavior so a future accidental fix doesn't silently change
+it.
+
 ## `HEGEL_COPY` for shared-template instantiation
 
 A schema-tree deep-copy: `HEGEL_COPY(s)` returns a fresh independent
 tree with the same shape.  Use case: place the same schema template
 at two sites without the manual `hegel_schema_ref` bookkeeping that
 `HEGEL_INLINE_REF` currently requires — fixes the silent double-free
-footgun documented in "Known bugs" below.  Cheap O(tree size) at
-schema-build time, no per-case cost.
+footgun from the V2 rethink section above.
+
+Orthogonal to V2 handles: handles solve "shared draw, project
+facets"; copy solves "shared template, independent draws".  Cheap
+O(tree size) at schema-build time, no per-case cost.
 
 **Gotcha to verify before coding:** how `hegel_schema_self()` is
 represented.  If it's a by-name sentinel resolved against the
 enclosing root at draw time, copy is trivial.  If it stores a pointer
 to a specific root, copy needs pointer rewrites during the tree walk.
+
+**Deferred** until V2 handles land.  Validate the broader "composite
+schemas with projected facets" mechanic first — if handles happen
+to subsume this use case, we don't need `HEGEL_COPY` at all.
 
 ## Merge schema and shape into a single tree? (exploratory)
 
@@ -168,16 +381,16 @@ or pointer to shapes" — same idea expressed as a sparse mirror.
 no refcount bookkeeping beyond an optional tree-level refcount if we
 want `HEGEL_COPY` to share structure.
 
-**Risks:** large refactor; schema becomes mutable (fine in fork mode
-and sequential suite mode, but we lose the immutability invariant);
-every current shape-accessor API (`hegel_shape_tag`, `_array_len`,
-`_is_some`, `_field`) needs re-examination.
+**Risks:** much bigger refactor than V2 handles alone; schema becomes
+mutable (fine in fork mode + sequential suite mode, but we lose the
+invariant); every current shape-accessor API (`hegel_shape_tag`,
+`_array_len`, `_is_some`, `_field`) needs re-examination.
 
-**Disposition:** exploratory, decision deferred.  No concrete pain
-forcing the rewrite right now — LET/USE bindings cover the
-coherence cases that motivated this question, and the two-tier
-schema/shape split is paying its keep.  Revisit if `HEGEL_COPY` or
-named shape accessors get awkward to fit into the current model.
+**Disposition:** exploratory only, decision deferred.  Do V2 handles
+in the current two-tier model first.  If handles fit naturally there,
+the split is earning its keep.  If they feel forced — uglier draw
+path, extra indirection, awkward ownership — that's the empirical
+signal to revisit this.
 
 ## High-leverage next work
 
@@ -329,6 +542,99 @@ wants to pass through existing data).
 **Not needed for any current use case.** Revisit if a concrete
 scenario appears.
 
+### Typed `HEGEL_USE_*` variants — strict match vs. auto-widen
+
+Today, `HEGEL_USE_I64(name)` requires `name` to have been bound at
+i64 width; mismatches abort at draw time.  Same rule for
+`HEGEL_USE_FLOAT` / `HEGEL_USE_DOUBLE` against the binding's
+is_float flag.  The validator is implemented at `hegel_gen.c`'s
+draw path and the rule is encoded in `use_def`'s width / is_signed
+/ is_float fields.
+
+**Question:** should narrower-source-into-wider-slot widen
+automatically (i32 binding → i64 slot, sign-extended), matching
+C's natural integer promotion?
+
+**Today: keep strict.** Reasons:
+- Property testing wants type errors loud — widening hides "I
+  thought this was already i64" mistakes.
+- `HEGEL_MAP_INT(_I64)` is the documented escape hatch for
+  explicit conversion, so widening would be a second way to do
+  the same thing.
+- One-way ratchet: relaxing later is safe, tightening later
+  breaks tests.
+- Signedness traps: HEGEL_INT(-1, 100) widened into a u64 slot
+  produces UINT64_MAX for -1 via two's-complement; correct C,
+  but a property-test author may not be thinking that way.
+
+**Counter:** in C source, `int64_t x = some_int8;` is the natural
+spelling and works as expected.  Hegel-c's "the C way" framing
+arguably wants the same ergonomics.
+
+**Decision: defer.**  Revisit if a real test bumps into the
+strict abort and the only fix is `HEGEL_MAP_INT` boilerplate that
+adds nothing.  If we change it, do it at the USE site
+(`HEGEL_USE_WIDEN_I64` opt-in) before considering implicit slot-
+level widening — the latter changes layout-walk semantics.
+
+### `HEGEL_LEN_PREFIXED` / `HEGEL_TERMINATED` — synthetic shape nodes
+
+The draw path for these allocates a `HEGEL_SHAPE_SCALAR` leaf for
+the prefix slot (LEN_PREFIXED, slot 0) and the sentinel slot
+(TERMINATED, slot n).  These slots are *synthesized* — no draw
+event, no span, no entropy consumed from the byte stream — but
+the shape tree records them as if they were real scalar draws.
+
+Today this is harmless: the shape tree's only job is freeing
+memory, and `array_shape.len = n+1` matches the buffer size.
+
+**Future risk:** if any consumer of the shape tree gains the
+ability to map shapes back to byte-stream regions (e.g. a
+`hegel_shape_byte_range(sh)` accessor, or a richer shrinker
+hint), synthetic nodes will look identical to real draws and
+return wrong answers.
+
+**Cheapest fix when needed:** introduce `HEGEL_SHAPE_SYNTHETIC`
+(or set `schema = NULL` as a sentinel) so future code can
+distinguish.  Keep the alloc — it makes the free path uniform.
+Code lives in `hegel_gen.c`'s `HEGEL_SCH_LEN_PREFIXED` /
+`HEGEL_SCH_TERMINATED` cases of `hegel__draw_field`.
+
+### `TESTS_CRASH` bucket — heterogeneous semantics
+
+`tests/selftest/Makefile`'s `TESTS_CRASH` claims "fork should
+catch crash, exit non-zero," but it's now mixing two distinct
+classes of test:
+
+1. **Runtime aborts inside a forked child** — `test_crash_*`,
+   `test_binding_unresolved`, `test_binding_overflow`,
+   `test_binding_width_mismatch`, `test_binding_use_at_no_iter`,
+   `test_array_len_prefixed_overflow`.  Schema construction
+   succeeds; the abort fires during `hegel_run_test` inside a
+   child; the parent observes SIGABRT/SIGSEGV via `waitpid`.
+
+2. **Schema-construction aborts before fork** —
+   `test_arr_of_raw_int_abort`, `test_terminated_sentinel_abort`.
+   `hegel_schema_*` constructor catches misuse and aborts in
+   `main()` before any test runs.  Whole process dies (exit 134
+   from raw SIGABRT), no fork involved.
+
+Both happen to produce non-zero exit so the existing check
+passes, but the bucket comment is wrong for class 2.
+
+**Improvements, in order of payoff:**
+
+1. **Add stderr-message checks** (cheapest, biggest value).  Like
+   `TESTS_HEALTH` already does, grep stderr for an expected
+   substring per test — e.g. `test_arr_of_raw_int_abort` should
+   emit "must be HEGEL_USE(name) or HEGEL_CONST(N)".  Catches
+   regressions where the abort fires for the *wrong reason* (an
+   unrelated NULL check, etc.).
+
+2. **Split into `TESTS_CRASH` and `TESTS_BUILD_ABORT`** when the
+   build-abort population reaches ~5+.  Today there are 2 — not
+   worth the Makefile boilerplate yet.
+
 ## Known bugs / gotchas
 
 ### Fork-mode orphan leak (FIXED 2026-04-12)
@@ -375,31 +681,6 @@ garbage inputs as an orphan.
 - Reproducer kept at
   `tests/irl/scotch/test_array_inline_orphan_repro.c` as a
   hand-runnable regression demo.
-
-### `HEGEL_SELF()` as an array element — needs re-verification
-
-Pre-LET/USE investigation noted that `HEGEL_SELF()` nested inside
-an array's element schema (e.g. `HEGEL_ARR_OF(struct_w_self, ...)`)
-silently produced zero-initialized entries — `hegel__resolve_self`
-didn't descend into the array's `elem` to wire up the self target.
-The original framing referenced `HEGEL_SCH_SUBSCHEMA` (a facet-era
-node kind that no longer exists), so the explanation is partly
-stale, but the underlying recursion gap may still apply.  Action:
-write a targeted test (`HEGEL_ARR_OF` of a struct that uses
-`HEGEL_SELF()`) and either confirm it works under LET/USE or
-patch `hegel__resolve_self` to descend into `array_def.elem`.
-
-### `HEGEL_INLINE_REF` refcount footgun
-
-Sharing a pre-built struct schema across two `HEGEL_INLINE_REF`
-slots requires the user to call `hegel_schema_ref` once before the
-second use; forgetting it is a silent double-free at
-`hegel_schema_free` time (visible under ASan, invisible otherwise).
-Matches the rest of the API's transfer-on-pass convention, so it's
-not a bug per se — but it's a gap that `HEGEL_COPY` would close
-(see its own section above).  Until then: add an ASan-caught
-deliberate-misuse selftest that pins the current behavior so a
-future accidental fix doesn't silently change it.
 
 ### `hegel_draw_regex` fullmatch semantics
 

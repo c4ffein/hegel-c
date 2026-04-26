@@ -110,9 +110,10 @@ the variant tag in an untagged-union pattern — see
 `hegel_schema_t` is a thin wrapper around a pointer to the internal
 node struct:
 
-<!-- /include hegel_gen.h:147-147 -->
+<!-- /include hegel_gen.h:145-146 -->
 ```c
-** Every HEGEL_<kind> macro produces a `hegel_schema_t` — a reference
+typedef struct hegel_schema        hegel_schema;
+typedef struct { hegel_schema * _raw; } hegel_schema_t;
 ```
 <!-- /endinclude -->
 
@@ -224,10 +225,10 @@ into macros and runtime, which is the C way.
 Every integer type has a **full-range** version (no args) and a
 **range-constrained** version:
 
-<!-- /include hegel_gen.h:508-509 -->
+<!-- /include hegel_gen.h:528-529 -->
 ```c
-** tag lives inside each pointed-to struct (not in a wrapper).  The
-** generator picks a variant per element, allocates it, stores the
+hegel_schema_t hegel_schema_i8          (void);  /* [-128, 127] */
+hegel_schema_t hegel_schema_i8_range    (int64_t lo, int64_t hi);
 ```
 <!-- /endinclude -->
 
@@ -236,21 +237,21 @@ Same shape for `i16`, `i32`, `i64`, `int`, `long`, `u8`, `u16`, `u32`,
 
 Floats:
 
-<!-- /include hegel_gen.h:533-536 -->
+<!-- /include hegel_gen.h:553-556 -->
 ```c
-** (normal ownership semantics).  The callback's ctx must outlive
-** the combinator. */
-
-hegel_schema_t hegel_schema_map_int (
+hegel_schema_t hegel_schema_float        (void);  /* [-FLT_MAX, FLT_MAX] */
+hegel_schema_t hegel_schema_float_range  (double lo, double hi);
+hegel_schema_t hegel_schema_double       (void);  /* [-DBL_MAX, DBL_MAX] */
+hegel_schema_t hegel_schema_double_range (double lo, double hi);
 ```
 <!-- /endinclude -->
 
 Text (currently char-by-char from `[a-z]`, see TODO.md for the
 `hegel_draw_regex` fullmatch fix):
 
-<!-- /include hegel_gen.h:542-542 -->
+<!-- /include hegel_gen.h:562-562 -->
 ```c
-    hegel_schema_t source,
+hegel_schema_t hegel_schema_text (int min_len, int max_len);
 ```
 <!-- /endinclude -->
 
@@ -455,11 +456,20 @@ bag_schema = HEGEL_STRUCT (Bag,
 ```
 
 `HEGEL_ARR_OF(length_schema, elem_schema)` occupies a single
-pointer slot in the parent struct. The length is evaluated at
-draw time from `length_schema` — `HEGEL_USE(n)` to reuse a bound
-value, or `HEGEL_INT(lo, hi)` for a drawn length. The length is
-not stored in a field by ARR_OF itself; pair it with a
-`HEGEL_USE(n)` slot elsewhere in the struct if you need it.
+pointer slot in the parent struct.  The `length_schema` must be
+**either a named binding** (`HEGEL_USE(n)` / `HEGEL_USE_AT(name)` /
+`HEGEL_USE_PATH(...)`) **or a literal** (`HEGEL_CONST(N)`).  Raw
+`HEGEL_INT(lo,hi)` and composed scalars (`HEGEL_MAP_INT`, etc.)
+are rejected at schema-build time — wrap a drawn length in
+`HEGEL_LET` first so the value has a name and can be referenced
+elsewhere in the struct.  Rationale: in C, an array length almost
+always lives in a sibling field somewhere; forcing the named form
+makes that the natural way to write the schema and removes the
+silent gap where you write an anonymous length and later need it.
+
+The length is not stored in a field by ARR_OF itself; pair it with
+a `HEGEL_USE(n)` slot elsewhere in the struct if the C type has
+the count field.
 
 Element kinds currently supported:
 
@@ -476,6 +486,66 @@ Element kinds currently supported:
 each element struct is drawn with its own ctx chained back to the
 parent. LETs inside the element schema are per-element; USEs can
 still reach outer bindings via the chain walk.
+
+### `HEGEL_LEN_PREFIXED_ARRAY` — Pascal-string-style buffer
+
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
+```c
+typedef struct { uint8_t *data; } PStr;
+
+HEGEL_BINDING (n);
+pstr_schema = HEGEL_STRUCT (PStr,
+    HEGEL_LET (n, HEGEL_INT (0, 32)),
+    HEGEL_LEN_PREFIXED_ARRAY (HEGEL_USE (n), HEGEL_U8 ('a', 'z')));
+```
+
+`HEGEL_LEN_PREFIXED_ARRAY(length_schema, elem_schema)` produces a
+buffer of `(n+1)` elements where `data[0]` is the drawn length `n`
+cast to elem's int type and `data[1..n]` are drawn from `elem_schema`.
+Used for Pascal strings, BER tag-length-value records, and any
+length-prefixed format where the prefix lives at offset 0.
+
+Constraints:
+- `length_schema` must be a named binding (`HEGEL_USE` /
+  `HEGEL_USE_AT` / `HEGEL_USE_PATH`) or a literal (`HEGEL_CONST(N)`)
+  — same rule as `HEGEL_ARR_OF`.
+- `elem_schema` must be `HEGEL_SCH_INTEGER` (any width — `u8` for
+  Pascal strings, `u16` for length-prefixed binary records, etc.).
+- The drawn length must fit in elem's representable range, or
+  the draw aborts at runtime.  Constrain the LET range
+  accordingly.
+
+The user-visible C type is `uint8_t *` (or whatever elem's width
+implies).  Length is read from `data[0]`; elements are at
+`data[1..data[0]]`.
+
+### `HEGEL_TERMINATED_ARRAY` — sentinel-terminated buffer
+
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
+```c
+typedef struct { char *s; } CStr;
+
+HEGEL_BINDING (n);
+cstr_schema = HEGEL_STRUCT (CStr,
+    HEGEL_LET (n, HEGEL_INT (0, 32)),
+    HEGEL_TERMINATED_ARRAY (HEGEL_USE (n), HEGEL_U8 ('a', 'z'), 0));
+```
+
+`HEGEL_TERMINATED_ARRAY(length_schema, elem_schema, sentinel)`
+produces a buffer of `(n+1)` elements where `data[0..n-1]` are
+drawn from `elem_schema` and `data[n]` is the literal `sentinel`
+value cast to elem's int type.  Used for null-terminated strings,
+sentinel-terminated int lists, and similar.
+
+Constraints same as `HEGEL_LEN_PREFIXED_ARRAY`.  Additional rule:
+the sentinel **must not** be a value `elem_schema` can produce.
+If `elem` is a bounded `HEGEL_INT(lo,hi)` or `HEGEL_CONST`, the
+constructor verifies this at schema-build time and aborts on
+collision (with an actionable message).  For derived elem schemas
+(`HEGEL_USE`, `HEGEL_MAP_INT`, etc.) where the range can't be
+proved statically, a runtime check aborts on first collision.
+The collision is a schema-authoring error, not a discardable
+filter — the caller can't recover by retrying.
 
 ### `HEGEL_ARRAY_INLINE` — contiguous array of inline structs
 

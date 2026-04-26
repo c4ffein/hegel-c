@@ -135,7 +135,9 @@ typedef enum {
   HEGEL_SCH_USE_AT,          /* HEGEL_USE_AT: read cached array's element at current iter index */
   HEGEL_SCH_USE_PATH,        /* HEGEL_USE_PATH: explicit-path scalar / indexed array read */
   HEGEL_SCH_ARR_OF,          /* HEGEL_ARR_OF: array with schema-valued length */
-  HEGEL_SCH_CONST_INT        /* HEGEL_CONST: pure int constant, no byte-stream draw */
+  HEGEL_SCH_CONST_INT,       /* HEGEL_CONST: pure int constant, no byte-stream draw */
+  HEGEL_SCH_LEN_PREFIXED,    /* HEGEL_LEN_PREFIXED_ARRAY: [length, elem_0..elem_{n-1}] */
+  HEGEL_SCH_TERMINATED       /* HEGEL_TERMINATED_ARRAY: [elem_0..elem_{n-1}, sentinel] */
 } hegel_schema_kind;
 
 /* Forward declarations + typedefs so wrapper types can be defined
@@ -387,6 +389,32 @@ struct hegel_schema {
       ** want a constant field. */
       int                   value;
     }                                                  const_int_def;
+    struct {
+      /* HEGEL_LEN_PREFIXED_ARRAY: produces a buffer of (n+1) elements
+      ** where element 0 is the length n cast to elem's int type, and
+      ** elements 1..n are drawn from `elem`.  Example: Pascal strings
+      ** (uint8_t length byte followed by characters).  Length schema
+      ** must be HEGEL_USE/USE_AT/USE_PATH/CONST_INT.  Element schema
+      ** must be HEGEL_SCH_INTEGER.  Runtime check aborts if drawn n
+      ** exceeds elem type's representable range. */
+      struct hegel_schema * length;
+      struct hegel_schema * elem;
+    }                                                  len_prefixed_def;
+    struct {
+      /* HEGEL_TERMINATED_ARRAY: produces a buffer of (n+1) elements
+      ** where elements 0..n-1 are drawn from `elem` and element n is
+      ** the literal `sentinel` value cast to elem's type.  Example:
+      ** null-terminated strings, sentinel-terminated int lists.
+      ** Length schema same constraint as LEN_PREFIXED.  Element schema
+      ** must be HEGEL_SCH_INTEGER.  Schema-build-time validation:
+      ** if elem has a bounded range, sentinel must lie outside it
+      ** (otherwise the terminator could collide with a drawn elem).
+      ** Composed/derived elem schemas (USE etc.) get a runtime check
+      ** that aborts on collision. */
+      struct hegel_schema * length;
+      struct hegel_schema * elem;
+      int64_t               sentinel;
+    }                                                  terminated_def;
   };
 };
 
@@ -732,6 +760,34 @@ hegel_schema_t hegel_schema_arr_of (hegel_schema_t length,
 ** still happens). */
 hegel_schema_t hegel_schema_const_int (int value);
 #define HEGEL_CONST(v) hegel_schema_const_int ((v))
+
+/* HEGEL_LEN_PREFIXED_ARRAY(length, elem) — Pascal-string-style.
+** Produces a buffer of (n+1) elements where buffer[0] is n (the
+** drawn length cast to elem's type) and buffer[1..n] are drawn from
+** `elem`.  Length schema must be HEGEL_USE/USE_AT/USE_PATH or
+** HEGEL_CONST.  Element schema must be HEGEL_SCH_INTEGER (any width).
+** Drawn n must fit in elem type's representable range or the draw
+** aborts at runtime.  Slot is a pointer (`uint8_t *` for u8 elements,
+** etc.). */
+hegel_schema_t hegel_schema_len_prefixed_array (hegel_schema_t length,
+                                                hegel_schema_t elem);
+#define HEGEL_LEN_PREFIXED_ARRAY(length, elem) \
+  hegel_schema_len_prefixed_array ((length), (elem))
+
+/* HEGEL_TERMINATED_ARRAY(length, elem, sentinel) — null-terminated-
+** string-style or sentinel-terminated list.  Produces a buffer of
+** (n+1) elements where buffer[0..n-1] are drawn from `elem` and
+** buffer[n] is the literal `sentinel` value cast to elem's type.
+** Length and element constraints same as HEGEL_LEN_PREFIXED_ARRAY.
+** If `elem` is a bounded HEGEL_INT(lo,hi) (or HEGEL_CONST), the
+** constructor aborts at schema-build time if the sentinel could
+** collide with a drawn element.  For derived element schemas, a
+** runtime check aborts on first collision. */
+hegel_schema_t hegel_schema_terminated_array (hegel_schema_t length,
+                                              hegel_schema_t elem,
+                                              int64_t        sentinel);
+#define HEGEL_TERMINATED_ARRAY(length, elem, sentinel) \
+  hegel_schema_terminated_array ((length), (elem), (sentinel))
 
 /* ================================================================
 ** Positional macro helpers

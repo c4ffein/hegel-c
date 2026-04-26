@@ -65,7 +65,10 @@ TESTS_PASS = test_pass_simple \
              test_binding_shrink_arr_of_structs \
              test_binding_widths \
              test_binding_let_arr \
-             test_binding_use_path
+             test_binding_jagged_3d \
+             test_binding_use_path \
+             test_array_len_prefixed \
+             test_array_terminated
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -81,7 +84,10 @@ TESTS_CRASH = test_crash_segfault \
               test_binding_unresolved \
               test_binding_overflow \
               test_binding_width_mismatch \
-              test_binding_use_at_no_iter
+              test_binding_use_at_no_iter \
+              test_arr_of_raw_int_abort \
+              test_terminated_sentinel_abort \
+              test_array_len_prefixed_overflow
 
 # Tests that should fail via a HEGEL HEALTH-CHECK panic (e.g.
 # filter_too_much, large_base_example) — must exit non-zero AND
