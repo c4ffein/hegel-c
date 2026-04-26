@@ -45,7 +45,7 @@ make from-hegel-rust-test       # 19 binaries covering 26 Rust tests (13 PASS, 6
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
 
-make inspiration                # clone hegel-rust, hegel-go, hegel-cpp, scotch into inspiration/
+make inspiration                # clone third-party repos into inspiration/{hegel,existing-pbt-in-c,targets}/
 ```
 
 All test Makefiles use `REPO_ROOT = $(abspath ../..)` (or `../../..` for irl/scotch). Tests `cd` to `REPO_ROOT` before executing so the Hegel server path resolves.
@@ -225,12 +225,20 @@ MPI_Comm_spawn in singleton mode works with OpenMPI 5.x inside hegel fork childr
 
 ## Reference implementations
 
-`make inspiration` clones hegel-rust, hegel-go, hegel-cpp, and scotch into `inspiration/`.
+`make inspiration` clones third-party repos into three categorized subdirs of `inspiration/`:
 
+**`inspiration/hegel/`** — sister hegel bindings + the canonical Agent Skill:
 - **hegel-rust/hegel-go**: integrate with native test runners, lazy singleton server, expose `note()` and `target()`
 - **hegel-rust shrink quality tests** use a `minimal()` helper: intentionally fail when a condition is met, assert the shrunk result equals the expected minimal value
 - **hegel-cpp**: C++20 / CMake `FetchContent` / reflect-cpp-based automatic schema generation. Upstream self-declares as "not blessed" — rough, expected to lag the mature bindings. Transport is a binary packet protocol with CBOR payloads over a Unix socket (20-byte header: magic `HEGL`, CRC32, stream ID, message ID, length), not stdio. Good contrast point for hegel-c's manual positional-macro schema API and stdio transport.
-- **Scotch**: built from source with `cd inspiration/scotch/src && make scotch` (and `make ptscotch` for MPI). Requires `Makefile.inc` — copy from `Make.inc/Makefile.inc.x86-64_pc_linux2` and set `CCS=CCP=CCD=mpicc` for PT-Scotch.
+- **hegel-skill**: the canonical Agent Skill (rust/go/cpp language-specific references). Adding C is the documented extension path; see CLAUDE.md inside that repo.
+
+**`inspiration/existing-pbt-in-c/`** — competitive landscape, study these for design comparison:
+- **theft** (silentbicycle): pure-C99 PBT lib. Closest prior art to hegel-c. Forking, autoshrinking from a bit pool, multi-arg properties (propfun1..propfun7), instance hashing for duplicate-trial dedup. Useful read: `doc/usage.md`, `doc/forking.md`.
+- **deepstate** (Trail of Bits): C/C++ multi-backend framework — same harness runs against AFL, libFuzzer, Manticore, Angr, Eclipser. Google Test-like API with `TEST(Suite, Name)`, fixtures, `OneOf` for stateful testing, swarm testing. Useful read: `docs/test_harness.md`, `docs/swarm_testing.md`.
+
+**`inspiration/targets/`** — real-world libraries we point hegel-c at to find bugs:
+- **Scotch**: built from source with `cd inspiration/targets/scotch/src && make scotch` (and `make ptscotch` for MPI). Requires `Makefile.inc` — copy from `Make.inc/Makefile.inc.x86-64_pc_linux2` and set `CCS=CCP=CCD=mpicc` for PT-Scotch.
 
 ## Important notes
 

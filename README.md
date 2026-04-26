@@ -79,6 +79,7 @@ int main (void) {
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
 - **[docs/benchmarking.md](docs/benchmarking.md)** — fork vs nofork overhead, methodology and measured numbers
 - **[docs/design_rust_bridge.md](docs/design_rust_bridge.md)** — design decisions for the current Rust-bridge build (FFI boundary, IPC protocol, orphan-leak fix)
+- **[docs/fuzzing-comparison.md](docs/fuzzing-comparison.md)** — property-based testing vs. AFL/libFuzzer: where each tool is strong, where each hits a wall, and how to choose
 - **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
 - **[TODO.md](TODO.md)** — deferred items
 

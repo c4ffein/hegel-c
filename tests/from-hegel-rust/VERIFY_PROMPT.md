@@ -10,7 +10,7 @@ You are comparing a C test file (from hegel-c) against the Rust test it claims t
 
 1. Read the C test file provided as the first argument
 2. Extract the `RUST_SOURCE:` tag from its header comment — this tells you the Rust file and function name
-3. Read the Rust source file from `inspiration/hegel-rust/` and find the exact test function
+3. Read the Rust source file from `inspiration/hegel/hegel-rust/` and find the exact test function
 4. Compare the two tests semantically
 5. Output your verdict as a single line in this exact format:
 
@@ -39,7 +39,7 @@ If the C file has `EXPECTED_SHRINK:`, verify it matches the Rust test's `assert_
 
 ## Important
 
-- If the `inspiration/hegel-rust/` directory doesn't exist, output: `ERROR: Run make inspiration first`
+- If the `inspiration/hegel/hegel-rust/` directory doesn't exist, output: `ERROR: Run make inspiration first`
 - If the Rust source file or function can't be found, output: `ERROR: Rust source not found — <details>`
 - Be strict. If the C test covers less than the Rust test, it's a MISMATCH.
 - Output ONLY the verdict line. No other text.

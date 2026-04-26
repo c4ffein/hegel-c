@@ -3,11 +3,20 @@
 
 INSPIRATION_DIR = inspiration
 
-GITHUB_REPOS = hegeldev/hegel-rust \
-               hegeldev/hegel-go \
-               hegeldev/hegel-cpp
+# Sister hegel bindings + the canonical Agent Skill — `inspiration/hegel/`
+HEGEL_GITHUB_REPOS = hegeldev/hegel-rust \
+                     hegeldev/hegel-go \
+                     hegeldev/hegel-cpp \
+                     hegeldev/hegel-skill
 
-GITLAB_REPOS = scotch/scotch
+# Other PBT-in-C libraries we study for design comparison —
+# `inspiration/existing-pbt-in-c/`
+PBT_C_GITHUB_REPOS = silentbicycle/theft \
+                     trailofbits/deepstate
+
+# Real-world libraries we point hegel-c at to find bugs —
+# `inspiration/targets/`
+TARGET_GITLAB_REPOS = scotch/scotch
 
 .PHONY: help inspiration clean-inspiration clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
@@ -16,7 +25,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  help                          Show this help (default)"
-	@echo "  inspiration                   Clone/update hegel-rust, hegel-go, hegel-cpp into inspiration/"
+	@echo "  inspiration                   Clone/update third-party repos into inspiration/{hegel,existing-pbt-in-c,targets}/"
 	@echo "  clean-inspiration             Remove inspiration/"
 	@echo "  clean-cores                   Remove core dumps from repo root (core.*)"
 	@echo ""
@@ -32,7 +41,7 @@ help:
 	@echo "  make selftest-clean           Clean selftest binaries"
 	@echo "  make from-hegel-rust-test     Run from-hegel-rust suite"
 	@echo "  make from-hegel-rust-verify   Verify C tests match Rust originals (requires claude)"
-	@echo "  make scotch-test-local        Run Scotch tests with inspiration/scotch (built from source)"
+	@echo "  make scotch-test-local        Run Scotch tests with inspiration/targets/scotch (built from source)"
 	@echo "  make scotch-test-deb          Run Scotch tests with system libscotch-dev (CI)"
 	@echo "  make mpi-test                 Run MPI tests (requires mpicc/mpiexec)"
 	@echo "  make bench-bench              Run fork-vs-nofork benchmarks (see docs/benchmarking.md)"
@@ -52,25 +61,38 @@ help:
 	@echo "  make bench-help"
 
 inspiration:
-	@mkdir -p $(INSPIRATION_DIR)
-	@for repo in $(GITHUB_REPOS); do \
+	@mkdir -p $(INSPIRATION_DIR)/hegel $(INSPIRATION_DIR)/existing-pbt-in-c $(INSPIRATION_DIR)/targets
+	@for repo in $(HEGEL_GITHUB_REPOS); do \
 		name=$$(basename $$repo); \
-		if [ -d "$(INSPIRATION_DIR)/$$name" ]; then \
-			echo "  $$name: pulling latest"; \
-			cd "$(INSPIRATION_DIR)/$$name" && git pull --ff-only && cd ../..; \
+		dest="$(INSPIRATION_DIR)/hegel/$$name"; \
+		if [ -d "$$dest" ]; then \
+			echo "  hegel/$$name: pulling latest"; \
+			cd "$$dest" && git pull --ff-only && cd - >/dev/null; \
 		else \
-			echo "  $$name: cloning"; \
-			git clone --depth 1 "https://github.com/$$repo.git" "$(INSPIRATION_DIR)/$$name"; \
+			echo "  hegel/$$name: cloning"; \
+			git clone --depth 1 "https://github.com/$$repo.git" "$$dest"; \
 		fi; \
 	done
-	@for repo in $(GITLAB_REPOS); do \
+	@for repo in $(PBT_C_GITHUB_REPOS); do \
 		name=$$(basename $$repo); \
-		if [ -d "$(INSPIRATION_DIR)/$$name" ]; then \
-			echo "  $$name: pulling latest"; \
-			cd "$(INSPIRATION_DIR)/$$name" && git pull --ff-only && cd ../..; \
+		dest="$(INSPIRATION_DIR)/existing-pbt-in-c/$$name"; \
+		if [ -d "$$dest" ]; then \
+			echo "  existing-pbt-in-c/$$name: pulling latest"; \
+			cd "$$dest" && git pull --ff-only && cd - >/dev/null; \
 		else \
-			echo "  $$name: cloning"; \
-			git clone --depth 1 "https://gitlab.inria.fr/$$repo.git" "$(INSPIRATION_DIR)/$$name"; \
+			echo "  existing-pbt-in-c/$$name: cloning"; \
+			git clone --depth 1 "https://github.com/$$repo.git" "$$dest"; \
+		fi; \
+	done
+	@for repo in $(TARGET_GITLAB_REPOS); do \
+		name=$$(basename $$repo); \
+		dest="$(INSPIRATION_DIR)/targets/$$name"; \
+		if [ -d "$$dest" ]; then \
+			echo "  targets/$$name: pulling latest"; \
+			cd "$$dest" && git pull --ff-only && cd - >/dev/null; \
+		else \
+			echo "  targets/$$name: cloning"; \
+			git clone --depth 1 "https://gitlab.inria.fr/$$repo.git" "$$dest"; \
 		fi; \
 	done
 

@@ -2,7 +2,7 @@
 # Copyright (c) 2026 c4ffein — see hegel/LICENSE for terms.
 #
 # C equivalents of hegel-rust tests.
-# Each test here corresponds 1-1 to a test in inspiration/hegel-rust/tests/.
+# Each test here corresponds 1-1 to a test in inspiration/hegel/hegel-rust/tests/.
 # See manifest.md for the full correspondence map.
 
 REPO_ROOT    = $(abspath ../..)
@@ -178,7 +178,7 @@ verify:
 		echo "  Install: https://docs.anthropic.com/en/docs/claude-code"; \
 		exit 1; \
 	fi; \
-	if [ ! -d "$(REPO_ROOT)/inspiration/hegel-rust" ]; then \
+	if [ ! -d "$(REPO_ROOT)/inspiration/hegel/hegel-rust" ]; then \
 		echo "ERROR: Run 'make inspiration' from repo root first."; \
 		exit 1; \
 	fi; \
@@ -205,7 +205,7 @@ verify:
 			--system-prompt "$$prompt" \
 			--allowedTools "Read,Glob,Grep" \
 			--dangerously-skip-permissions \
-			"Verify this C test. C file: tests/from-hegel-rust/$$f — Rust source: inspiration/hegel-rust/$$rust_src" \
+			"Verify this C test. C file: tests/from-hegel-rust/$$f — Rust source: inspiration/hegel/hegel-rust/$$rust_src" \
 			2>/dev/null | grep '^VERDICT:' | head -1); \
 		if [ -z "$$verdict" ]; then \
 			verdict="VERDICT: ERROR — no verdict returned"; \

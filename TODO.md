@@ -166,7 +166,7 @@ confident the approach stands).
   `hegel__draw_integer_into` / `_fp_into` — do one draw attempt and
   call `hegel_assume(tc, 0)` on predicate failure, with no span
   around the attempt.  Reference hegel-rust
-  (`inspiration/hegel-rust/src/generators/generators.rs::Filtered::do_draw`)
+  (`inspiration/hegel/hegel-rust/src/generators/generators.rs::Filtered::do_draw`)
   retries 3 times, wrapping each attempt in a `labels::FILTER` span
   that is **discarded** (`stop_span(true)`) on rejection — keeps
   shrink quality clean by not polluting the span tree with rejected
