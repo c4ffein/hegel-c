@@ -9,6 +9,8 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+mod stateful;
+
 /// Opaque handle passed to C test functions.
 pub struct HegelTestCase {
     tc: TestCase,
@@ -56,6 +58,7 @@ const MSG_DRAW_TEXT:   u8 = 11; /* payload: min(4) + max(4)   ; response: len(4)
 const MSG_DRAW_REGEX:  u8 = 12; /* payload: plen(4) + pat(plen) ; response: len(4) + bytes(len) */
 const MSG_START_SPAN:  u8 = 13; /* payload: label(8)           ; no response       */
 const MSG_STOP_SPAN:   u8 = 14; /* payload: discard(1)         ; no response       */
+const MSG_DRAW_BYTES:  u8 = 15; /* payload: min(4) + max(4)   ; response: len(4) + bytes(len) */
 
 
 /*
@@ -253,6 +256,17 @@ fn parent_serve(tc: &TestCase, req_rd: c_int, resp_wr: c_int) -> ChildMsg {
                 let bytes = val.as_bytes();
                 pipe_write_all(resp_wr, &(bytes.len() as u32).to_le_bytes());
                 pipe_write_all(resp_wr, bytes);
+            }
+            MSG_DRAW_BYTES => {
+                let mut buf = [0u8; 8];
+                if !pipe_read_exact(req_rd, &mut buf) { return ChildMsg::Eof; }
+                let min_size = u32::from_le_bytes(buf[0..4].try_into().unwrap()) as usize;
+                let max_size = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
+                let val: Vec<u8> = tc.draw(
+                    gs::vecs(gs::integers::<u8>()).min_size(min_size).max_size(max_size));
+                if trace { eprintln!("[hegel]   draw_bytes({},{}) -> {} bytes", min_size, max_size, val.len()); }
+                pipe_write_all(resp_wr, &(val.len() as u32).to_le_bytes());
+                pipe_write_all(resp_wr, &val);
             }
             MSG_START_SPAN => {
                 let mut buf = [0u8; 8];
@@ -996,6 +1010,54 @@ pub unsafe extern "C-unwind" fn hegel_draw_text(
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len); }
     }
     unsafe { *buf.add(copy_len) = 0; }
+    copy_len as c_int
+}
+
+/// Draw an array of arbitrary bytes (each uniform in [0, 255]) of
+/// length in [min_size, max_size].  Writes raw bytes to `buf` (NOT
+/// null-terminated — buf is treated as binary).  Returns the actual
+/// length written, capped at `capacity`.
+///
+/// The whole array is drawn as a single logical span, so the shrinker
+/// can drop array elements as a unit (rather than per-byte as a
+/// `for` loop of `hegel_draw_int(tc, 0, 255)` would).
+///
+/// # Safety
+/// `tc` must be valid.  `buf` must point to at least `capacity` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C-unwind" fn hegel_draw_bytes(
+    tc: *mut HegelTestCase,
+    min_size: c_int,
+    max_size: c_int,
+    buf: *mut u8,
+    capacity: c_int,
+) -> c_int {
+    if capacity < 0 { return 0; }
+    let bytes: Vec<u8> = if unsafe { IN_FORK_CHILD } {
+        let fd_w = unsafe { FORK_REQ_WR };
+        let fd_r = unsafe { FORK_RESP_RD };
+        let mut req = [0u8; 9];
+        req[0] = MSG_DRAW_BYTES;
+        req[1..5].copy_from_slice(&(min_size as u32).to_le_bytes());
+        req[5..9].copy_from_slice(&(max_size as u32).to_le_bytes());
+        pipe_write_all(fd_w, &req);
+        let mut len_buf = [0u8; 4];
+        if !pipe_read_exact(fd_r, &mut len_buf) { child_abandoned(); }
+        let len = u32::from_le_bytes(len_buf) as usize;
+        let mut data = vec![0u8; len];
+        if len > 0 && !pipe_read_exact(fd_r, &mut data) { child_abandoned(); }
+        data
+    } else {
+        let htc = unsafe { &*tc };
+        htc.tc.draw(
+            gs::vecs(gs::integers::<u8>())
+                .min_size(min_size as usize)
+                .max_size(max_size as usize))
+    };
+    let copy_len = bytes.len().min(capacity as usize);
+    if copy_len > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, copy_len); }
+    }
     copy_len as c_int
 }
 
