@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,19 @@ double   hegel_draw_double (hegel_testcase * tc, double min_val, double max_val)
 int hegel_draw_text  (hegel_testcase * tc, int min_size, int max_size,
                       char * buf, int capacity);
 
+/* Draw an array of arbitrary bytes (each uniform in [0, 255]) of
+** length in [min_size, max_size].  Writes raw bytes to buf — NOT
+** null-terminated, treats buf as binary.  Returns the actual length
+** written (capped at capacity).
+**
+** Unlike a per-byte `for` loop of `hegel_draw_int(tc, 0, 255)`, the
+** whole array is drawn as a single logical span — the shrinker can
+** drop the entire array as a unit, and the byte stream's signal
+** isn't fragmented across N anonymous draws.  Use this for
+** binary-safe byte buffers (test inputs that may include 0x00). */
+int hegel_draw_bytes (hegel_testcase * tc, int min_size, int max_size,
+                      uint8_t * buf, int capacity);
+
 /* Draw a string matching a regex pattern.  Same return semantics as
 ** hegel_draw_text. */
 int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
@@ -93,6 +107,82 @@ void          hegel_suite_add  (hegel_suite * suite, const char * name,
                                 void (*test_fn)(hegel_testcase *));
 int           hegel_suite_run  (hegel_suite * suite);
 void          hegel_suite_free (hegel_suite * suite);
+
+/* ---- Stateful PBT (command-sequence testing) ---- */
+
+/* Stateful tests model the system under test as a state machine.  The
+** user supplies:
+**   - setup() / teardown(): build and tear down a fresh state per case
+**   - rules: actions that can be applied to the state machine.  Each
+**     rule may call hegel_draw_int / etc. to draw operands.
+**   - invariants: assertions checked after every successful rule
+**     application.  Use HEGEL_ASSERT inside an invariant to fail.
+**
+** The framework picks rules randomly and applies up to ~50 of them per
+** case.  Sequence shrinking (dropping rules, simplifying operands) is
+** what makes this kind of test catch interesting state-machine bugs
+** that single-shot property tests miss.
+**
+** V0 limits:
+**   - up to 32 rules and 32 invariants per state machine
+**   - nofork mode only — fork-mode is a future addition
+**
+** Example: integer stack
+**   typedef struct { int data[100]; int len; } stk_t;
+**   void *setup    (void)        { return calloc (1, sizeof (stk_t)); }
+**   void  teardown (void *s)     { free (s); }
+**   void  rule_push (void *s, hegel_testcase *tc) {
+**     stk_t *st = s;
+**     if (st->len < 100) st->data[st->len++] = hegel_draw_int (tc, 0, 99);
+**   }
+**   void  rule_pop  (void *s, hegel_testcase *tc) {
+**     (void) tc; stk_t *st = s; if (st->len > 0) st->len--;
+**   }
+**   void  inv_len_in_range (const void *s, hegel_testcase *tc) {
+**     (void) tc; const stk_t *st = s;
+**     HEGEL_ASSERT (st->len >= 0 && st->len <= 100, "len OOB: %d", st->len);
+**   }
+**
+**   hegel_state_machine *sm = hegel_state_machine_new (setup, teardown);
+**   hegel_state_machine_add_rule      (sm, "push", rule_push);
+**   hegel_state_machine_add_rule      (sm, "pop",  rule_pop);
+**   hegel_state_machine_add_invariant (sm, "len",  inv_len_in_range);
+**   hegel_state_machine_run_n         (sm, 200);
+**   hegel_state_machine_free          (sm);
+*/
+typedef struct CStateMachine hegel_state_machine;
+
+hegel_state_machine * hegel_state_machine_new (
+    void * (*setup)    (void),
+    void   (*teardown) (void * state));
+
+void hegel_state_machine_free (hegel_state_machine * sm);
+
+/* Returns 0 on success, -1 if the rule/invariant table is full (32 slots). */
+int hegel_state_machine_add_rule (
+    hegel_state_machine * sm, const char * name,
+    void (*rule_fn) (void * state, hegel_testcase * tc));
+
+/* Add a rule with a precondition.  The precondition is evaluated
+** before each step; rules whose precondition returns false are
+** EXCLUDED from rule-index selection — invisible to the byte stream
+** (so they don't pollute counterexample traces).  Use this when a
+** rule's applicability is state-dependent (e.g. close_seq only when
+** a sequence is open; pop only when stack non-empty).  The
+** precondition MUST NOT mutate the state and MUST NOT call any
+** hegel_draw_* function — it's a pure observation. */
+int hegel_state_machine_add_rule_with_precondition (
+    hegel_state_machine * sm, const char * name,
+    bool (*precondition_fn) (const void * state),
+    void (*rule_fn)         (void * state, hegel_testcase * tc));
+
+int hegel_state_machine_add_invariant (
+    hegel_state_machine * sm, const char * name,
+    void (*invariant_fn) (const void * state, hegel_testcase * tc));
+
+/* Run the state machine for n_cases.  V0 is nofork-only — a crash
+** in a rule body kills the process. */
+void hegel_state_machine_run_n (hegel_state_machine * sm, uint64_t n_cases);
 
 /* ---- Debug output ---- */
 
