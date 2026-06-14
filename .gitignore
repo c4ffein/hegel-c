@@ -2,6 +2,7 @@ core.*
 inspiration/
 rust-version/target/
 .hegel/
+.qemu/
 tests/selftest/test_*
 !tests/selftest/test_*.c
 tests/docs/test_*
