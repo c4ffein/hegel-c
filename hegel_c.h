@@ -257,6 +257,21 @@ void hegel_assume (hegel_testcase * tc, int condition);
 /* Fail the test with a message — triggers hegel shrinking */
 void hegel_fail (const char * msg);
 
+/* Fail with an explicit ORIGIN — the stable identifier the shrinker
+** uses to tell distinct bugs apart.  Two failures with the same origin
+** are shrunk together; different origins are treated as different
+** bugs.  Derive origin from the LOCATION of the failing check (the
+** HEGEL_ASSERT macro passes file:line automatically), never from a
+** message that embeds drawn values — that would make every draw look
+** like a fresh bug and the shrinker would never converge. */
+void hegel_fail_with_origin (const char * origin, const char * msg);
+
+/* Record a numeric observation for targeted PBT: the engine biases
+** later test cases toward inputs that scored HIGHER under the same
+** label.  No-op unless the targeting phase is enabled (it is by
+** default).  Label must be non-NULL, stable, and UTF-8. */
+void hegel_target (hegel_testcase * tc, double value, const char * label);
+
 /* Assert a condition — if false, fails with message and triggers shrinking */
 void hegel_assert (int condition, const char * msg);
 
@@ -276,32 +291,29 @@ void hegel_assert (int condition, const char * msg);
 ** tooling (CI filters, the selftest Makefile's TESTS_HEALTH category)
 ** can distinguish health issues from real property failures.
 **
-** LIMITATION (hegel-c v0, Rust-bound via hegeltest 0.4.3):
-**
-** The underlying hegeltest crate has no public API for a no-shrink
-** failure.  So for now hegel_health_fail still goes through the
-** normal fail+shrink path — but because every shrunk variant also
-** trips the same health-fail condition, shrinking converges on the
-** same message and the user-visible output is correct.  Only cost
-** is wasted shrinking cycles on a failure path that should already
-** be rare in well-shaped tests.
-**
-** A future pure-C hegel binding (speaking the hegeltest wire
-** protocol directly, no Rust intermediary) will make this emit a
-** true "stop the run, do not shrink" signal.  The C API shape stays
-** identical — implementation will change under the hood. */
+** This is a true no-shrink signal: the run aborts immediately after
+** the message — no shrinking cycles are spent on a failure that is
+** invariant across inputs.  (Historical note: the old Rust-bridge
+** implementation could only route this through the normal fail+shrink
+** path; the pure-C core aborts the run directly.) */
 void hegel_health_fail (const char * msg);
 
 /*
 ** Convenience macro: HEGEL_ASSERT(cond, fmt, ...) formats a message and
-** calls hegel_fail. Use this instead of assert() in hegel test functions.
+** fails the test. Use this instead of assert() in hegel test functions.
+** The failure's shrinker origin is the assert's file:line, so distinct
+** asserts are tracked as distinct bugs even when the formatted message
+** varies with the drawn values.
 */
+#define HEGEL__STR2(x) #x
+#define HEGEL__STR(x) HEGEL__STR2(x)
 #define HEGEL_ASSERT(cond, ...) \
   do { \
     if (!(cond)) { \
       char _hegel_buf[512]; \
       snprintf (_hegel_buf, sizeof (_hegel_buf), __VA_ARGS__); \
-      hegel_fail (_hegel_buf); \
+      hegel_fail_with_origin ("HEGEL_ASSERT at " __FILE__ ":" HEGEL__STR(__LINE__), \
+                              _hegel_buf); \
     } \
   } while (0)
 
