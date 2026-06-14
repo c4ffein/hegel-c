@@ -7,6 +7,10 @@ INSPIRATION_DIR = inspiration
 HEGEL_GITHUB_REPOS = hegeldev/hegel-rust \
                      hegeldev/hegel-go \
                      hegeldev/hegel-cpp \
+                     hegeldev/hegel-typescript \
+                     hegeldev/hegel-java \
+                     hegeldev/hegel-ocaml \
+                     hegeldev/hegel-core \
                      hegeldev/hegel-skill
 
 # Other PBT-in-C libraries we study for design comparison —
@@ -18,7 +22,21 @@ PBT_C_GITHUB_REPOS = silentbicycle/theft \
 # `inspiration/targets/`
 TARGET_GITLAB_REPOS = scotch/scotch
 
-.PHONY: help inspiration clean-inspiration clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+# ---- Library build (pure C — no cargo) ----
+
+CC       ?= gcc
+CFLAGS   ?= -Wall -Wextra -O2
+BUILD    = build
+CORE_SRC = core/hegel_cbor.c core/hegel_engine.c core/hegel_runtime.c \
+           core/hegel_runner.c core/hegel_gens.c core/hegel_stateful.c \
+           hegel_gen.c
+CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
+
+# Where the engine cdylib is built from (the upstream clone).
+LIBHEGEL_CRATE_DIR = $(INSPIRATION_DIR)/hegel/hegel-rust
+LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel.so
+
+.PHONY: help lib libhegel clean-lib inspiration clean-inspiration clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -59,6 +77,38 @@ help:
 	@echo "  make scotch-help"
 	@echo "  make mpi-help"
 	@echo "  make bench-help"
+
+# ---- Library build ----
+
+lib: $(BUILD)/libhegel_c.a
+
+$(BUILD)/libhegel_c.a: $(CORE_OBJ)
+	ar rcs $@ $^
+
+$(BUILD)/%.o: core/%.c core/hegel_internal.h core/hegel_engine.h core/hegel_cbor.h hegel_c.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -I. -c -o $@ $<
+
+$(BUILD)/hegel_gen.o: hegel_gen.c hegel_gen.h hegel_c.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -I. -c -o $@ $<
+
+# The engine cdylib: build from the inspiration clone (needs cargo)
+# and place it where the runtime loader looks (./build/libhegel.so).
+# A prebuilt artifact from hegel-rust's GitHub releases works too —
+# drop it at build/libhegel.so or point HEGEL_LIBHEGEL_PATH at it.
+libhegel: $(BUILD)/libhegel.so
+
+$(BUILD)/libhegel.so:
+	@mkdir -p $(BUILD)
+	@if [ ! -f "$(LIBHEGEL_BUILT)" ]; then \
+		echo "Building libhegel from $(LIBHEGEL_CRATE_DIR) (cargo)..."; \
+		cd $(LIBHEGEL_CRATE_DIR) && cargo build -p hegeltest-c --release; \
+	fi
+	cp $(LIBHEGEL_BUILT) $@
+
+clean-lib:
+	rm -rf $(BUILD)
 
 inspiration:
 	@mkdir -p $(INSPIRATION_DIR)/hegel $(INSPIRATION_DIR)/existing-pbt-in-c $(INSPIRATION_DIR)/targets
