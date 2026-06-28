@@ -62,13 +62,8 @@ int main (void) {
 
 ## Design decisions
 
-- **Pure C public API, no C++.** A separate C++ Hegel binding is WIP by the Hegel team. This lib stays pure C at the surface.
-- **Rust bridge under the hood for now.** We build on the [hegeltest](https://crates.io/crates/hegeltest) crate to inherit integrated shrinking and protocol tracking for free. A pure C build (reimplementing the Hegel wire protocol directly) is planned as a second option — see [`docs/design_rust_bridge.md`](docs/design_rust_bridge.md) for the why, the fork-per-case + parent-proxied IPC reasoning, and the `catch_unwind` orphan-leak fix rationale.
-  - `rust-version/build.rs` also compiles the pure-C `hegel_gen.c` into the same `libhegel_c.a`.
-- **A pure C version will be built.** This version will have no dependancy to the existing Rust lib.
-  - This will only be done once there is a sufficient test suite to verify consistency between these 2 options.
-  - The Rust bridge will be kept, and both implementations will still be tested one against another.
-  - If the Hegel team ever releases a low-level C header for FFI bindings, we'll adapt to it, still providing a nice standard layer to make it as adapted to a C codebase as possible.
+- **Pure C public API, no C++.** A separate C++ Hegel binding is provided by the Hegel team. This lib stays pure C at the surface.
+- **Based on the official minimal hegel-c.** The main hegel now includes a low-level C header for FFI bindings, also called hegel-c. This repo is only a wrapper enabling more features.
 
 ## Documentation
 
@@ -78,7 +73,6 @@ int main (void) {
 - **[docs/testing.md](docs/testing.md)** — selftest suite three-layer pattern and test categories
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
 - **[docs/benchmarking.md](docs/benchmarking.md)** — fork vs nofork overhead, methodology and measured numbers
-- **[docs/design_rust_bridge.md](docs/design_rust_bridge.md)** — design decisions for the current Rust-bridge build (FFI boundary, IPC protocol, orphan-leak fix)
 - **[docs/fuzzing-comparison.md](docs/fuzzing-comparison.md)** — property-based testing vs. AFL/libFuzzer: where each tool is strong, where each hits a wall, and how to choose
 - **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
 - **[TODO.md](TODO.md)** — deferred items
