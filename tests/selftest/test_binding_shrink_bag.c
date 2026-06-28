@@ -133,7 +133,10 @@ char *              argv[])
       HEGEL_USE    (n));
 
   printf ("Probing shrink quality of Bag{n, items}...\n");
-  r = hegel_run_test_result_n (test_bag_shrink, 1000);
+  /* 5000 cases: planted bug needs an exact drawn value; the engine
+  ** distribution biases toward simple values, so exact-match probes
+  ** need headroom (see test_binding_shrink_arr_of_structs). */
+  r = hegel_run_test_result_n (test_bag_shrink, 5000);
 
   if (r != 1) {
     fprintf (stderr, "FAIL: hegel did not detect a failing case (r=%d)\n", r);

@@ -129,7 +129,11 @@ char *              argv[])
       HEGEL_USE    (n));
 
   printf ("Probing shrink quality of HEGEL_ARR_OF of struct pointers...\n");
-  r = hegel_run_test_result_n (test_arr_of_structs_shrink, 500);
+  /* 5000 cases: the planted bug needs items[0]->val == 5 exactly, and
+  ** the engine's distribution biases toward simple values (0, bounds),
+  ** so 5 is rarer than uniform-1/101 — 500 cases flaked a few % of
+  ** runs after the 0.17.3 upstream distribution audit. */
+  r = hegel_run_test_result_n (test_arr_of_structs_shrink, 5000);
 
   if (r != 1) {
     fprintf (stderr, "FAIL: hegel did not detect a failing case (r=%d)\n", r);
