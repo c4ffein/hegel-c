@@ -12,14 +12,6 @@
 ```
 
 
-- Investigate recreating something akin to the FACET system, but using the LET mechanism?
-  - would only work at same level, maybe could save a let, just reuse the same name, get or create?
-  - HEGEL_ARRAY_LEN / HEGEL_ARRAY_VALUE => populate a let in param?
-
-
-Open items after the V0 schema API milestone. For what's already
-done, see [README.md](README.md) and [docs/schema-api.md](docs/schema-api.md).
-
 ## Binding system — deferred items
 
 The HEGEL_BINDING / HEGEL_LET / HEGEL_USE / HEGEL_ARR_OF system has
@@ -116,38 +108,6 @@ plus all 7 existing `HEGEL_ARRAY` sites migrated.  Docs updated
 (`schema-api.md`, `patterns.md`, `hegel_gen.h`).  Design memo that
 drove the work is `v2-handles-handoff.md` (delete once we're
 confident the approach stands).
-
-### Remaining investigations
-
-- **`HEGEL_SELF()` nested inside an array's element schema — silently
-  broken.**  `hegel__resolve_self` has no `HEGEL_SCH_SUBSCHEMA`
-  case, so when it walks a struct's children it doesn't cross the
-  subschema→source boundary into the array's `elem`.  If the
-  element schema is `HEGEL_SELF()`, its `self_ref.target` stays
-  NULL, and `hegel__draw_array_standalone` falls through the
-  element-kind dispatch silently — the array gets zero-initialized
-  entries instead of real recursive draws.  Fix is ~3 lines (add
-  SUBSCHEMA case descending into `source`), plus a test for
-  `HEGEL_ARRAY(HEGEL_SELF(), ...)` inside a struct.  Orthogonal
-  subtlety: a schema shared across two parents would have the
-  second resolve pass overwrite the first's SELF target — that
-  pre-dates facets (same issue with `hegel_schema_ref`'d struct
-  subtrees) and is not specific to this fix.
-
-- **`hegel_shape_array_len` asymmetry on facet slot shapes.**  The
-  primary facet (first-seen for a source this draw) owns the
-  `HEGEL_SHAPE_ARRAY` shape; the secondary emits a trivial
-  `HEGEL_SHAPE_SCALAR` leaf.  So `hegel_shape_array_len` returns
-  the real length only when called on the `value`-facet slot
-  (the pointer field); on the `size`-facet slot it returns 0.
-  Currently documented in `docs/schema-api.md` as an asymmetry.
-  Options if we want symmetry: (a) secondary leaf dispatches to
-  primary's array shape via ctx lookup — but ctx is gone after
-  the draw ends, so we'd need a different linkage; (b) make the
-  secondary slot hold a non-owning reference to the primary's
-  array shape and teach `hegel_shape_array_len` to follow it;
-  (c) leave as-is and keep the doc note.  Decide once a concrete
-  use case surfaces.
 
 ### Out of scope for V1 (still deferred)
 
@@ -396,28 +356,6 @@ signal to revisit this.
 
 ### Point the library at real C code (Scotch, etc.)
 
-**Status: two real-world Scotch demos done 2026-04-12.**
-
-1. **`tests/irl/scotch/test_graph_part_schema.c`** — schema-API
-   version of `SCOTCH_graphPart` testing.  Logical
-   `(nvert, edges[], npart)` graph generated via
-   `hegel_schema_struct` + `HEGEL_ARRAY_INLINE`, CSR built from
-   it in a C helper, stronger assertions than the primitive-draw
-   version (empty-partition check, load-balance bound).
-   Real-world demo: "you can write property tests for an
-   existing C library with this."
-
-2. **`tests/irl/scotch/test_graph_order_shrink.c`** — reducer
-   demo.  Re-discovers the
-   [`hgraphOrderCp` off-by-`ordenum` bug](https://github.com/c4ffein/scotch/blob/ff403d445b36ee1723ff53d2478d368b21a3341f/REPORTS/BUG_REPORT.md)
-   from a random schema, then shrinks to the theoretical minimum
-   (3 vertices, 1 K₂ pair, 1 isolated vertex).  Wired into the
-   Makefile as `TESTS_SHRINK` with parsed-output assertion that
-   `nvert <= 5`.  Shrink demo: "integrated shrinking
-   lands near the theoretical minimum on a real bug."  See
-   [`docs/shrinking.md`](docs/shrinking.md) for the worked
-   walkthrough.
-
 **Gaps surfaced** (workarounds in the test files):
 
 1. **No sibling-dependent field bounds.** Edge endpoints should
@@ -438,11 +376,6 @@ matter for "does the API handle arbitrary foreign C code".
 
 | Item | Status |
 |---|---|
-| Fix `HEGEL_ARRAY_INLINE` fork-mode orphan leak | done — see "Known bugs" below |
-| `HEGEL_INLINE` / `HEGEL_INLINE_REF` — inline-by-value sub-struct | done — `test_schema_inline_struct.c`, shared helper `hegel__draw_struct_into_slot`, `HEGEL_SHAPE_GET` now recurses through nested structs |
-| Real-world demo: schema-API on actual Scotch | done — `test_graph_part_schema.c` |
-| Shrinker demo: reducer on a real Scotch bug | done — `test_graph_order_shrink.c` + `docs/shrinking.md` |
-| Health-check failure path coverage in CI | done — `TESTS_HEALTH` selftests (filter_too_much, large_base_example, single + suite versions) |
 | Embedded-systems demo | **TODO** — pick a target (Modbus / ring buffer / MQTT-SN / reviewer's choice), build 2–3 schemas, host-compiled |
 | `docs/review-framing.md` (one-page packet) | **TODO** — per-reviewer specific questions |
 | `HEGEL_SELF` rename / `OPTIONAL_SELF` alias | deferred — cosmetic, not a rejection issue |
