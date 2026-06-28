@@ -28,7 +28,7 @@ CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -O2
 BUILD    = build
 CORE_SRC = core/hegel_cbor.c core/hegel_engine.c core/hegel_runtime.c \
-           core/hegel_runner.c core/hegel_gens.c core/hegel_stateful.c \
+           core/hegel_runner.c core/hegel_stateful.c \
            hegel_gen.c
 CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
 
