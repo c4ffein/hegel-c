@@ -14,8 +14,8 @@ tests/from-hegel-rust/test_*
 !tests/from-hegel-rust/test_*.c
 tests/from-hegel-rust/report.md
 tests/from-hegel-rust/verify-report.md
-tests/irl/*/test_*
-!tests/irl/*/test_*.c
+tests/irl/**/test_*
+!tests/irl/**/test_*.c
 tests/mpi/test_*
 !tests/mpi/test_*.c
 tests/bench/test_*
