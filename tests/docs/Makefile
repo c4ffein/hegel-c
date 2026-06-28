@@ -16,7 +16,7 @@
 #   - exit 0 when run (demonstrations, not bug hunts)
 
 REPO_ROOT    = $(abspath ../..)
-HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
+HEGEL_C_LIB  = $(REPO_ROOT)/build
 
 CC       = gcc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
@@ -49,9 +49,9 @@ help:
 all: hegel-c-lib $(TESTS)
 
 hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ]; then \
+	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
 		echo "Building libhegel_c.a..."; \
-		cd $(REPO_ROOT)/rust-version && cargo build --release; \
+		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
 	fi
 
 test_%: test_%.c hegel-c-lib

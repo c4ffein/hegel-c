@@ -2,7 +2,7 @@
 # Copyright (c) 2026 c4ffein — see hegel/LICENSE for terms.
 
 REPO_ROOT    = $(abspath ../..)
-HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
+HEGEL_C_LIB  = $(REPO_ROOT)/build
 
 CC       = gcc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
@@ -68,14 +68,18 @@ TESTS_PASS = test_pass_simple \
              test_binding_jagged_3d \
              test_binding_use_path \
              test_array_len_prefixed \
-             test_array_terminated
+             test_array_terminated \
+             test_stateful_smoke \
+             test_stateful_precond \
+             test_draw_bytes_smoke
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
              test_shrink_overflow \
              test_shrink_square \
              test_strategy_shrink \
-             test_span_tree_json_shrinks
+             test_span_tree_json_shrinks \
+             test_stateful_shrink
 
 # Tests that should FAIL via crash isolation (exit non-zero)
 TESTS_CRASH = test_crash_segfault \
@@ -126,9 +130,9 @@ help:
 all: hegel-c-lib $(ALL_TESTS)
 
 hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ]; then \
+	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
 		echo "Building libhegel_c.a..."; \
-		cd $(REPO_ROOT)/rust-version && cargo build --release; \
+		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
 	fi
 
 test_%: test_%.c hegel-c-lib
@@ -211,7 +215,7 @@ test: all check-license
 check-license:
 	@missing=0; \
 	for f in $(REPO_ROOT)/hegel_c.h \
-	         $(REPO_ROOT)/rust-version/src/lib.rs \
+	         $(REPO_ROOT)/core/hegel_runtime.c $(REPO_ROOT)/core/hegel_runner.c $(REPO_ROOT)/core/hegel_engine.c $(REPO_ROOT)/core/hegel_cbor.c \
 	         *.c Makefile; do \
 		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
 			echo "  MISSING: $$f"; \
