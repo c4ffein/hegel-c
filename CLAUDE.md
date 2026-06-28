@@ -2,7 +2,7 @@
 
 ## Project overview
 
-hegel-c is a C binding for Hegel, a property-based testing framework. It is pure C end to end: tests include the headers and link a static `libhegel_c.a`; at runtime the library dlopens `libhegel.so` — Hegel's official native engine (a Rust cdylib from the hegel-rust repo, prebuilt per platform on its GitHub releases). There is no server process, no Python, and no Rust in our build. (History: until 2026-06 this binding was a Rust FFI bridge to the Python `hegel-core` server; upstream 0.17.0 deleted the server and shipped the in-process engine + C ABI we now sit on. The old bridge is kept under `rust-version/` for reference only.)
+hegel-c is a C binding for Hegel, a property-based testing framework. It is pure C end to end: tests include the headers and link a static `libhegel_c.a`; at runtime the library dlopens `libhegel.so` — Hegel's official native engine (a Rust cdylib from the hegel-rust repo, prebuilt per platform on its GitHub releases). There is no server process, no Python, and no Rust in our build. (History: until 2026-06 this binding was a Rust FFI bridge to the Python `hegel-core` server; upstream 0.17.0 deleted the server and shipped the in-process engine + C ABI we now sit on.)
 
 **Two layers of public API:**
 - `hegel_c.h` — primitive draws, spans, asserts, runners. The transport boundary.
@@ -23,8 +23,6 @@ Most new code should use the schema API — it handles allocation, span annotati
   - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, failure reporting, suite API.
   - `hegel_stateful.c` — stateful run loop (preconditions, rule-level escapes), port of the old `stateful.rs`.
   - `hegel_internal.h` — test-case struct, wire-protocol message defs (designed to extend to a remote/board transport later).
-- `rust-version/` — the RETIRED Rust bridge + Python-server client (hegeltest 0.4.3). Reference only; not built.
-- `purec/` — exploratory pure-C client of the dead server wire protocol. Its CBOR codec was adopted into `core/`; the transport/session layers are superseded.
 - `tests/selftest/` — 76 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, and stateful tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
