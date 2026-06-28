@@ -13,8 +13,8 @@
 #                      headers in /usr/include/scotch, used in CI
 
 REPO_ROOT    = $(abspath ../../..)
-HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
-SCOTCH_LOCAL = $(REPO_ROOT)/inspiration/scotch
+HEGEL_C_LIB  = $(REPO_ROOT)/build
+SCOTCH_LOCAL = $(REPO_ROOT)/inspiration/targets/scotch
 
 # Scotch paths — set by test-local / test-deb targets
 SCOTCH_INC   ?=
@@ -68,9 +68,9 @@ help:
 all: hegel-c-lib $(ALL_TESTS)
 
 hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ]; then \
-		echo "Building libhegel_c.a..."; \
-		cd $(REPO_ROOT)/rust-version && cargo build --release; \
+	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
+		echo "Building libhegel_c.a + libhegel.so..."; \
+		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
 	fi
 
 test_graph_part: test_graph_part.c hegel-c-lib
