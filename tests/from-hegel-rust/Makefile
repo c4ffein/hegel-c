@@ -6,7 +6,7 @@
 # See manifest.md for the full correspondence map.
 
 REPO_ROOT    = $(abspath ../..)
-HEGEL_C_LIB  = $(REPO_ROOT)/rust-version/target/release
+HEGEL_C_LIB  = $(REPO_ROOT)/build
 CC           = gcc
 CFLAGS       = -Wall -Wextra -O2 -I$(REPO_ROOT) -funwind-tables -fexceptions
 LDFLAGS      = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
@@ -17,19 +17,15 @@ LDFLAGS      = -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 HEGEL_TEST_ULIMIT ?= 0
 
 # Tests that verify all examples satisfy a predicate (should PASS, exit 0)
+# NOTE: several entries were removed from this list when their .c
+# files were deleted ("deleted poorly adapted rust tests",
+# 2026-04-26) — the Makefile had kept referencing them, leaving the
+# suite unbuildable.  The list below matches the sources on disk.
 TESTS_PASS = test_integers_bounds \
              test_floats_f32_bounds \
              test_floats_f64_bounds \
              test_combinators_filter \
-             test_combinators_one_of \
-             test_combinators_one_of_many \
-             test_combinators_optional \
-             test_combinators_flat_map \
-             test_combinators_map \
-             test_combinators_sampled_from \
-             test_compose_dependent \
-             test_lists_bounds \
-             test_lists_mapped
+             test_combinators_optional
 
 # Tests that verify shrink quality (should FAIL, exit non-zero, check shrunk value)
 TESTS_SHRINK = test_shrink_int_above_13 \
@@ -63,9 +59,9 @@ help:
 all: hegel-c-lib $(ALL_TESTS)
 
 hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ]; then \
-		echo "Building libhegel_c.a..."; \
-		cd $(REPO_ROOT)/rust-version && $(HOME)/.cargo/bin/cargo build --release; \
+	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
+		echo "Building libhegel_c.a + libhegel.so..."; \
+		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
 	fi
 
 test_%: test_%.c hegel-c-lib
