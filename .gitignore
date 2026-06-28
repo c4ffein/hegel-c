@@ -1,4 +1,5 @@
 build
+.cores
 core.*
 inspiration/
 rust-version/target/
