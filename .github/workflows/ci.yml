@@ -10,75 +10,85 @@ on:
     branches: [main]
 
 jobs:
-  build:
-    name: Build libhegel_c.a
+  # Build the engine cdylib (libhegel.so) once and share it.  This is
+  # the only step that needs cargo + the upstream clone; every other
+  # job just consumes the resulting .so.  `make lib` (the pure-C
+  # libhegel_c.a) is fast enough to rebuild per-job, so it is not
+  # shared.
+  engine:
+    name: Build engine (libhegel.so)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Rust build
+      # `make libhegel` builds from inspiration/hegel/hegel-rust.  Clone
+      # only that one repo (the full `make inspiration` also pulls the
+      # sister bindings and a GitLab Scotch mirror we don't need here).
+      - name: Fetch engine source
+        run: |
+          mkdir -p inspiration/hegel
+          git clone --depth 1 https://github.com/hegeldev/hegel-rust.git \
+            inspiration/hegel/hegel-rust
+
+      - name: Cache cargo
         uses: actions/cache@v4
         with:
           path: |
-            rust-version/target
+            inspiration/hegel/hegel-rust/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-${{ runner.os }}-${{ hashFiles('rust-version/Cargo.lock') }}
-          restore-keys: rust-${{ runner.os }}-
+          key: engine-${{ runner.os }}-${{ hashFiles('inspiration/hegel/hegel-rust/Cargo.lock') }}
+          restore-keys: engine-${{ runner.os }}-
 
-      - name: Build
-        run: cd rust-version && cargo build --release
+      - name: Build engine
+        run: make libhegel
 
-      - name: Upload library artifact
+      - name: Upload engine
         uses: actions/upload-artifact@v4
         with:
-          name: libhegel_c
-          path: rust-version/target/release/libhegel_c.a
+          name: libhegel-so
+          path: build/libhegel.so
 
   selftest:
-    name: Selftest (20 tests)
-    needs: build
+    name: Selftest suite
+    needs: engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Download library artifact
+      - name: Download engine
         uses: actions/download-artifact@v4
         with:
-          name: libhegel_c
-          path: rust-version/target/release/
+          name: libhegel-so
+          path: build/
 
+      # `make selftest-test` self-delegates to `make lib libhegel`:
+      # libhegel.so is already present (no-op), libhegel_c.a is rebuilt
+      # from C with the preinstalled GCC.
       - name: Run selftest suite
-        run: cd tests/selftest && make test
+        run: make selftest-test
 
   from-hegel-rust:
-    name: From-hegel-rust (19 tests)
-    needs: build
+    name: From-hegel-rust suite
+    needs: engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Download library artifact
+      - name: Download engine
         uses: actions/download-artifact@v4
         with:
-          name: libhegel_c
-          path: rust-version/target/release/
+          name: libhegel-so
+          path: build/
 
-      - name: Run from-hegel-rust test suite
-        run: cd tests/from-hegel-rust && make test
+      - name: Run from-hegel-rust suite
+        run: make from-hegel-rust-test
 
   mpi:
     name: MPI tests (Debian 13 / OpenMPI 5)
-    needs: build
+    needs: engine
     runs-on: ubuntu-latest
     container: debian:13
     steps:
@@ -87,29 +97,25 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y gcc make curl openmpi-bin libopenmpi-dev
+          apt-get install -y gcc make openmpi-bin libopenmpi-dev
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Download library artifact
+      - name: Download engine
         uses: actions/download-artifact@v4
         with:
-          name: libhegel_c
-          path: rust-version/target/release/
+          name: libhegel-so
+          path: build/
 
       - name: Run MPI tests
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export OMPI_ALLOW_RUN_AS_ROOT=1
           export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
           export PRTE_ALLOW_RUN_AS_ROOT=1
           export PRTE_ALLOW_RUN_AS_ROOT_CONFIRM=1
-          cd tests/mpi && make test
+          make mpi-test
 
   scotch:
     name: Scotch integration tests (Debian 13 / OpenMPI 5)
-    needs: build
+    needs: engine
     runs-on: ubuntu-latest
     container: debian:13
     steps:
@@ -118,22 +124,18 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y gcc make curl libscotch-dev libptscotch-dev openmpi-bin libopenmpi-dev
+          apt-get install -y gcc make libscotch-dev libptscotch-dev openmpi-bin libopenmpi-dev
 
-      - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      - name: Download library artifact
+      - name: Download engine
         uses: actions/download-artifact@v4
         with:
-          name: libhegel_c
-          path: rust-version/target/release/
+          name: libhegel-so
+          path: build/
 
       - name: Run Scotch integration tests
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export OMPI_ALLOW_RUN_AS_ROOT=1
           export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
           export PRTE_ALLOW_RUN_AS_ROOT=1
           export PRTE_ALLOW_RUN_AS_ROOT_CONFIRM=1
-          cd tests/irl/scotch && make test-deb
+          make scotch-test-deb
