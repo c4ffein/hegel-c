@@ -75,16 +75,16 @@ static int find_any (void (*fn)(hegel_testcase *), uint64_t n) {
     if (hegel_run_test_result (pfx##_bounds) != 0) {                     \
       fprintf (stderr, "ERROR: " #pfx " bounds\n"); (errors)++;         \
     }                                                                    \
-    if (find_any (pfx##_find_lower, 1000) != 0) {                       \
+    if (find_any (pfx##_find_lower, 5000) != 0) {                       \
       fprintf (stderr, "ERROR: " #pfx " find_lower\n"); (errors)++;     \
     }                                                                    \
-    if (find_any (pfx##_find_upper, 1000) != 0) {                       \
+    if (find_any (pfx##_find_upper, 5000) != 0) {                       \
       fprintf (stderr, "ERROR: " #pfx " find_upper\n"); (errors)++;     \
     }                                                                    \
-    if (find_any (pfx##_find_min, 1000) != 0) {                         \
+    if (find_any (pfx##_find_min, 5000) != 0) {                         \
       fprintf (stderr, "ERROR: " #pfx " find_min\n"); (errors)++;       \
     }                                                                    \
-    if (find_any (pfx##_find_max, 1000) != 0) {                         \
+    if (find_any (pfx##_find_max, 5000) != 0) {                         \
       fprintf (stderr, "ERROR: " #pfx " find_max\n"); (errors)++;       \
     }                                                                    \
   } while (0)
@@ -114,13 +114,13 @@ static int find_any (void (*fn)(hegel_testcase *), uint64_t n) {
     if (hegel_run_test_result (pfx##_bounds) != 0) {                     \
       fprintf (stderr, "ERROR: " #pfx " bounds\n"); (errors)++;         \
     }                                                                    \
-    if (find_any (pfx##_find_upper, 1000) != 0) {                       \
+    if (find_any (pfx##_find_upper, 5000) != 0) {                       \
       fprintf (stderr, "ERROR: " #pfx " find_upper\n"); (errors)++;     \
     }                                                                    \
-    if (find_any (pfx##_find_min, 1000) != 0) {                         \
+    if (find_any (pfx##_find_min, 5000) != 0) {                         \
       fprintf (stderr, "ERROR: " #pfx " find_min\n"); (errors)++;       \
     }                                                                    \
-    if (find_any (pfx##_find_max, 1000) != 0) {                         \
+    if (find_any (pfx##_find_max, 5000) != 0) {                         \
       fprintf (stderr, "ERROR: " #pfx " find_max\n"); (errors)++;       \
     }                                                                    \
   } while (0)

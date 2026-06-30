@@ -26,7 +26,7 @@
 #include "hegel_c.h"
 #include "hegel_gen.h"
 
-#define N_CASES   2
+#define N_CASES   50
 
 /* ---- Test 1: disjoint ranges ---- */
 

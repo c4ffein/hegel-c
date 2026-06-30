@@ -57,7 +57,7 @@ char *              argv[])
   (void) argc;
   (void) argv;
 
-  hegel_run_test (testAddMonotone);
+  hegel_run_test_n (testAddMonotone, 2000);
 
   return (0);
 }
