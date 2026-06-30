@@ -129,11 +129,14 @@ help:
 
 all: hegel-c-lib $(ALL_TESTS)
 
+# Always delegate to the root Makefile's dependency-tracked targets.
+# `lib` rebuilds libhegel_c.a whenever any core/ source or header
+# changes (a near-instant no-op when current); `libhegel` only builds
+# the engine .so when it is absent.  The previous `[ ! -f ]` guard
+# never rebuilt a STALE libhegel_c.a, so editing core/ and running the
+# suite silently tested the old library.
 hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
-		echo "Building libhegel_c.a..."; \
-		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
-	fi
+	@$(MAKE) -C $(REPO_ROOT) lib libhegel
 
 test_%: test_%.c hegel-c-lib
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
