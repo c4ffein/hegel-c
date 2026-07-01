@@ -101,9 +101,18 @@ libhegel: $(BUILD)/libhegel.so
 
 $(BUILD)/libhegel.so:
 	@mkdir -p $(BUILD)
+	@if [ ! -d "$(LIBHEGEL_CRATE_DIR)" ]; then \
+		echo "ERROR: engine source $(LIBHEGEL_CRATE_DIR) is missing."; \
+		echo "       Run 'make inspiration' first, or drop a prebuilt libhegel.so at $@."; \
+		exit 1; \
+	fi
+	@echo "Building libhegel from $(LIBHEGEL_CRATE_DIR) (cargo)..."
+	cd $(LIBHEGEL_CRATE_DIR) && cargo build -p hegeltest-c --release
 	@if [ ! -f "$(LIBHEGEL_BUILT)" ]; then \
-		echo "Building libhegel from $(LIBHEGEL_CRATE_DIR) (cargo)..."; \
-		cd $(LIBHEGEL_CRATE_DIR) && cargo build -p hegeltest-c --release; \
+		echo "ERROR: cargo build reported success but $(LIBHEGEL_BUILT) is absent."; \
+		echo "       This is usually a stale cargo target cache — run 'cargo clean' in"; \
+		echo "       $(LIBHEGEL_CRATE_DIR) and retry."; \
+		exit 1; \
 	fi
 	cp $(LIBHEGEL_BUILT) $@
 

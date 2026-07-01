@@ -9,12 +9,17 @@ on:
   pull_request:
     branches: [main]
 
+# Engine (libhegel.so) source version.  Pinned to the tag local dev
+# builds from and the runtime is verified against (see CLAUDE.md).
+# Bump deliberately — CI then builds and tests the exact engine dev uses.
+env:
+  HEGEL_ENGINE_VERSION: v0.17.4
+
 jobs:
-  # Build the engine cdylib (libhegel.so) once and share it.  This is
-  # the only step that needs cargo + the upstream clone; every other
-  # job just consumes the resulting .so.  `make lib` (the pure-C
-  # libhegel_c.a) is fast enough to rebuild per-job, so it is not
-  # shared.
+  # Build the engine cdylib (libhegel.so) from source once and share it.
+  # This is the only job that needs cargo + the upstream clone; every
+  # other job consumes the resulting .so.  The pure-C libhegel_c.a is
+  # fast to rebuild per-job (via `make lib`), so it is not shared.
   engine:
     name: Build engine (libhegel.so)
     runs-on: ubuntu-latest
@@ -24,23 +29,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # `make libhegel` builds from inspiration/hegel/hegel-rust.  Clone
-      # only that one repo (the full `make inspiration` also pulls the
-      # sister bindings and a GitLab Scotch mirror we don't need here).
-      - name: Fetch engine source
+      # only that one repo, pinned to the engine tag (the full
+      # `make inspiration` also pulls sister bindings and a GitLab Scotch
+      # mirror we don't need here).
+      - name: Fetch pinned engine source
         run: |
-          mkdir -p inspiration/hegel
-          git clone --depth 1 https://github.com/hegeldev/hegel-rust.git \
-            inspiration/hegel/hegel-rust
+          git clone --depth 1 --branch "$HEGEL_ENGINE_VERSION" \
+            https://github.com/hegeldev/hegel-rust.git inspiration/hegel/hegel-rust
 
-      - name: Cache cargo
+      # Cache the cargo registry/git downloads only — NOT target/.  A
+      # cached target/ carries cargo fingerprints; if the emitted
+      # libhegel.so is not in the restore, cargo prints "Finished"
+      # without re-emitting it and the build has no artifact to copy.
+      # The compile is ~30s, so caching target/ is not worth that trap.
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
-            inspiration/hegel/hegel-rust/target
             ~/.cargo/registry
             ~/.cargo/git
-          key: engine-${{ runner.os }}-${{ hashFiles('inspiration/hegel/hegel-rust/Cargo.lock') }}
-          restore-keys: engine-${{ runner.os }}-
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('inspiration/hegel/hegel-rust/Cargo.lock') }}
+          restore-keys: cargo-registry-${{ runner.os }}-
 
       - name: Build engine
         run: make libhegel
