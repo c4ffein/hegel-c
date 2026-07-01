@@ -3,9 +3,11 @@
 
 INSPIRATION_DIR = inspiration
 
-# Sister hegel bindings + the canonical Agent Skill — `inspiration/hegel/`
-HEGEL_GITHUB_REPOS = hegeldev/hegel-rust \
-                     hegeldev/hegel-go \
+# Sister hegel bindings + the canonical Agent Skill — `inspiration/hegel/`.
+# NOTE: hegel-rust is NOT here — it is the one build-critical dependency
+# and lives as a pinned submodule at deps/hegel-rust.  `make inspiration`
+# symlinks it under inspiration/hegel/hegel-rust for discoverability.
+HEGEL_GITHUB_REPOS = hegeldev/hegel-go \
                      hegeldev/hegel-cpp \
                      hegeldev/hegel-typescript \
                      hegeldev/hegel-java \
@@ -32,8 +34,11 @@ CORE_SRC = core/hegel_cbor.c core/hegel_engine.c core/hegel_runtime.c \
            hegel_gen.c
 CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
 
-# Where the engine cdylib is built from (the upstream clone).
-LIBHEGEL_CRATE_DIR = $(INSPIRATION_DIR)/hegel/hegel-rust
+# Where the engine cdylib is built from.  hegel-rust is a pinned git
+# submodule at deps/hegel-rust (the one build-critical dependency — it
+# must match the runtime ABI, so it is version-locked in-tree rather
+# than tracked loosely like the inspiration/ reference clones).
+LIBHEGEL_CRATE_DIR = deps/hegel-rust
 LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel.so
 
 .PHONY: help lib libhegel clean-lib inspiration clean-inspiration clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
@@ -121,6 +126,14 @@ clean-lib:
 
 inspiration:
 	@mkdir -p $(INSPIRATION_DIR)/hegel $(INSPIRATION_DIR)/existing-pbt-in-c $(INSPIRATION_DIR)/targets
+	@# hegel-rust lives as a pinned submodule at deps/hegel-rust; expose it
+	@# under the old inspiration path for discoverability.  The symlink is
+	@# never committed (inspiration/ is gitignored), so it poses no
+	@# cross-platform git-symlink hazard.
+	@if [ -d deps/hegel-rust ] && [ ! -e $(INSPIRATION_DIR)/hegel/hegel-rust ]; then \
+		ln -s ../../deps/hegel-rust $(INSPIRATION_DIR)/hegel/hegel-rust; \
+		echo "  hegel/hegel-rust: symlink -> deps/hegel-rust"; \
+	fi
 	@for repo in $(HEGEL_GITHUB_REPOS); do \
 		name=$$(basename $$repo); \
 		dest="$(INSPIRATION_DIR)/hegel/$$name"; \

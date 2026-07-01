@@ -17,25 +17,21 @@ env:
 
 jobs:
   # Build the engine cdylib (libhegel.so) from source once and share it.
-  # This is the only job that needs cargo + the upstream clone; every
+  # This is the only job that needs cargo + the engine source; every
   # other job consumes the resulting .so.  The pure-C libhegel_c.a is
   # fast to rebuild per-job (via `make lib`), so it is not shared.
   engine:
     name: Build engine (libhegel.so)
     runs-on: ubuntu-latest
     steps:
+      # deps/hegel-rust is a submodule pinned to the engine version the
+      # runtime is verified against; checking it out here is the pin.
+      # (The other jobs skip submodules — they only need the built .so.)
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: dtolnay/rust-toolchain@stable
-
-      # `make libhegel` builds from inspiration/hegel/hegel-rust.  Clone
-      # only that one repo, pinned to the engine tag (the full
-      # `make inspiration` also pulls sister bindings and a GitLab Scotch
-      # mirror we don't need here).
-      - name: Fetch pinned engine source
-        run: |
-          git clone --depth 1 --branch "$HEGEL_ENGINE_VERSION" \
-            https://github.com/hegeldev/hegel-rust.git inspiration/hegel/hegel-rust
 
       # Cache the cargo registry/git downloads only — NOT target/.  A
       # cached target/ carries cargo fingerprints; if the emitted
@@ -48,7 +44,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('inspiration/hegel/hegel-rust/Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('deps/hegel-rust/Cargo.lock') }}
           restore-keys: cargo-registry-${{ runner.os }}-
 
       - name: Build engine
