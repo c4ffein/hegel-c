@@ -215,11 +215,11 @@ from the same source:
 
 ```bash
 gcc -O2 -I/path/to/hegel-c -o my_test my_test.c \
-    -L/path/to/hegel-c/rust-version/target/release \
+    -L/path/to/hegel-c/build \
     -lhegel_c -lpthread -lm -ldl
 
 gcc -O2 -DHEGEL_BENCH_NOFORK -I/path/to/hegel-c -o my_test_nofork my_test.c \
-    -L/path/to/hegel-c/rust-version/target/release \
+    -L/path/to/hegel-c/build \
     -lhegel_c -lpthread -lm -ldl
 ```
 

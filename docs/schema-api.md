@@ -961,7 +961,7 @@ using the schema API.
 - `hegel_c.h` — base primitive FFI (draws, spans, asserts)
 - `hegel_gen.h` — schema system declarations (this API)
 - `hegel_gen.c` — schema system implementation (pure C, compiled
-  into `libhegel_c.a` via `cc` crate + `rust-version/build.rs`)
+  into `libhegel_c.a` by `make lib`)
 
 Users include `hegel_gen.h` and link `libhegel_c.a`. The primitive
 `hegel_c.h` is pulled in transitively.
