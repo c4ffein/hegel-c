@@ -691,7 +691,12 @@ void hegel_stop_span (hegel_testcase * tc, int discard)
 
 void hegel_note (hegel_testcase * tc, const char * msg)
 {
-  if (tc->final_replay) printf ("%s\n", msg);
+  if (tc->final_replay) {
+    printf ("%s\n", msg);
+    /* Flush now: crash-mode failures (a note's main audience) die by
+    ** SIGSEGV without unwinding, which would discard a buffered note. */
+    fflush (stdout);
+  }
 }
 
 void hegel_assume (hegel_testcase * tc, int condition)
