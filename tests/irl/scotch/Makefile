@@ -25,6 +25,14 @@ SCOTCH_LIB   ?=
 # `make HEGEL_TEST_ULIMIT=unlimited test-local` to keep cores.
 HEGEL_TEST_ULIMIT ?= 0
 
+# Env for the reducer-quality (shrink) tests.  The graphOrder bug reads
+# UNINITIALIZED heap memory inside Scotch, so whether a given input
+# crashes depends on heap garbage — nondeterministic across replays,
+# which trips the engine's flaky-test detector and aborts shrinking.
+# MALLOC_PERTURB_ makes glibc fill fresh allocations with a fixed byte
+# pattern: same input -> same garbage -> same outcome -> clean shrink.
+HEGEL_SHRINK_ENV ?= MALLOC_PERTURB_=170
+
 CC       = gcc
 MPICC    = mpicc
 CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) $(SCOTCH_INC) -funwind-tables -fexceptions
@@ -126,7 +134,7 @@ _run-tests: all check-license
 	for t in $(TESTS_SHRINK); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && timeout 120 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(HEGEL_SHRINK_ENV) timeout 120 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "FAIL — expected non-zero exit but got 0"; \
