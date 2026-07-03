@@ -38,7 +38,7 @@ Two execution modes:
 
 ## Build and test
 
-Prerequisites: GCC. That's it for using the library — the engine cdylib (`libhegel.so`) can be a prebuilt artifact from hegel-rust's GitHub releases. `make libhegel` builds it from the `inspiration/` clone instead, which needs cargo (the only place Rust appears, and only at build-from-source time).
+Prerequisites: GCC. That's it for using the library — the engine cdylib (`libhegel.so`) can be a prebuilt artifact from hegel-rust's GitHub releases. `make libhegel` builds it from source instead, from the `deps/hegel-rust` submodule (pinned to the engine version the runtime is verified against), which needs cargo (the only place Rust appears, and only at build-from-source time).
 
 Optional: `mpicc`/OpenMPI for MPI tests, Scotch/PT-Scotch for IRL tests.
 
@@ -234,10 +234,13 @@ MPI_Comm_spawn in singleton mode works with OpenMPI 5.x inside hegel fork childr
 
 ## Reference implementations
 
-`make inspiration` clones third-party repos into three categorized subdirs of `inspiration/`:
+The one build-critical dependency, **hegel-rust** (the engine source), is a pinned git submodule at **`deps/hegel-rust`** — see Build and test. Everything else is reference material: `make inspiration` clones sister bindings and study repos into three categorized subdirs of `inspiration/`, and symlinks `deps/hegel-rust` under `inspiration/hegel/hegel-rust` for discoverability (the symlink lives in the gitignored `inspiration/`, so it is never committed).
 
-**`inspiration/hegel/`** — sister hegel bindings + the engine + the canonical Agent Skill:
-- **hegel-rust**: home of the native engine AND the `hegel-c/` crate whose `libhegel` cdylib we sit on. `hegel-c/include/hegel.h` is the ABI contract; `hegel-c/examples/*.c` are canonical usage; `tests/common/utils.rs` has the `find_any`/`minimal()` test helpers our ported tests mirror.
+Bug-hunt targets (Linux subsets, Scotch) are not vendored either: `scripts/fetch-target.sh` reads a committed `target.conf` (repo + pinned fix-SHA + sparse paths) and materialises a minimal, gitignored checkout at `--state buggy|fixed` — the pin is committed, the GPL source never is.
+
+**`deps/hegel-rust`** (submodule) — home of the native engine AND the `hegel-c/` crate whose `libhegel` cdylib we sit on. `hegel-c/include/hegel.h` is the ABI contract; `hegel-c/examples/*.c` are canonical usage; `tests/common/utils.rs` has the `find_any`/`minimal()` test helpers our ported tests mirror.
+
+**`inspiration/hegel/`** — sister hegel bindings + the canonical Agent Skill:
 - **hegel-java / hegel-ocaml**: the other in-process bindings over libhegel (Java 22 FFM; OCaml ctypes with checksum-verified cdylib download). Closest design relatives to our core; OCaml's `lib/ffi/ffi.ml` + `lib/client.ml` is the cleanest small consumer.
 - **hegel-go / hegel-typescript / hegel-cpp**: still on the retired Python-server model as of 2026-06; expect them to migrate to libhegel.
 - **hegel-core**: the retired Python server. Kept because `docs/library-api.md` is still the schema-dialect spec `hegel_generate` accepts.
