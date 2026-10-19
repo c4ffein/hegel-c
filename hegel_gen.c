@@ -708,7 +708,8 @@ hegel_schema_self (void)
 }
 
 hegel_schema_t
-hegel_schema_bind (int binding_id, hegel_schema_t inner)
+hegel_schema_bind_named (int binding_id, const char * name,
+                         hegel_schema_t inner)
 {
   hegel_schema * s;
   int            ok;
@@ -755,7 +756,14 @@ hegel_schema_bind (int binding_id, hegel_schema_t inner)
   s->refcount = 1;
   s->bind_def.binding_id = binding_id;
   s->bind_def.inner = inner._raw;   /* transfer ownership */
+  s->bind_def.name = name;          /* literal, not owned */
   return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_bind (int binding_id, hegel_schema_t inner)
+{
+  return (hegel_schema_bind_named (binding_id, NULL, inner));
 }
 
 hegel_schema_t
@@ -824,8 +832,8 @@ hegel_schema_use_double (int binding_id)
 }
 
 hegel_schema_t
-hegel_schema_let_arr (int binding_id, hegel_schema_t length,
-                      hegel_schema_t elem)
+hegel_schema_let_arr_named (int binding_id, const char * name,
+                            hegel_schema_t length, hegel_schema_t elem)
 {
   hegel_schema * s;
   if (length._raw == NULL)
@@ -847,7 +855,15 @@ hegel_schema_let_arr (int binding_id, hegel_schema_t length,
   s->let_arr_def.binding_id = binding_id;
   s->let_arr_def.length     = length._raw;   /* transfer ownership */
   s->let_arr_def.elem       = elem._raw;     /* transfer ownership */
+  s->let_arr_def.name       = name;          /* literal, not owned */
   return (hegel_schema_t){s};
+}
+
+hegel_schema_t
+hegel_schema_let_arr (int binding_id, hegel_schema_t length,
+                      hegel_schema_t elem)
+{
+  return (hegel_schema_let_arr_named (binding_id, NULL, length, elem));
 }
 
 hegel_schema_t
@@ -1526,6 +1542,10 @@ typedef struct hegel__draw_ctx_s {
   int64_t          binding_values    [HEGEL__MAX_BINDINGS_PER_SCOPE];
   int              binding_kinds     [HEGEL__MAX_BINDINGS_PER_SCOPE];
   int              binding_array_lens[HEGEL__MAX_BINDINGS_PER_SCOPE];
+  /* Source-level names (string literals via HEGEL_LET's #name; NULL
+  ** for un-named dynamic binds).  Diagnostics only — lookup stays
+  ** id-based. */
+  const char *     binding_names     [HEGEL__MAX_BINDINGS_PER_SCOPE];
   int              binding_n;
   /* current_index is set by HEGEL_ARR_OF while iterating its elements,
   ** at the ctx of the struct where the ARR_OF appears.  HEGEL_USE_AT
@@ -1564,6 +1584,7 @@ hegel__draw_ctx_finalize (hegel__draw_ctx * ctx)
 
 static void
 hegel__draw_ctx_bind_full (hegel__draw_ctx * ctx, int binding_id,
+                           const char * name,
                            int kind, int64_t value, int array_len)
 {
   int i;
@@ -1574,6 +1595,16 @@ hegel__draw_ctx_bind_full (hegel__draw_ctx * ctx, int binding_id,
   ** the bug and let the second LET "win" with no warning. */
   for (i = 0; i < ctx->binding_n; i ++) {
     if (ctx->binding_ids[i] == binding_id) {
+      const char * shown = name ? name
+                         : (ctx->binding_names[i] ? ctx->binding_names[i]
+                                                  : NULL);
+      if (shown)
+        hegel__abort ("hegel__draw_ctx_bind: HEGEL_LET (%s) appears "
+                      "twice in the same scope (binding id=%d).  Each "
+                      "binding may only be HEGEL_LET once per struct "
+                      "instance; declare a separate HEGEL_BINDING for "
+                      "a second value.",
+                      shown, binding_id);
       hegel__abort ("hegel__draw_ctx_bind: HEGEL_LET for binding id=%d "
                     "appears twice in the same scope.  Each binding id "
                     "may only be HEGEL_LET once per struct instance; "
@@ -1590,14 +1621,15 @@ hegel__draw_ctx_bind_full (hegel__draw_ctx * ctx, int binding_id,
   ctx->binding_values    [ctx->binding_n] = value;
   ctx->binding_kinds     [ctx->binding_n] = kind;
   ctx->binding_array_lens[ctx->binding_n] = array_len;
+  ctx->binding_names     [ctx->binding_n] = name;
   ctx->binding_n ++;
 }
 
 static void
 hegel__draw_ctx_bind (hegel__draw_ctx * ctx, int binding_id,
-                      int kind, int64_t value)
+                      const char * name, int kind, int64_t value)
 {
-  hegel__draw_ctx_bind_full (ctx, binding_id, kind, value, 0);
+  hegel__draw_ctx_bind_full (ctx, binding_id, name, kind, value, 0);
 }
 
 static int
@@ -1752,7 +1784,8 @@ hegel__draw_let_side_effect (hegel_testcase * tc, hegel_schema * gen,
     }
   }
 
-  hegel__draw_ctx_bind (ctx, gen->bind_def.binding_id, bkind, stored);
+  hegel__draw_ctx_bind (ctx, gen->bind_def.binding_id,
+                        gen->bind_def.name, bkind, stored);
 }
 
 /* Side-effect-only draw for HEGEL_SCH_LET_ARR (non-positional):
@@ -1793,6 +1826,7 @@ hegel__draw_let_arr_side_effect (hegel_testcase * tc, hegel_schema * gen,
   hegel_stop_span (tc, 0);
 
   hegel__draw_ctx_bind_full (ctx, gen->let_arr_def.binding_id,
+                             gen->let_arr_def.name,
                              HEGEL__BKIND_INT_ARR,
                              (int64_t) (intptr_t) arr, n);
 }

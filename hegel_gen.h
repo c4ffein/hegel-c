@@ -328,6 +328,10 @@ struct hegel_schema {
       ** ctx.  Slot size/align come from `inner`. */
       int                   binding_id;
       struct hegel_schema * inner;
+      /* Binding name as written in source (HEGEL_LET stringifies it).
+      ** String literal — not owned, never freed.  NULL when built via
+      ** the un-named hegel_schema_bind; only used in diagnostics. */
+      const char *          name;
     }                                                  bind_def;
     struct {
       /* HEGEL_USE: reads the cached value for `binding_id` from the
@@ -364,6 +368,7 @@ struct hegel_schema {
       int                   binding_id;
       struct hegel_schema * length;   /* must produce int */
       struct hegel_schema * elem;     /* int-producing scalar today */
+      const char *          name;     /* diagnostic only; literal, not owned */
     }                                                  let_arr_def;
     struct {
       /* HEGEL_USE_AT: reads cached_arr[ctx_at_decl_scope.current_index]
@@ -685,6 +690,13 @@ hegel_schema_t hegel_schema_self (void);
 #define HEGEL_BINDING(name) enum { name = __COUNTER__ }
 
 hegel_schema_t hegel_schema_bind       (int binding_id, hegel_schema_t inner);
+/* _named variants carry the source-level binding name for diagnostics
+** (the re-LET abort prints it).  `name` must be a string literal or
+** otherwise outlive the schema — it is stored, not copied.  The
+** HEGEL_LET / HEGEL_LET_ARR macros pass #name automatically; the
+** un-named forms remain for callers building schemas dynamically. */
+hegel_schema_t hegel_schema_bind_named (int binding_id, const char * name,
+                                        hegel_schema_t inner);
 hegel_schema_t hegel_schema_use        (int binding_id);
 hegel_schema_t hegel_schema_use_i64    (int binding_id);
 hegel_schema_t hegel_schema_use_u64    (int binding_id);
@@ -692,16 +704,20 @@ hegel_schema_t hegel_schema_use_float  (int binding_id);
 hegel_schema_t hegel_schema_use_double (int binding_id);
 hegel_schema_t hegel_schema_let_arr    (int binding_id, hegel_schema_t length,
                                         hegel_schema_t elem);
+hegel_schema_t hegel_schema_let_arr_named (int binding_id, const char * name,
+                                        hegel_schema_t length,
+                                        hegel_schema_t elem);
 hegel_schema_t hegel_schema_use_at     (int binding_id);
 
-#define HEGEL_LET(name, inner) hegel_schema_bind       ((name), (inner))
+#define HEGEL_LET(name, inner) \
+    hegel_schema_bind_named ((name), #name, (inner))
 #define HEGEL_USE(name)        hegel_schema_use        ((name))
 #define HEGEL_USE_I64(name)    hegel_schema_use_i64    ((name))
 #define HEGEL_USE_U64(name)    hegel_schema_use_u64    ((name))
 #define HEGEL_USE_FLOAT(name)  hegel_schema_use_float  ((name))
 #define HEGEL_USE_DOUBLE(name) hegel_schema_use_double ((name))
 #define HEGEL_LET_ARR(name, length, elem) \
-    hegel_schema_let_arr ((name), (length), (elem))
+    hegel_schema_let_arr_named ((name), #name, (length), (elem))
 #define HEGEL_USE_AT(name)     hegel_schema_use_at     ((name))
 
 /* HEGEL_USE_PATH — explicit-path scalar / indexed array read.

@@ -63,6 +63,10 @@ TESTS_PASS = test_pass_simple \
              test_binding_shrink_jagged \
              test_binding_shrink_shadow \
              test_binding_shrink_arr_of_structs \
+             test_binding_shrink_use_in_cases \
+             test_binding_use_in_union \
+             test_binding_use_in_variant \
+             test_binding_use_in_optional \
              test_binding_widths \
              test_binding_let_arr \
              test_binding_jagged_3d \
@@ -71,7 +75,11 @@ TESTS_PASS = test_pass_simple \
              test_array_terminated \
              test_stateful_smoke \
              test_stateful_precond \
-             test_draw_bytes_smoke
+             test_draw_bytes_smoke \
+             test_isolated_pass \
+             test_collection_basic \
+             test_recursion_tree \
+             test_pool_basic
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -79,22 +87,26 @@ TESTS_FAIL = test_shrink_boundary \
              test_shrink_square \
              test_strategy_shrink \
              test_span_tree_json_shrinks \
-             test_stateful_shrink
+             test_stateful_shrink \
+             test_isolated_assert \
+             test_collection_shrink
 
 # Tests that should FAIL via crash isolation (exit non-zero)
 TESTS_CRASH = test_crash_segfault \
+              test_isolated_crash \
               test_crash_abort \
               test_crash_stackoverflow \
               test_binding_unresolved \
               test_binding_overflow \
               test_binding_width_mismatch \
               test_binding_use_at_no_iter \
+              test_binding_relet_abort \
               test_arr_of_raw_int_abort \
               test_terminated_sentinel_abort \
               test_array_len_prefixed_overflow
 
-# Tests that should fail via a HEGEL HEALTH-CHECK panic (e.g.
-# filter_too_much, large_base_example) — must exit non-zero AND
+# Tests that should fail via a health check (an engine one such as
+# filter_too_much, or hegel_health_fail) — must exit non-zero AND
 # emit a recognizable "Health check failure" message to stderr.
 # Stricter than the plain TESTS_FAIL category because we also
 # check the message is visible to the user.
@@ -104,9 +116,8 @@ TESTS_CRASH = test_crash_segfault \
 # ok" marker the test prints).
 TESTS_HEALTH = test_filter_too_much \
                test_filter_too_much_suite \
-               test_overflow_too_much \
-               test_overflow_too_much_suite \
-               test_schema_depth_health
+               test_schema_depth_health \
+               test_isolated_draw_inside
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)
 
@@ -218,9 +229,9 @@ test: all check-license
 check-license:
 	@missing=0; \
 	for f in $(REPO_ROOT)/hegel_c.h \
-	         $(REPO_ROOT)/core/hegel_runtime.c $(REPO_ROOT)/core/hegel_runner.c $(REPO_ROOT)/core/hegel_engine.c $(REPO_ROOT)/core/hegel_cbor.c \
+	         $(REPO_ROOT)/core/*.c $(REPO_ROOT)/core/*.h \
 	         *.c Makefile; do \
-		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:] MIT"; then \
 			echo "  MISSING: $$f"; \
 			missing=$$((missing + 1)); \
 		fi; \

@@ -48,12 +48,14 @@ static void * need (void * handle, const char * name, int * ok)
 {
   void * p = dlsym (handle, name);
   if (!p) {
-    fprintf (stderr, "hegel-c: libhegel is missing symbol %s (%s)\n",
-             name, dlerror ());
+    fprintf (stderr, "hegel-c: libhegel is missing symbol %s (%s) — is it older than "
+             "hegeltest-c 0.47?\n", name, dlerror ());
     *ok = 0;
   }
   return p;
 }
+
+#define BIND(field, sym) (*(void **) &e->field = need (h, sym, &ok))
 
 const hg_engine * hg_engine_get (void)
 {
@@ -76,47 +78,85 @@ const hg_engine * hg_engine_get (void)
 
   int ok = 1;
   hg_engine * e = &g_engine;
-  *(void **)&e->settings_new          = need (h, "hegel_settings_new", &ok);
-  *(void **)&e->settings_free         = need (h, "hegel_settings_free", &ok);
-  *(void **)&e->settings_test_cases   = need (h, "hegel_settings_test_cases", &ok);
-  *(void **)&e->settings_verbosity    = need (h, "hegel_settings_verbosity", &ok);
-  *(void **)&e->settings_seed         = need (h, "hegel_settings_seed", &ok);
-  *(void **)&e->settings_derandomize  = need (h, "hegel_settings_derandomize", &ok);
-  *(void **)&e->settings_report_multiple_failures
-                                      = need (h, "hegel_settings_report_multiple_failures", &ok);
-  *(void **)&e->settings_database     = need (h, "hegel_settings_database", &ok);
-  *(void **)&e->settings_phases       = need (h, "hegel_settings_phases", &ok);
-  *(void **)&e->settings_suppress_health_check
-                                      = need (h, "hegel_settings_suppress_health_check", &ok);
-  *(void **)&e->run_start             = need (h, "hegel_run_start", &ok);
-  *(void **)&e->next_test_case        = need (h, "hegel_next_test_case", &ok);
-  *(void **)&e->run_result            = need (h, "hegel_run_result", &ok);
-  *(void **)&e->run_free              = need (h, "hegel_run_free", &ok);
-  *(void **)&e->generate              = need (h, "hegel_generate", &ok);
-  *(void **)&e->start_span            = need (h, "hegel_start_span", &ok);
-  *(void **)&e->stop_span             = need (h, "hegel_stop_span", &ok);
-  *(void **)&e->new_pool              = need (h, "hegel_new_pool", &ok);
-  *(void **)&e->pool_add              = need (h, "hegel_pool_add", &ok);
-  *(void **)&e->pool_generate         = need (h, "hegel_pool_generate", &ok);
-  *(void **)&e->target                = need (h, "hegel_target", &ok);
-  *(void **)&e->mark_complete         = need (h, "hegel_mark_complete", &ok);
-  *(void **)&e->tc_is_final_replay    = need (h, "hegel_test_case_is_final_replay", &ok);
-  *(void **)&e->result_passed         = need (h, "hegel_run_result_passed", &ok);
-  *(void **)&e->result_failure_count  = need (h, "hegel_run_result_failure_count", &ok);
-  *(void **)&e->result_failure        = need (h, "hegel_run_result_failure", &ok);
-  *(void **)&e->failure_panic_message = need (h, "hegel_failure_panic_message", &ok);
-  *(void **)&e->failure_diagnostic    = need (h, "hegel_failure_diagnostic", &ok);
-  *(void **)&e->failure_origin        = need (h, "hegel_failure_origin", &ok);
-  *(void **)&e->failure_reproduction_blob
-                                      = need (h, "hegel_failure_reproduction_blob", &ok);
-  *(void **)&e->last_error_message    = need (h, "hegel_last_error_message", &ok);
-  *(void **)&e->version               = need (h, "hegel_version", &ok);
+  BIND (context_new,                "hegel_context_new");
+  BIND (context_last_error,         "hegel_context_last_error");
+  BIND (version,                    "hegel_version");
+  BIND (settings_new,               "hegel_settings_new");
+  BIND (settings_free,              "hegel_settings_free");
+  BIND (settings_set_test_cases,    "hegel_settings_set_test_cases");
+  BIND (settings_set_verbosity,     "hegel_settings_set_verbosity");
+  BIND (settings_set_seed,          "hegel_settings_set_seed");
+  BIND (settings_set_report_multiple_failures, "hegel_settings_set_report_multiple_failures");
+  BIND (settings_set_database,      "hegel_settings_set_database");
+  BIND (run_start,                  "hegel_run_start");
+  BIND (next_test_case,             "hegel_next_test_case");
+  BIND (run_result,                 "hegel_run_result");
+  BIND (run_result_free,            "hegel_run_result_free");
+  BIND (run_free,                   "hegel_run_free");
+  BIND (test_case_free,             "hegel_test_case_free");
+  BIND (test_case_should_capture,   "hegel_test_case_should_capture");
+  BIND (mark_complete,              "hegel_mark_complete");
+  BIND (start_span,                 "hegel_start_span");
+  BIND (stop_span,                  "hegel_stop_span");
+  BIND (target,                     "hegel_target");
+  BIND (generate_boolean,           "hegel_generate_boolean");
+  BIND (generate_integer,           "hegel_generate_integer");
+  BIND (generate_integer_big,       "hegel_generate_integer_big");
+  BIND (generate_float,             "hegel_generate_float");
+  BIND (generate_bytes,             "hegel_generate_bytes");
+  BIND (generate_bytes_result_free, "hegel_generate_bytes_result_free");
+  BIND (string_generator_text,      "hegel_string_generator_text");
+  BIND (string_generator_regex,     "hegel_string_generator_regex");
+  BIND (string_generator_free,      "hegel_string_generator_free");
+  BIND (generate_string,            "hegel_generate_string");
+  BIND (owned_string_free,          "hegel_owned_string_free");
+  BIND (new_collection,             "hegel_new_collection");
+  BIND (collection_more,            "hegel_collection_more");
+  BIND (collection_reject,          "hegel_collection_reject");
+  BIND (collection_free,            "hegel_collection_free");
+  BIND (new_recursion,              "hegel_new_recursion");
+  BIND (recursion_branch,           "hegel_recursion_branch");
+  BIND (recursion_leaf,             "hegel_recursion_leaf");
+  BIND (recursion_retry,            "hegel_recursion_retry");
+  BIND (recursion_finish,           "hegel_recursion_finish");
+  BIND (recursion_free,             "hegel_recursion_free");
+  BIND (new_pool,                   "hegel_new_pool");
+  BIND (pool_add,                   "hegel_pool_add");
+  BIND (pool_generate,              "hegel_pool_generate");
+  BIND (pool_restore,               "hegel_pool_restore");
+  BIND (pool_free,                  "hegel_pool_free");
+  BIND (new_state_machine,          "hegel_new_state_machine");
+  BIND (sm_next_group,              "hegel_state_machine_next_group");
+  BIND (sm_next_rule,               "hegel_state_machine_next_rule");
+  BIND (sm_rule_rejected,           "hegel_state_machine_rule_rejected");
+  BIND (sm_should_check_invariant,  "hegel_state_machine_should_check_invariant");
+  BIND (sm_free,                    "hegel_state_machine_free");
+  BIND (result_status,              "hegel_run_result_status");
+  BIND (result_error,               "hegel_run_result_error");
+  BIND (result_error_kind,          "hegel_run_result_error_kind");
+  BIND (result_failure_count,       "hegel_run_result_failure_count");
+  BIND (result_failure,             "hegel_run_result_failure");
+  BIND (failure_free,               "hegel_failure_free");
+  BIND (failure_origin,             "hegel_failure_origin");
+  BIND (failure_blob,               "hegel_failure_reproduction_blob");
+  BIND (failure_caveat,             "hegel_failure_caveat");
 
   if (!ok) {
     dlclose (h);
     g_failed = 1;
     return NULL;
   }
+  e->ctx = e->context_new ();
   g_handle = h;
   return &g_engine;
+}
+
+const char * hg_last_error (const hg_engine * e)
+{
+  static char buf[2048];
+  hg_str s = e->context_last_error (e->ctx);
+  size_t n = s.len < sizeof buf - 1 ? s.len : sizeof buf - 1;
+  if (n) memcpy (buf, s.data, n);
+  buf[n] = '\0';
+  return buf;
 }

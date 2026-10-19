@@ -3,24 +3,21 @@
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 
 /*
-** Stateful PBT: command-sequence testing.  Pure-C port of the run
-** loop previously in rust-version/src/stateful.rs.
+** Stateful PBT: command-sequence testing on the engine's state machine
+** (hegel_new_state_machine).  The engine owns rule selection — swarm
+** testing, the step budget, the stop decision — so sequences shrink
+** like every other Hegel frontend's; this file is the C driver loop,
+** shaped like hegel-rust's run_sequential.
 **
-** Why we own the loop instead of using an upstream stateful runner:
-** preconditions.  Rules whose precondition returns false are excluded
-** BEFORE the rule-index draw, so non-applicable rules are invisible
-** to the byte stream and don't pollute counterexample traces.  (The
-** first asn1 SEQUENCE subagent, 2026-04-30, showed why: close_X rules
-** that only fire when the top frame matches produced 0 completed
-** trees in 20 cases under equiprobable selection.)
+** Preconditions map onto rule rejection: when the engine picks a rule
+** whose precondition is false, the rule isn't run and the pick is
+** reported as rejected (it doesn't count toward the step budget).  A
+** rule body calling hegel_assume(false) is rejected the same way, via
+** the rule-level escape.  Real failures (HEGEL_ASSERT / crashes)
+** propagate to the case level.
 **
-** Rule-level escapes: a rule body calling hegel_assume(false) is
-** retried with another rule; a draw hitting the engine's choice
-** budget ends the case.  Both are caught here via tc->rule_escape —
-** the C analogue of stateful.rs's catch_unwind + panic-message match.
-** Real failures (HEGEL_ASSERT / crashes) propagate to the case level.
-**
-** V0 limits (unchanged): 32 rules, 32 invariants, nofork only.
+** Every engine call is a wire request, so this works unchanged in fork
+** mode (the default) and nofork mode.
 */
 
 #include "hegel_internal.h"
@@ -30,8 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_SLOTS 32
-#define MAX_STEPS 50
+#define MAX_SLOTS  64
+#define STEP_COUNT 50
 
 struct CStateMachine {
   void * (*setup)    (void);
@@ -99,21 +96,91 @@ int hegel_state_machine_add_invariant (
   return 0;
 }
 
+/* ---- Engine requests ---- */
+
+static int64_t sm_create (hegel_testcase * tc, hegel_state_machine * sm)
+{
+  hegel_buf p;
+  hegel__buf_init (&p);
+  uint32_t nr = (uint32_t) sm->n_rules, ni = (uint32_t) sm->n_invs;
+  int64_t steps = STEP_COUNT;
+  HEGEL_BUF_PUT (&p, nr);
+  HEGEL_BUF_PUT (&p, ni);
+  HEGEL_BUF_PUT (&p, steps);
+  for (int i = 0; i < sm->n_rules + sm->n_invs; i++) {
+    const char * name = i < sm->n_rules ? sm->rule_names[i] : sm->inv_names[i - sm->n_rules];
+    uint32_t l = (uint32_t) strlen (name);
+    HEGEL_BUF_PUT (&p, l);
+    hegel__buf_put (&p, name, l);
+  }
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_SM_NEW, p.data, (uint32_t) p.len, &r, 0);
+  int64_t id = 0;
+  if (r.len >= sizeof id) memcpy (&id, r.data, sizeof id);
+  hegel__buf_free (&p);
+  hegel__buf_free (&r);
+  return id;
+}
+
+static int64_t sm_i64 (hegel_testcase * tc, uint8_t op, int64_t id)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, op, &id, sizeof id, &r, 0);
+  int64_t v = 0;
+  if (r.len >= sizeof v) memcpy (&v, r.data, sizeof v);
+  hegel__buf_free (&r);
+  return v;
+}
+
+static int sm_check_inv (hegel_testcase * tc, int64_t id, int64_t inv)
+{
+  int64_t p[2] = { id, inv };
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_SM_CHECK_INV, p, sizeof p, &r, 0);
+  int v = r.len >= 1 && r.data[0];
+  hegel__buf_free (&r);
+  return v;
+}
+
 /* ---- The run loop ---- */
 
 /* The state machine under test for the current run — the run driver's
 ** body callback has no closure context in C. */
 static hegel_state_machine * g_active_sm = NULL;
 
-static void check_all_invariants (hegel_state_machine * sm, void * state,
-                                  hegel_testcase * tc)
+static void check_invariants (hegel_state_machine * sm, void * state, hegel_testcase * tc,
+                              int64_t machine)
 {
   for (int i = 0; i < sm->n_invs; i++)
-    sm->inv_fns[i] (state, tc);
+    if (machine < 0 || sm_check_inv (tc, machine, i))
+      sm->inv_fns[i] (state, tc);
+}
+
+/* Apply one rule; returns 0 if it was rejected by hegel_assume.  The
+** rule-level escape only catches ASSUME — FAIL / STOP / HEALTH are
+** routed to the case level by hegel__escape. */
+static int run_rule (hegel_state_machine * sm, int rule, void * state, hegel_testcase * tc)
+{
+  jmp_buf rule_env;
+  jmp_buf * saved = tc->rule_escape;
+  tc->rule_escape = &rule_env;
+  if (setjmp (rule_env) != 0) {
+    tc->rule_escape = saved;
+    return 0;
+  }
+  sm->rule_fns[rule] (state, tc);
+  tc->rule_escape = saved;
+  return 1;
 }
 
 static void run_one_case (hegel_testcase * tc)
 {
+  static uint64_t rule_label = 0;
+  if (!rule_label) rule_label = hegel_label ("hegel_c.stateful.rule");
+
   hegel_state_machine * sm = g_active_sm;
   if (sm->n_rules == 0) {
     hegel_health_fail ("hegel-c stateful: cannot run a machine with no rules");
@@ -128,85 +195,66 @@ static void run_one_case (hegel_testcase * tc)
     tc->cleanup_arg = state;
   }
 
-  hegel_note (tc, "Initial invariant check.");
-  check_all_invariants (sm, state, tc);
+  int64_t machine = sm_create (tc, sm);
 
-  /* Step cap: an unbounded draw capped at MAX_STEPS, mirroring the
-  ** upstream loop (lets the shrinker pull the sequence length down). */
-  tc->silent = 1;
-  int64_t unbounded_cap = hegel_draw_i64 (tc, 1, INT64_MAX);
-  tc->silent = 0;
-  int64_t step_cap = unbounded_cap < MAX_STEPS ? unbounded_cap : MAX_STEPS;
+  if (sm->n_invs) hegel_note (tc, "Checking invariants on the initial state.");
+  check_invariants (sm, state, tc, -1);
 
-  int64_t steps_ok = 0;
-  int64_t steps_attempted = 0;
-  int64_t step = 0;
-  int stopped = 0;
-
-  while (!stopped
-         && steps_ok < step_cap
-         && (steps_attempted < 10 * step_cap
-             || (steps_ok == 0 && steps_attempted < 1000))) {
-    step++;
-
-    int applicable[MAX_SLOTS];
-    int n_app = 0;
-    for (int i = 0; i < sm->n_rules; i++) {
-      bool ok = sm->rule_preconds[i] == NULL
-              || sm->rule_preconds[i] (state);
-      if (ok) applicable[n_app++] = i;
-    }
-
-    if (n_app == 0) {
-      hegel_note (tc, "No applicable rule from current state — ending case.");
+  long step = 0;
+  for (;;) {
+    hegel_start_span (tc, rule_label);
+    if (sm_i64 (tc, HEGEL_OP_SM_GROUP, machine) == HG_SM_DONE) {
+      hegel_stop_span (tc, 0);
       break;
     }
+    int round_rejected = 0;
+    for (;;) {
+      int64_t rule = sm_i64 (tc, HEGEL_OP_SM_RULE, machine);
+      if (rule == HG_SM_DONE) break;
+      if (rule < 0 || rule >= sm->n_rules) {
+        hegel_health_fail ("hegel-c stateful: engine returned an out-of-range rule index");
+        return;
+      }
+      if (sm->rule_preconds[rule] && !sm->rule_preconds[rule] (state)) {
+        sm_i64 (tc, HEGEL_OP_SM_REJECTED, machine);
+        round_rejected = 1;
+        continue;
+      }
 
-    int chosen_in_app = 0;
-    if (n_app > 1) {
-      tc->silent = 1;
-      chosen_in_app = hegel_draw_int (tc, 0, n_app - 1);
-      tc->silent = 0;
+      char line[256];
+      snprintf (line, sizeof line, "Step %ld: %s", ++step, sm->rule_names[rule]);
+      hegel_note (tc, line);
+
+      if (!run_rule (sm, (int) rule, state, tc)) {
+        sm_i64 (tc, HEGEL_OP_SM_REJECTED, machine);
+        round_rejected = 1;
+        hegel_note (tc, "  (rule stopped early: violated assumption)");
+      }
     }
-    int rule_idx = applicable[chosen_in_app];
-
-    if (tc->final_replay)
-      printf ("Step %lld: %s\n", (long long)step, sm->rule_names[rule_idx]);
-
-    /* Rule-level catch: ASSUME retries with another rule, STOP ends
-    ** the case.  FAIL never lands here — hegel__escape routes it to
-    ** the case level. */
-    jmp_buf rule_env;
-    jmp_buf * saved = tc->rule_escape;
-    tc->rule_escape = &rule_env;
-
-    int esc = setjmp (rule_env);
-    if (esc == 0) {
-      sm->rule_fns[rule_idx] (state, tc);
-      tc->rule_escape = saved;
-      steps_attempted++;
-      steps_ok++;
-      check_all_invariants (sm, state, tc);
-    } else {
-      tc->rule_escape = saved;
-      steps_attempted++;
-      if (esc == HEGEL_ESC_STOP) stopped = 1;
-      /* HEGEL_ESC_ASSUME: silently retry with another rule. */
-    }
+    hegel_stop_span (tc, round_rejected);
+    check_invariants (sm, state, tc, machine);
   }
 
-  /* Teardown is the driver-run tc->cleanup hook — not called here, so
-  ** it also covers FAIL escapes that never return to this frame.
-  **
-  ** A STOP mid-rule means the engine's budget is gone; end the case
-  ** through the normal overrun path (cleanup still runs). */
-  if (stopped) hegel__escape (tc, HEGEL_ESC_STOP);
+  if (sm->n_invs) hegel_note (tc, "Checking invariants on the final state.");
+  check_invariants (sm, state, tc, -1);
+  /* Teardown is the driver-run tc->cleanup hook; the machine handle is
+  ** released with the case's server state. */
+}
+
+static int run_machine (hegel_state_machine * sm, uint64_t n_cases, int use_fork)
+{
+  g_active_sm = sm;
+  int rc = hegel__run_property (run_one_case, n_cases, use_fork);
+  g_active_sm = NULL;
+  return rc;
 }
 
 void hegel_state_machine_run_n (hegel_state_machine * sm, uint64_t n_cases)
 {
-  g_active_sm = sm;
-  int rc = hegel__run_property_nofork (run_one_case, n_cases);
-  g_active_sm = NULL;
-  if (rc) exit (1);
+  if (run_machine (sm, n_cases, 1)) exit (1);
+}
+
+void hegel_state_machine_run_nofork_n (hegel_state_machine * sm, uint64_t n_cases)
+{
+  if (run_machine (sm, n_cases, 0)) exit (1);
 }
