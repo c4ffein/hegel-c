@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: 2026 c4ffein
+#
+# REUSE (https://reuse.software) licensing for files that cannot or do not
+# carry their own SPDX header. Files with an in-file header take precedence
+# ("closest"). Check with: make check-reuse
+version = 1
+
+# Adapted from Antithesis' hegel-skill (MIT), skills/hegel/.
+[[annotations]]
+path = [".claude/skills/hegel/SKILL.md", ".claude/skills/hegel/references/evolving-tests.md"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 Antithesis", "2026 c4ffein (modifications)"]
+SPDX-License-Identifier = "MIT"
+
+# Our own docs, notes, data and config files without headers.
+[[annotations]]
+path = [
+  "**/*.md",
+  "**/*.json",
+  "**/Cargo.lock",
+  ".gitignore",
+  ".gitmodules",
+  ".github/**",
+  "NOTES_BOT_SCOTCH",
+  "tools/*.js",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 c4ffein"
+SPDX-License-Identifier = "MIT"
+
+# Patches against Scotch (CeCILL-C): diff context is Scotch source.
+[[annotations]]
+path = "tests/irl/scotch/pins/*.patch"
+precedence = "override"
+SPDX-FileCopyrightText = ["IPB, Universite de Bordeaux, INRIA & CNRS", "2026 c4ffein (modifications)"]
+SPDX-License-Identifier = "CECILL-C"

@@ -3,25 +3,24 @@
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 
 /*
-** Test-case runtime: primitive draws, spans, assertions.
-**
-** Each draw has two paths selected by tc->mode:
-**   INPROC — encode a CBOR schema, call libhegel's hegel_generate,
-**            decode the CBOR value.
-**   CHILD  — send a framed request over the pipe; the fork parent
-**            (hegel_runner.c) performs the INPROC path on our behalf
-**            and sends the value back.
+** Test-body runtime: the public primitives (draws, spans, collections,
+** recursion, pools, notes, assume/fail, HEGEL_ISOLATED).  Every engine
+** operation is a wire request (hegel_internal.h) handed to hegel__call,
+** which picks the transport from tc->mode — a direct call into the
+** server (INPROC), or the fork parent's pipe (CHILD).  This file never
+** touches the engine itself.
 */
 
 #include "hegel_internal.h"
-#include "hegel_cbor.h"
 
 #include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 /* ---- Globals (single active test case per process by design) ---- */
 
@@ -68,52 +67,57 @@ int hegel__write_full (int fd, const void * buf, size_t n)
   return 0;
 }
 
-/* ---- Terminal outcomes ---- */
-
-void hegel__child_send_terminal (hegel_testcase * tc, int op)
+static void write_frame (int fd, uint8_t op, const void * payload, uint32_t len)
 {
-  hegel_msg_header h = { (uint8_t)op, {0,0,0}, 0 };
-  if (op == HEGEL_OP_FAIL) {
-    uint32_t olen = (uint32_t)strlen (hegel__fail_origin);
-    uint32_t mlen = (uint32_t)strlen (hegel__fail_msg);
-    h.len = 4 + olen + 4 + mlen;
-    hegel__write_full (tc->req_fd, &h, sizeof h);
-    hegel__write_full (tc->req_fd, &olen, 4);
-    hegel__write_full (tc->req_fd, hegel__fail_origin, olen);
-    hegel__write_full (tc->req_fd, &mlen, 4);
-    hegel__write_full (tc->req_fd, hegel__fail_msg, mlen);
-  } else if (op == HEGEL_OP_HEALTH) {
-    uint32_t mlen = (uint32_t)strlen (hegel__fail_msg);
-    h.len = mlen;
-    hegel__write_full (tc->req_fd, &h, sizeof h);
-    hegel__write_full (tc->req_fd, hegel__fail_msg, mlen);
-  } else {
-    hegel__write_full (tc->req_fd, &h, sizeof h);
+  hegel_msg_header h = { op, {0,0,0}, len };
+  if (hegel__write_full (fd, &h, sizeof h) != 0 ||
+      (len && hegel__write_full (fd, payload, len) != 0)) {
+    /* Parent vanished — nothing useful left to do. */
+    _exit (1);
   }
 }
 
-/* Escape from the test body with `code`.  In a fork child every code
-** except ASSUME/STOP-inside-a-rule means "send terminal message and
-** exit"; in nofork it's a longjmp to whichever handler applies. */
+/* ---- Terminal outcomes ---- */
+
+void hegel__send_terminal (int fd, int op)
+{
+  hegel_buf b;
+  hegel__buf_init (&b);
+  if (op == HEGEL_OP_FAIL) {
+    uint32_t olen = (uint32_t) strlen (hegel__fail_origin);
+    HEGEL_BUF_PUT (&b, olen);
+    hegel__buf_put (&b, hegel__fail_origin, olen);
+    hegel__buf_put (&b, hegel__fail_msg, strlen (hegel__fail_msg));
+  } else if (op == HEGEL_OP_HEALTH) {
+    hegel__buf_put (&b, hegel__fail_msg, strlen (hegel__fail_msg));
+  }
+  write_frame (fd, (uint8_t) op, b.data, (uint32_t) b.len);
+  hegel__buf_free (&b);
+}
+
+static int terminal_op (int code)
+{
+  switch (code) {
+    case HEGEL_ESC_FAIL:   return HEGEL_OP_FAIL;
+    case HEGEL_ESC_ASSUME: return HEGEL_OP_ASSUME;
+    case HEGEL_ESC_STOP:   return HEGEL_OP_STOPPED;
+    case HEGEL_ESC_HEALTH: return HEGEL_OP_HEALTH;
+    default:               return HEGEL_OP_DONE;
+  }
+}
+
+/* Escape from the test body with `code`.  In a forked body every code
+** except ASSUME-inside-a-rule means "send terminal message and exit";
+** in nofork it's a longjmp to whichever handler applies. */
 void hegel__escape (hegel_testcase * tc, int code)
 {
-  /* Rule-level catches: ASSUME / STOP inside a stateful rule return
-  ** control to the stateful loop in both modes. */
-  if (tc->rule_escape && (code == HEGEL_ESC_ASSUME || code == HEGEL_ESC_STOP)) {
-    longjmp (*tc->rule_escape, code);
-  }
+  /* Rule-level catch: ASSUME inside a stateful rule returns control to
+  ** the stateful loop in both modes. */
+  if (tc->rule_escape && code == HEGEL_ESC_ASSUME) longjmp (*tc->rule_escape, code);
 
-  if (tc->mode == HEGEL_TC_CHILD) {
-    int op;
-    switch (code) {
-      case HEGEL_ESC_FAIL:   op = HEGEL_OP_FAIL;   break;
-      case HEGEL_ESC_ASSUME: op = HEGEL_OP_ASSUME; break;
-      case HEGEL_ESC_STOP:   op = HEGEL_OP_STOPPED; break;
-      case HEGEL_ESC_HEALTH: op = HEGEL_OP_HEALTH; break;
-      default:               op = HEGEL_OP_DONE;   break;
-    }
-    fflush (NULL);  /* _exit discards stdio buffers — draw traces live there */
-    hegel__child_send_terminal (tc, op);
+  if (tc->mode == HEGEL_TC_CHILD || tc->mode == HEGEL_TC_ISO) {
+    fflush (NULL);  /* _exit discards stdio buffers */
+    hegel__send_terminal (tc->req_fd, terminal_op (code));
     _exit (0);
   }
 
@@ -124,374 +128,142 @@ void hegel__escape (hegel_testcase * tc, int code)
   abort ();
 }
 
-/* ---- Engine-call layer: schema encode + generate + value decode ---- */
-
-static void engine_hard_error (const hg_engine * e, const char * what)
+static void escape_health (hegel_testcase * tc, const char * msg)
 {
-  fprintf (stderr, "hegel-c: %s failed: %s\n", what, e->last_error_message ());
-  abort ();
+  snprintf (hegel__fail_msg, sizeof hegel__fail_msg, "%s", msg);
+  hegel__escape (tc, HEGEL_ESC_HEALTH);
 }
 
-/* Run hegel_generate; returns 0 ok / 1 stop; aborts on hard errors. */
-static int do_generate (const hg_engine * e, hg_tc * t,
-                        const uint8_t * schema, size_t schema_len,
-                        const uint8_t ** out_val, size_t * out_len,
-                        const char * what)
+/* ---- Transport ---- */
+
+void hegel__send (hegel_testcase * tc, uint8_t op, const void * payload, uint32_t len)
 {
-  int rc = e->generate (t, schema, schema_len, out_val, out_len);
-  if (rc == HG_OK) return 0;
-  if (rc == HG_E_STOP_TEST) return 1;
-  if (rc == HG_E_ASSUME) return 2;
-  engine_hard_error (e, what);
-  return 1;  /* unreachable */
-}
-
-int hegel__eng_draw_int (const hg_engine * e, hg_tc * t,
-                         int64_t min, int64_t max, int64_t * out)
-{
-  uint8_t schema[64];
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, sizeof schema);
-  hegel_cbor_write_map_header (&w, 3);
-  hegel_cbor_write_text_z (&w, "type");      hegel_cbor_write_text_z (&w, "integer");
-  hegel_cbor_write_text_z (&w, "min_value"); hegel_cbor_write_int (&w, min);
-  hegel_cbor_write_text_z (&w, "max_value"); hegel_cbor_write_int (&w, max);
-  int n = hegel_cbor_writer_finalize (&w);
-
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "integer draw");
-  if (g) return g;
-
-  hegel_cbor_reader r;
-  hegel_cbor_reader_init (&r, val, vlen);
-  if (hegel_cbor_read_int (&r, out) != HEGEL_CBOR_OK) {
-    fprintf (stderr, "hegel-c: integer draw returned non-integer CBOR\n");
-    abort ();
+  if (tc->mode == HEGEL_TC_INPROC) {
+    uint8_t st;
+    hegel_outcome dummy;
+    hegel__serve_op (tc->srv, op, payload, len, &st, NULL, &dummy);
+    return;
   }
-  return 0;
+  write_frame (tc->req_fd, op, payload, len);
 }
 
-int hegel__eng_draw_u64 (const hg_engine * e, hg_tc * t,
-                         uint64_t min, uint64_t max, uint64_t * out)
+int hegel__call (hegel_testcase * tc, uint8_t op, const void * payload, uint32_t len,
+                 hegel_buf * resp, int raw)
 {
-  uint8_t schema[64];
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, sizeof schema);
-  hegel_cbor_write_map_header (&w, 3);
-  hegel_cbor_write_text_z (&w, "type");      hegel_cbor_write_text_z (&w, "integer");
-  hegel_cbor_write_text_z (&w, "min_value"); hegel_cbor_write_uint (&w, min);
-  hegel_cbor_write_text_z (&w, "max_value"); hegel_cbor_write_uint (&w, max);
-  int n = hegel_cbor_writer_finalize (&w);
-
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "u64 draw");
-  if (g) return g;
-
-  hegel_cbor_reader r;
-  hegel_cbor_reader_init (&r, val, vlen);
-  if (hegel_cbor_read_uint (&r, out) != HEGEL_CBOR_OK) {
-    fprintf (stderr, "hegel-c: u64 draw returned non-uint CBOR\n");
-    abort ();
+  if (tc->iso_site || tc->mode == HEGEL_TC_ISO) {
+    char msg[512];
+    snprintf (msg, sizeof msg,
+              "hegel-c: engine call (op %u) inside HEGEL_ISOLATED at %s — draw everything "
+              "before the block (or control left the block via break/return)",
+              op, tc->iso_site ? tc->iso_site : "?");
+    escape_health (tc, msg);
   }
-  return 0;
-}
 
-int hegel__eng_draw_double (const hg_engine * e, hg_tc * t,
-                            double min, double max, int width, double * out)
-{
-  /* The engine defaults allow_nan / allow_infinity to TRUE — the
-  ** Hypothesis convention of "bounds imply no NaN" is the schema
-  ** author's job here.  A bounded draw must never return NaN. */
-  int allow_inf = (min == -1.0 / 0.0) || (max == 1.0 / 0.0)
-               || (min == 1.0 / 0.0)  || (max == -1.0 / 0.0);
-  uint8_t schema[160];
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, sizeof schema);
-  hegel_cbor_write_map_header (&w, 6);
-  hegel_cbor_write_text_z (&w, "type");      hegel_cbor_write_text_z (&w, "float");
-  hegel_cbor_write_text_z (&w, "min_value"); hegel_cbor_write_double (&w, min);
-  hegel_cbor_write_text_z (&w, "max_value"); hegel_cbor_write_double (&w, max);
-  hegel_cbor_write_text_z (&w, "width");     hegel_cbor_write_uint (&w, (uint64_t)width);
-  hegel_cbor_write_text_z (&w, "allow_nan");      hegel_cbor_write_bool (&w, false);
-  hegel_cbor_write_text_z (&w, "allow_infinity"); hegel_cbor_write_bool (&w, allow_inf);
-  int n = hegel_cbor_writer_finalize (&w);
+  hegel_buf scratch;
+  hegel__buf_init (&scratch);
+  hegel_buf * out = resp ? resp : &scratch;
+  out->len = 0;
+  uint8_t st;
 
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "float draw");
-  if (g) return g;
-
-  hegel_cbor_reader r;
-  hegel_cbor_reader_init (&r, val, vlen);
-  if (hegel_cbor_read_double (&r, out) != HEGEL_CBOR_OK) {
-    /* Bounded float ranges that contain integers may come back as
-    ** CBOR integers (the engine biases toward simple values). */
-    int64_t iv;
-    if (hegel_cbor_read_int (&r, &iv) == HEGEL_CBOR_OK) {
-      *out = (double)iv;
-      return 0;
+  if (tc->mode == HEGEL_TC_INPROC) {
+    hegel_outcome dummy;
+    hegel__serve_op (tc->srv, op, payload, len, &st, out, &dummy);
+  } else {
+    write_frame (tc->req_fd, op, payload, len);
+    hegel_msg_header h;
+    if (hegel__read_full (tc->resp_fd, &h, sizeof h) != 0) _exit (1);
+    st = h.op;
+    uint8_t chunk[256];
+    uint32_t left = h.len;
+    while (left) {
+      uint32_t n = left < sizeof chunk ? left : (uint32_t) sizeof chunk;
+      if (hegel__read_full (tc->resp_fd, chunk, n) != 0) _exit (1);
+      hegel__buf_put (out, chunk, n);
+      left -= n;
     }
-    fprintf (stderr, "hegel-c: float draw returned non-float CBOR\n");
-    abort ();
   }
-  return 0;
-}
 
-int hegel__eng_draw_bool (const hg_engine * e, hg_tc * t, int * out)
-{
-  uint8_t schema[32];
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, sizeof schema);
-  hegel_cbor_write_map_header (&w, 1);
-  hegel_cbor_write_text_z (&w, "type"); hegel_cbor_write_text_z (&w, "boolean");
-  int n = hegel_cbor_writer_finalize (&w);
-
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "bool draw");
-  if (g) return g;
-
-  hegel_cbor_reader r;
-  hegel_cbor_reader_init (&r, val, vlen);
-  bool b;
-  if (hegel_cbor_read_bool (&r, &b) != HEGEL_CBOR_OK) {
-    fprintf (stderr, "hegel-c: bool draw returned non-bool CBOR\n");
-    abort ();
+  if (!raw) {
+    if (st == HEGEL_RESP_STOP) {
+      hegel__buf_free (&scratch);
+      tc->stop_seen = 1;
+      hegel__escape (tc, HEGEL_ESC_STOP);
+    }
+    if (st == HEGEL_RESP_ASSUME) {
+      hegel__buf_free (&scratch);
+      hegel__escape (tc, HEGEL_ESC_ASSUME);
+    }
+    if (st == HEGEL_RESP_ERROR) {
+      size_t n = out->len < sizeof hegel__fail_msg - 1 ? out->len : sizeof hegel__fail_msg - 1;
+      memcpy (hegel__fail_msg, out->data, n);
+      hegel__fail_msg[n] = '\0';
+      hegel__buf_free (&scratch);
+      hegel__escape (tc, HEGEL_ESC_HEALTH);
+    }
   }
-  *out = b ? 1 : 0;
-  return 0;
+  hegel__buf_free (&scratch);
+  return st;
 }
 
-/* Decode a string value: the engine wraps strings in CBOR tag 91
-** (its WTF-8 marker) around a byte string; tolerate a plain text
-** string as well. */
-static int decode_string_value (const uint8_t * val, size_t vlen,
-                                const uint8_t ** out_ptr, size_t * out_len)
+/* Typed response readers. */
+static int64_t resp_i64 (const hegel_buf * b)
 {
-  hegel_cbor_reader r;
-  hegel_cbor_reader_init (&r, val, vlen);
-  hegel_cbor_type ty;
-  if (hegel_cbor_peek_type (&r, &ty) != HEGEL_CBOR_OK) return -1;
-  if (ty == HEGEL_CBOR_TYPE_TAG) {
-    uint64_t tag;
-    if (hegel_cbor_read_tag (&r, &tag) != HEGEL_CBOR_OK) return -1;
-    return hegel_cbor_read_bytes (&r, out_ptr, out_len) == HEGEL_CBOR_OK ? 0 : -1;
-  }
-  if (ty == HEGEL_CBOR_TYPE_TEXT) {
-    const char * p; size_t n;
-    if (hegel_cbor_read_text (&r, &p, &n) != HEGEL_CBOR_OK) return -1;
-    *out_ptr = (const uint8_t *)p;
-    *out_len = n;
-    return 0;
-  }
-  if (ty == HEGEL_CBOR_TYPE_BYTES)
-    return hegel_cbor_read_bytes (&r, out_ptr, out_len) == HEGEL_CBOR_OK ? 0 : -1;
-  return -1;
-}
-
-static int copy_capped_string (const uint8_t * src, size_t srclen,
-                               char * buf, int cap)
-{
-  if (cap < 1) return 0;
-  size_t n = srclen;
-  if (n > (size_t)(cap - 1)) n = (size_t)(cap - 1);
-  memcpy (buf, src, n);
-  buf[n] = '\0';
-  return (int)n;
-}
-
-int hegel__eng_draw_text_raw (const hg_engine * e, hg_tc * t,
-                              int64_t min, int64_t max,
-                              const uint8_t ** out, size_t * out_len)
-{
-  uint8_t schema[96];
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, sizeof schema);
-  /* min_codepoint=1 keeps NUL out of the alphabet — drawn strings are
-  ** C strings; an embedded '\0' would silently truncate them. */
-  hegel_cbor_write_map_header (&w, 4);
-  hegel_cbor_write_text_z (&w, "type");          hegel_cbor_write_text_z (&w, "string");
-  hegel_cbor_write_text_z (&w, "min_size");      hegel_cbor_write_int (&w, min);
-  hegel_cbor_write_text_z (&w, "max_size");      hegel_cbor_write_int (&w, max);
-  hegel_cbor_write_text_z (&w, "min_codepoint"); hegel_cbor_write_uint (&w, 1);
-  int n = hegel_cbor_writer_finalize (&w);
-
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "text draw");
-  if (g) return g;
-
-  if (decode_string_value (val, vlen, out, out_len) != 0) {
-    fprintf (stderr, "hegel-c: text draw returned undecodable CBOR\n");
-    abort ();
-  }
-  return 0;
-}
-
-int hegel__eng_draw_text (const hg_engine * e, hg_tc * t,
-                          int64_t min, int64_t max,
-                          char * buf, int cap, int * out_len)
-{
-  const uint8_t * s; size_t slen;
-  if (hegel__eng_draw_text_raw (e, t, min, max, &s, &slen)) return 1;
-  *out_len = copy_capped_string (s, slen, buf, cap);
-  return 0;
-}
-
-int hegel__eng_draw_bytes_raw (const hg_engine * e, hg_tc * t,
-                               int64_t min, int64_t max,
-                               const uint8_t ** out, size_t * out_len)
-{
-  uint8_t schema[96];
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, sizeof schema);
-  hegel_cbor_write_map_header (&w, 3);
-  hegel_cbor_write_text_z (&w, "type");     hegel_cbor_write_text_z (&w, "binary");
-  hegel_cbor_write_text_z (&w, "min_size"); hegel_cbor_write_int (&w, min);
-  hegel_cbor_write_text_z (&w, "max_size"); hegel_cbor_write_int (&w, max);
-  int n = hegel_cbor_writer_finalize (&w);
-
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "bytes draw");
-  if (g) return g;
-
-  if (decode_string_value (val, vlen, out, out_len) != 0) {
-    fprintf (stderr, "hegel-c: bytes draw returned undecodable CBOR\n");
-    abort ();
-  }
-  return 0;
-}
-
-int hegel__eng_draw_bytes (const hg_engine * e, hg_tc * t,
-                           int64_t min, int64_t max,
-                           uint8_t * buf, int cap, int * out_len)
-{
-  const uint8_t * s; size_t slen;
-  if (hegel__eng_draw_bytes_raw (e, t, min, max, &s, &slen)) return 1;
-  size_t out = slen;
-  if (cap >= 0 && out > (size_t)cap) out = (size_t)cap;
-  if (out) memcpy (buf, s, out);
-  *out_len = (int)out;
-  return 0;
-}
-
-int hegel__eng_draw_regex_raw (const hg_engine * e, hg_tc * t, const char * pattern,
-                               const uint8_t ** out, size_t * out_len)
-{
-  size_t patlen = strlen (pattern);
-  size_t schema_cap = 64 + patlen;
-  uint8_t * schema = malloc (schema_cap);
-  if (!schema) abort ();
-  hegel_cbor_writer w;
-  hegel_cbor_writer_init (&w, schema, schema_cap);
-  hegel_cbor_write_map_header (&w, 2);
-  hegel_cbor_write_text_z (&w, "type");    hegel_cbor_write_text_z (&w, "regex");
-  hegel_cbor_write_text_z (&w, "pattern"); hegel_cbor_write_text (&w, pattern, patlen);
-  int n = hegel_cbor_writer_finalize (&w);
-
-  const uint8_t * val; size_t vlen;
-  int g = do_generate (e, t, schema, (size_t)n, &val, &vlen, "regex draw");
-  free (schema);
-  if (g) return g;
-
-  if (decode_string_value (val, vlen, out, out_len) != 0) {
-    fprintf (stderr, "hegel-c: regex draw returned undecodable CBOR\n");
-    abort ();
-  }
-  return 0;
-}
-
-int hegel__eng_draw_regex (const hg_engine * e, hg_tc * t, const char * pattern,
-                           char * buf, int cap, int * out_len)
-{
-  const uint8_t * s; size_t slen;
-  if (hegel__eng_draw_regex_raw (e, t, pattern, &s, &slen)) return 1;
-  *out_len = copy_capped_string (s, slen, buf, cap);
-  return 0;
-}
-
-/* ---- Child-side request/response ---- */
-
-static void child_send_req (hegel_testcase * tc, uint8_t op,
-                            const void * payload, uint32_t len)
-{
-  hegel_msg_header h = { op, {0,0,0}, len };
-  if (hegel__write_full (tc->req_fd, &h, sizeof h) != 0 ||
-      (len && hegel__write_full (tc->req_fd, payload, len) != 0)) {
-    /* Parent vanished — nothing useful left to do. */
-    _exit (1);
-  }
-}
-
-/* Read a response header; returns 0 ok, escapes on STOP. */
-static void child_read_status (hegel_testcase * tc)
-{
-  uint8_t status[8];
-  if (hegel__read_full (tc->resp_fd, status, sizeof status) != 0) _exit (1);
-  if (status[0] == HEGEL_RESP_STOP) {
-    tc->stop_seen = 1;
-    hegel__escape (tc, HEGEL_ESC_STOP);
-  }
-  if (status[0] == HEGEL_RESP_ASSUME)
-    hegel__escape (tc, HEGEL_ESC_ASSUME);
-}
-
-static uint64_t child_req_scalar (hegel_testcase * tc, uint8_t op,
-                                  const void * payload, uint32_t len)
-{
-  child_send_req (tc, op, payload, len);
-  child_read_status (tc);
-  uint64_t v;
-  if (hegel__read_full (tc->resp_fd, &v, 8) != 0) _exit (1);
+  int64_t v = 0;
+  if (b->len >= sizeof v) memcpy (&v, b->data, sizeof v);
   return v;
 }
 
-/* Returns the (possibly capped) string/bytes length. */
-static int child_req_buffer (hegel_testcase * tc, uint8_t op,
-                             const void * payload, uint32_t plen,
-                             void * buf, int cap, int nul_terminate)
+static int resp_u8 (const hegel_buf * b)
 {
-  child_send_req (tc, op, payload, plen);
-  child_read_status (tc);
-  uint32_t len;
-  if (hegel__read_full (tc->resp_fd, &len, 4) != 0) _exit (1);
+  return b->len >= 1 ? b->data[0] : 0;
+}
 
-  /* Read the full payload, keeping only what fits. */
-  int keep_cap = nul_terminate ? (cap > 0 ? cap - 1 : 0) : (cap > 0 ? cap : 0);
-  uint32_t keep = len < (uint32_t)keep_cap ? len : (uint32_t)keep_cap;
-  if (keep && hegel__read_full (tc->resp_fd, buf, keep) != 0) _exit (1);
-  uint32_t rest = len - keep;
-  uint8_t sink[256];
-  while (rest > 0) {
-    uint32_t chunk = rest < sizeof sink ? rest : (uint32_t)sizeof sink;
-    if (hegel__read_full (tc->resp_fd, sink, chunk) != 0) _exit (1);
-    rest -= chunk;
+/* Call an op whose payload is `n` int64-sized fields. */
+static int call_ids (hegel_testcase * tc, uint8_t op, hegel_buf * resp, int n,
+                     int64_t a, int64_t b)
+{
+  int64_t p[2] = { a, b };
+  return hegel__call (tc, op, p, (uint32_t) (n * sizeof (int64_t)), resp, 0);
+}
+
+/* ---- Captured output: notes + draw traces ----
+**
+** One funnel for every line the runtime emits for a stamped (capture)
+** test case.  The line goes to the server as a NOTE frame — in fork
+** mode that frame is durable in the pipe the moment write() returns, so
+** the line survives even if the child segfaults right after.  The
+** runner prints a failure's captured lines when it reports it. */
+
+void hegel__emit_line (hegel_testcase * tc, const char * s)
+{
+  if (!tc->capture) return;
+  hegel__send (tc, HEGEL_OP_NOTE, s, (uint32_t) strlen (s));
+}
+
+static void trace (hegel_testcase * tc, const char * fmt, ...)
+  __attribute__ ((format (printf, 2, 3)));
+
+static void trace (hegel_testcase * tc, const char * fmt, ...)
+{
+  if (!tc->capture || tc->silent) return;
+  char small[256];
+  int pre = snprintf (small, sizeof small, "Draw %ld: ", tc->draw_count);
+  va_list ap;
+  va_start (ap, fmt);
+  int n = vsnprintf (small + pre, sizeof small - (size_t) pre, fmt, ap);
+  va_end (ap);
+  if (pre + n < (int) sizeof small) {
+    hegel__emit_line (tc, small);
+    return;
   }
-  if (nul_terminate && cap > 0) ((char *)buf)[keep] = '\0';
-  return (int)keep;
-}
-
-/* ---- Draw trace ---- */
-
-static void trace_i64 (hegel_testcase * tc, int64_t v)
-{
-  if (tc->final_replay && !tc->silent)
-    printf ("Draw %ld: %" PRId64 "\n", tc->draw_count, v);
-}
-
-static void trace_u64 (hegel_testcase * tc, uint64_t v)
-{
-  if (tc->final_replay && !tc->silent)
-    printf ("Draw %ld: %" PRIu64 "\n", tc->draw_count, v);
-}
-
-static void trace_double (hegel_testcase * tc, double v)
-{
-  if (tc->final_replay && !tc->silent)
-    printf ("Draw %ld: %g\n", tc->draw_count, v);
-}
-
-static void trace_str (hegel_testcase * tc, const char * s)
-{
-  if (tc->final_replay && !tc->silent)
-    printf ("Draw %ld: \"%s\"\n", tc->draw_count, s);
+  char * big = malloc ((size_t) (pre + n + 1));
+  if (!big) return;
+  memcpy (big, small, (size_t) pre);
+  va_start (ap, fmt);
+  vsnprintf (big + pre, (size_t) n + 1, fmt, ap);
+  va_end (ap);
+  hegel__emit_line (tc, big);
+  free (big);
 }
 
 /* ---- Public primitive draws ---- */
@@ -499,18 +271,12 @@ static void trace_str (hegel_testcase * tc, const char * s)
 static int64_t draw_integer (hegel_testcase * tc, int64_t min, int64_t max)
 {
   if (!tc->silent) tc->draw_count++;
-  int64_t v;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    int64_t payload[2] = { min, max };
-    v = (int64_t)child_req_scalar (tc, HEGEL_OP_DRAW_INT, payload, sizeof payload);
-  } else {
-    int _rc = hegel__eng_draw_int (tc->eng, tc->htc, min, max, &v);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  trace_i64 (tc, v);
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_DRAW_INT, &r, 2, min, max);
+  int64_t v = resp_i64 (&r);
+  hegel__buf_free (&r);
+  trace (tc, "%" PRId64, v);
   return v;
 }
 
@@ -527,18 +293,12 @@ int64_t hegel_draw_i64 (hegel_testcase * tc, int64_t min_val, int64_t max_val)
 uint64_t hegel_draw_u64 (hegel_testcase * tc, uint64_t min_val, uint64_t max_val)
 {
   if (!tc->silent) tc->draw_count++;
-  uint64_t v;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    uint64_t payload[2] = { min_val, max_val };
-    v = child_req_scalar (tc, HEGEL_OP_DRAW_U64, payload, sizeof payload);
-  } else {
-    int _rc = hegel__eng_draw_u64 (tc->eng, tc->htc, min_val, max_val, &v);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  trace_u64 (tc, v);
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_DRAW_U64, &r, 2, (int64_t) min_val, (int64_t) max_val);
+  uint64_t v = (uint64_t) resp_i64 (&r);
+  hegel__buf_free (&r);
+  trace (tc, "%" PRIu64, v);
   return v;
 }
 
@@ -547,22 +307,17 @@ size_t hegel_draw_usize (hegel_testcase * tc, size_t min_val, size_t max_val)
   return (size_t)hegel_draw_u64 (tc, min_val, max_val);
 }
 
-static double draw_floating (hegel_testcase * tc, double min, double max, int width)
+static double draw_floating (hegel_testcase * tc, double min, double max, uint32_t width)
 {
   if (!tc->silent) tc->draw_count++;
-  double v;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    struct { double min, max; uint64_t width; } payload = { min, max, (uint64_t)width };
-    uint64_t bits = child_req_scalar (tc, HEGEL_OP_DRAW_DOUBLE, &payload, sizeof payload);
-    memcpy (&v, &bits, sizeof v);
-  } else {
-    int _rc = hegel__eng_draw_double (tc->eng, tc->htc, min, max, width, &v);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  trace_double (tc, v);
+  struct __attribute__ ((packed)) { double min, max; uint32_t width; } p = { min, max, width };
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_DRAW_FLOAT, &p, sizeof p, &r, 0);
+  double v = 0;
+  if (r.len >= sizeof v) memcpy (&v, r.data, sizeof v);
+  hegel__buf_free (&r);
+  trace (tc, "%g", v);
   return v;
 }
 
@@ -576,24 +331,39 @@ double hegel_draw_double (hegel_testcase * tc, double min_val, double max_val)
   return draw_floating (tc, min_val, max_val, 64);
 }
 
+bool hegel_draw_bool (hegel_testcase * tc)
+{
+  if (!tc->silent) tc->draw_count++;
+  double p = 0.5;
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_DRAW_BOOL, &p, sizeof p, &r, 0);
+  bool v = resp_u8 (&r) != 0;
+  hegel__buf_free (&r);
+  trace (tc, "%s", v ? "true" : "false");
+  return v;
+}
+
+/* Copy a drawn string into the caller's buffer, capped. */
+static int copy_out (const hegel_buf * r, void * buf, int cap, int nul_terminate)
+{
+  int room = nul_terminate ? (cap > 0 ? cap - 1 : 0) : (cap > 0 ? cap : 0);
+  size_t n = r->len < (size_t) room ? r->len : (size_t) room;
+  if (n) memcpy (buf, r->data, n);
+  if (nul_terminate && cap > 0) ((char *) buf)[n] = '\0';
+  return (int) n;
+}
+
 int hegel_draw_text (hegel_testcase * tc, int min_size, int max_size,
                      char * buf, int capacity)
 {
   if (!tc->silent) tc->draw_count++;
-  int len;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    int64_t payload[2] = { min_size, max_size };
-    len = child_req_buffer (tc, HEGEL_OP_DRAW_TEXT, payload, sizeof payload,
-                            buf, capacity, 1);
-  } else {
-    int _rc = hegel__eng_draw_text (tc->eng, tc->htc, min_size, max_size,
-                              buf, capacity, &len);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  if (capacity > 0) trace_str (tc, buf);
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_DRAW_TEXT, &r, 2, min_size, max_size);
+  int len = copy_out (&r, buf, capacity, 1);
+  hegel__buf_free (&r);
+  if (capacity > 0) trace (tc, "\"%s\"", buf);
   return len;
 }
 
@@ -601,21 +371,12 @@ int hegel_draw_bytes (hegel_testcase * tc, int min_size, int max_size,
                       uint8_t * buf, int capacity)
 {
   if (!tc->silent) tc->draw_count++;
-  int len;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    int64_t payload[2] = { min_size, max_size };
-    len = child_req_buffer (tc, HEGEL_OP_DRAW_BYTES, payload, sizeof payload,
-                            buf, capacity, 0);
-  } else {
-    int _rc = hegel__eng_draw_bytes (tc->eng, tc->htc, min_size, max_size,
-                               buf, capacity, &len);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  if (tc->final_replay && !tc->silent)
-    printf ("Draw %ld: <%d bytes>\n", tc->draw_count, len);
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_DRAW_BYTES, &r, 2, min_size, max_size);
+  int len = copy_out (&r, buf, capacity, 0);
+  hegel__buf_free (&r);
+  trace (tc, "<%d bytes>", len);
   return len;
 }
 
@@ -623,80 +384,162 @@ int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
                       char * buf, int capacity)
 {
   if (!tc->silent) tc->draw_count++;
-  int len;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    len = child_req_buffer (tc, HEGEL_OP_DRAW_REGEX,
-                            pattern, (uint32_t)strlen (pattern),
-                            buf, capacity, 1);
-  } else {
-    int _rc = hegel__eng_draw_regex (tc->eng, tc->htc, pattern,
-                               buf, capacity, &len);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  if (capacity > 0) trace_str (tc, buf);
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_DRAW_REGEX, pattern, (uint32_t) strlen (pattern), &r, 0);
+  int len = copy_out (&r, buf, capacity, 1);
+  hegel__buf_free (&r);
+  if (capacity > 0) trace (tc, "\"%s\"", buf);
   return len;
-}
-
-/* Internal bool draw (no public hegel_draw_bool in the v0 API; used
-** by the legacy combinator generators and HEGEL_OPTIONAL). */
-int hegel__draw_bool (hegel_testcase * tc)
-{
-  if (!tc->silent) tc->draw_count++;
-  int v;
-  if (tc->mode == HEGEL_TC_CHILD) {
-    v = (int)child_req_scalar (tc, HEGEL_OP_DRAW_BOOL, NULL, 0);
-  } else {
-    int _rc = hegel__eng_draw_bool (tc->eng, tc->htc, &v);
-    if (_rc) {
-      if (_rc == 1) tc->stop_seen = 1;
-      hegel__escape (tc, _rc == 1 ? HEGEL_ESC_STOP : HEGEL_ESC_ASSUME);
-    }
-  }
-  if (tc->final_replay && !tc->silent)
-    printf ("Draw %ld: %s\n", tc->draw_count, v ? "true" : "false");
-  return v;
 }
 
 /* ---- Spans ---- */
 
+uint64_t hegel_label (const char * name)
+{
+  uint64_t h = 0xcbf29ce484222325ULL;   /* FNV-1a, as hegel_label_from_name */
+  for (const unsigned char * p = (const unsigned char *) name; *p; p++) {
+    h ^= *p;
+    h *= 0x100000001b3ULL;
+  }
+  return h;
+}
+
 void hegel_start_span (hegel_testcase * tc, uint64_t label)
 {
-  if (tc->mode == HEGEL_TC_CHILD) {
-    child_send_req (tc, HEGEL_OP_SPAN_START, &label, sizeof label);
-    child_read_status (tc);
-    uint64_t ack;
-    if (hegel__read_full (tc->resp_fd, &ack, 8) != 0) _exit (1);
-  } else {
-    tc->eng->start_span (tc->htc, label);
-  }
+  hegel__call (tc, HEGEL_OP_SPAN_START, &label, sizeof label, NULL, 0);
 }
 
 void hegel_stop_span (hegel_testcase * tc, int discard)
 {
-  if (tc->mode == HEGEL_TC_CHILD) {
-    uint64_t d = (uint64_t)(discard != 0);
-    child_send_req (tc, HEGEL_OP_SPAN_STOP, &d, sizeof d);
-    child_read_status (tc);
-    uint64_t ack;
-    if (hegel__read_full (tc->resp_fd, &ack, 8) != 0) _exit (1);
-  } else {
-    tc->eng->stop_span (tc->htc, discard != 0);
-  }
+  uint8_t d = discard != 0;
+  hegel__call (tc, HEGEL_OP_SPAN_STOP, &d, sizeof d, NULL, 0);
+}
+
+/* ---- Collections ---- */
+
+hegel_collection hegel_collection_new (hegel_testcase * tc, uint64_t min_size,
+                                       uint64_t max_size)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_COLL_NEW, &r, 2, (int64_t) min_size, (int64_t) max_size);
+  hegel_collection c = { resp_i64 (&r) };
+  hegel__buf_free (&r);
+  return c;
+}
+
+bool hegel_collection_more (hegel_testcase * tc, hegel_collection c)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_COLL_MORE, &r, 1, c.id, 0);
+  bool more = resp_u8 (&r) != 0;
+  hegel__buf_free (&r);
+  return more;
+}
+
+void hegel_collection_reject (hegel_testcase * tc, hegel_collection c)
+{
+  call_ids (tc, HEGEL_OP_COLL_REJECT, NULL, 1, c.id, 0);
+}
+
+void hegel_collection_free (hegel_testcase * tc, hegel_collection c)
+{
+  call_ids (tc, HEGEL_OP_COLL_FREE, NULL, 1, c.id, 0);
+}
+
+/* ---- Recursion ---- */
+
+hegel_recursion hegel_recursion_new (hegel_testcase * tc, uint64_t max_depth,
+                                     uint64_t max_leaves)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_REC_NEW, &r, 2, (int64_t) max_depth, (int64_t) max_leaves);
+  hegel_recursion rec = { resp_i64 (&r) };
+  hegel__buf_free (&r);
+  return rec;
+}
+
+bool hegel_recursion_branch (hegel_testcase * tc, hegel_recursion rec, uint64_t depth)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_REC_BRANCH, &r, 2, rec.id, (int64_t) depth);
+  bool b = resp_u8 (&r) != 0;
+  hegel__buf_free (&r);
+  return b;
+}
+
+int hegel_recursion_leaf (hegel_testcase * tc, hegel_recursion rec)
+{
+  return call_ids (tc, HEGEL_OP_REC_LEAF, NULL, 1, rec.id, 0) == HEGEL_RESP_RETRY;
+}
+
+void hegel_recursion_retry (hegel_testcase * tc, hegel_recursion rec)
+{
+  call_ids (tc, HEGEL_OP_REC_RETRY, NULL, 1, rec.id, 0);
+}
+
+int hegel_recursion_finish (hegel_testcase * tc, hegel_recursion rec)
+{
+  return call_ids (tc, HEGEL_OP_REC_FINISH, NULL, 1, rec.id, 0) == HEGEL_RESP_RETRY;
+}
+
+void hegel_recursion_free (hegel_testcase * tc, hegel_recursion rec)
+{
+  call_ids (tc, HEGEL_OP_REC_FREE, NULL, 1, rec.id, 0);
+}
+
+/* ---- Pools ---- */
+
+hegel_pool hegel_pool_new (hegel_testcase * tc)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_POOL_NEW, NULL, 0, &r, 0);
+  hegel_pool p = { resp_i64 (&r) };
+  hegel__buf_free (&r);
+  return p;
+}
+
+int64_t hegel_pool_add (hegel_testcase * tc, hegel_pool p)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_POOL_ADD, &r, 1, p.id, 0);
+  int64_t v = resp_i64 (&r);
+  hegel__buf_free (&r);
+  return v;
+}
+
+int64_t hegel_pool_draw (hegel_testcase * tc, hegel_pool p, bool consume)
+{
+  struct __attribute__ ((packed)) { int64_t id; uint8_t consume; } req = { p.id, consume };
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_POOL_DRAW, &req, sizeof req, &r, 0);
+  int64_t v = resp_i64 (&r);
+  hegel__buf_free (&r);
+  return v;
+}
+
+void hegel_pool_restore (hegel_testcase * tc, hegel_pool p, int64_t var)
+{
+  call_ids (tc, HEGEL_OP_POOL_RESTORE, NULL, 2, p.id, var);
+}
+
+void hegel_pool_free (hegel_testcase * tc, hegel_pool p)
+{
+  call_ids (tc, HEGEL_OP_POOL_FREE, NULL, 1, p.id, 0);
 }
 
 /* ---- Notes, assume, fail ---- */
 
 void hegel_note (hegel_testcase * tc, const char * msg)
 {
-  if (tc->final_replay) {
-    printf ("%s\n", msg);
-    /* Flush now: crash-mode failures (a note's main audience) die by
-    ** SIGSEGV without unwinding, which would discard a buffered note. */
-    fflush (stdout);
-  }
+  hegel__emit_line (tc, msg);
 }
 
 void hegel_assume (hegel_testcase * tc, int condition)
@@ -705,20 +548,27 @@ void hegel_assume (hegel_testcase * tc, int condition)
   hegel__escape (tc, HEGEL_ESC_ASSUME);
 }
 
-/* Fail with an explicit origin (used by HEGEL_ASSERT with file:line).
-** Not yet in the public header — hegel_fail covers the public ABI. */
 void hegel_fail_with_origin (const char * origin, const char * msg)
 {
   hegel_testcase * tc = hegel__current_tc;
   snprintf (hegel__fail_msg, sizeof hegel__fail_msg, "%s", msg ? msg : "(no message)");
-  snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "%s",
-            origin ? origin : "hegel_fail");
+  /* Inside a HEGEL_ISOLATED block the block is the origin: an assert there
+  ** and a crash there are the same bug, so they shrink as one. */
+  if (tc && tc->iso_site)
+    snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "HEGEL_ISOLATED at %s",
+              tc->iso_site);
+  else
+    snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "%s",
+              origin ? origin : "hegel_fail");
   if (!tc) {
     fprintf (stderr, "hegel-c: hegel_fail outside a test case: %s\n", hegel__fail_msg);
     abort ();
   }
-  if (tc->final_replay)
-    printf ("Property test failed: %s\n", hegel__fail_msg);
+  if (tc->capture) {
+    char line[1100];
+    snprintf (line, sizeof line, "Property test failed: %s", hegel__fail_msg);
+    hegel__emit_line (tc, line);
+  }
   hegel__escape (tc, HEGEL_ESC_FAIL);
 }
 
@@ -748,19 +598,143 @@ void hegel_health_fail (const char * msg)
 
 void hegel_target (hegel_testcase * tc, double value, const char * label)
 {
-  if (tc->mode == HEGEL_TC_CHILD) {
-    size_t llen = strlen (label);
-    size_t plen = 8 + llen;
-    uint8_t * payload = malloc (plen);
-    if (!payload) abort ();
-    memcpy (payload, &value, 8);
-    memcpy (payload + 8, label, llen);
-    child_send_req (tc, HEGEL_OP_TARGET, payload, (uint32_t)plen);
-    free (payload);
-    child_read_status (tc);
-    uint64_t ack;
-    if (hegel__read_full (tc->resp_fd, &ack, 8) != 0) _exit (1);
+  hegel_buf p;
+  hegel__buf_init (&p);
+  HEGEL_BUF_PUT (&p, value);
+  hegel__buf_put (&p, label, strlen (label));
+  hegel__call (tc, HEGEL_OP_TARGET, p.data, (uint32_t) p.len, NULL, 0);
+  hegel__buf_free (&p);
+}
+
+/* ---- HEGEL_ISOLATED ----
+**
+** The block's body runs where a crash can't take the run down with it:
+**
+**   nofork (INPROC) — fork here.  The child runs the body (mode ISO:
+**     notes and a verdict only) and the parent waits, relaying the
+**     child's notes into the capture and re-raising its verdict; a
+**     crash becomes a failure whose origin names the block.  The child
+**     inherits the whole address space copy-on-write, so the values
+**     drawn before the block are simply there — nothing is serialized.
+**   fork (CHILD) — the body already runs in a disposable child; run it
+**     inline, after telling the parent which block we're in so a crash
+**     is still attributed to it.
+**
+** In both modes an engine call inside the block is an authoring error
+** (health failure): the parent can't see draws made in a process that
+** may not survive. */
+
+static void report_iso_crash (hegel_testcase * tc, const char * site, int wstatus)
+{
+  if (WIFSIGNALED (wstatus)) {
+    int sig = WTERMSIG (wstatus);
+    snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "HEGEL_ISOLATED at %s", site);
+    snprintf (hegel__fail_msg, sizeof hegel__fail_msg,
+              "HEGEL_ISOLATED block at %s crashed with signal %d (%s)",
+              site, sig, strsignal (sig));
   } else {
-    tc->eng->target (tc->htc, value, label);
+    int code = WIFEXITED (wstatus) ? WEXITSTATUS (wstatus) : -1;
+    snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "HEGEL_ISOLATED at %s", site);
+    snprintf (hegel__fail_msg, sizeof hegel__fail_msg,
+              "HEGEL_ISOLATED block at %s exited without a verdict (exit code %d)",
+              site, code);
   }
+  if (tc->capture) {
+    char line[1100];
+    snprintf (line, sizeof line, "Property test failed: %s", hegel__fail_msg);
+    hegel__emit_line (tc, line);
+  }
+  hegel__escape (tc, HEGEL_ESC_FAIL);
+}
+
+int hegel__isolate_enter (hegel_testcase * tc, const char * site)
+{
+  if (tc->iso_site || tc->mode == HEGEL_TC_ISO) {
+    char msg[512];
+    snprintf (msg, sizeof msg, "hegel-c: nested HEGEL_ISOLATED at %s (outer block: %s)",
+              site, tc->iso_site ? tc->iso_site : "?");
+    escape_health (tc, msg);
+  }
+
+  if (tc->mode == HEGEL_TC_CHILD) {
+    hegel__send (tc, HEGEL_OP_ISO_SITE, site, (uint32_t) strlen (site));
+    tc->iso_site = site;
+    return 1;
+  }
+
+  int fds[2];
+  if (pipe (fds) != 0) {
+    fprintf (stderr, "hegel-c: pipe() failed\n");
+    exit (1);
+  }
+  fflush (stdout);
+  fflush (stderr);
+  pid_t pid = fork ();
+  if (pid < 0) {
+    fprintf (stderr, "hegel-c: fork() failed\n");
+    exit (1);
+  }
+  if (pid == 0) {
+    close (fds[0]);
+    tc->mode = HEGEL_TC_ISO;
+    tc->req_fd = fds[1];
+    tc->iso_site = site;
+    tc->escape = NULL;
+    tc->rule_escape = NULL;
+    tc->cleanup = NULL;
+    return 1;
+  }
+
+  /* Parent: relay notes, collect the verdict. */
+  close (fds[1]);
+  hegel_outcome out;
+  memset (&out, 0, sizeof out);
+  out.status = -1;
+  for (;;) {
+    hegel_msg_header h;
+    if (hegel__read_full (fds[0], &h, sizeof h) != 0) break;
+    uint8_t * payload = malloc (h.len ? h.len : 1);
+    if (!payload) abort ();
+    if (h.len && hegel__read_full (fds[0], payload, h.len) != 0) { free (payload); break; }
+    int done = 0;
+    if (h.op == HEGEL_OP_NOTE || h.op >= HEGEL_OP_DONE) {
+      uint8_t st;
+      done = hegel__serve_op (tc->srv, h.op, payload, h.len, &st, NULL, &out) == 2;
+    }
+    free (payload);
+    if (done) break;
+  }
+  close (fds[0]);
+  int wstatus = 0;
+  while (waitpid (pid, &wstatus, 0) < 0) { /* EINTR */ }
+
+  switch (out.status) {
+    case -1:
+      report_iso_crash (tc, site, wstatus);
+      break;
+    case HG_STATUS_VALID:
+      return 0;
+    case HG_STATUS_INTERESTING:
+      /* The child already captured its "Property test failed" line. */
+      snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "%s", out.origin);
+      snprintf (hegel__fail_msg, sizeof hegel__fail_msg, "%s", out.msg);
+      hegel__escape (tc, HEGEL_ESC_FAIL);
+      break;
+    default:
+      if (out.health) escape_health (tc, out.msg);
+      hegel__escape (tc, HEGEL_ESC_ASSUME);
+  }
+  return 0;
+}
+
+int hegel__isolate_leave (hegel_testcase * tc)
+{
+  if (tc->mode == HEGEL_TC_ISO) {
+    fflush (NULL);
+    hegel__send_terminal (tc->req_fd, HEGEL_OP_DONE);
+    _exit (0);
+  }
+  tc->iso_site = NULL;
+  hegel__send (tc, HEGEL_OP_ISO_SITE, "", 0);
+  return 0;
 }

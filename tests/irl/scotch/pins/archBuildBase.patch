@@ -1,0 +1,17 @@
+Our fix for the double-rebase in archDecoArchBuild() (arch_build.c), against
+the Scotch tree just before upstream 88750137.  mappdat.parttax is already a
+based array (rebased at arch_build.c:186), so the lookup must not subtract
+the base again.  Same one-liner upstream finally landed in 911ebdfb.
+Applied by scripts/scotch-worktree.sh (git apply) for the pin's fixed state.
+
+--- a/src/libscotch/arch_build.c
++++ b/src/libscotch/arch_build.c
+@@ -308,7 +308,7 @@
+     tgtvertnum = (tgtlistptr != NULL) ? tgtlistptr->vnumtab[termdomnum] : (termdomnum + tgtgrafptr->baseval);
+     termverttab[termdomnum].labl = tgtvertnum;
+     termverttab[termdomnum].wght = (tgtgrafptr->velotax != NULL) ? tgtgrafptr->velotax[tgtvertnum] : 1;
+-    termverttab[termdomnum].num  = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum - tgtgrafptr->baseval));
++    termverttab[termdomnum].num  = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum));
+     if (termverttab[termdomnum].num > termdommax) /* Find maximum terminal number */
+       termdommax = termverttab[termdomnum].num;
+   }

@@ -12,6 +12,9 @@
 extern "C" {
 #endif
 
+#define HEGEL__STR2(x) #x
+#define HEGEL__STR(x) HEGEL__STR2(x)
+
 /* ---- Test case handle ---- */
 
 /* Opaque handle — do not dereference in C */
@@ -32,6 +35,21 @@ typedef struct HegelTestCase hegel_testcase;
 */
 void hegel_set_case_setup (void (*setup_fn)(void));
 
+/* Fork mode for the fork runners (hegel_run_test*, suites, stateful):
+**   HEGEL_FORK_FAST  (default) each case is a fork of the runner.  Cheap,
+**                    but the child inherits the runner's heap, which differs
+**                    case to case: code that touches memory out of bounds
+**                    may then fail differently on replay (a
+**                    "nondeterministic failure" caveat, worse shrinking).
+**   HEGEL_FORK_CLEAN each case re-executes the test binary (fresh process,
+**                    ASLR off), so the same input sees the same memory.
+**                    main() is re-run with output muted up to the run being
+**                    tested, so it must reach the same runs in the same
+**                    order every time.  Linux only; ~1 exec per case.
+** HEGEL_C_FORK=fast|clean in the environment overrides this. */
+typedef enum { HEGEL_FORK_FAST = 0, HEGEL_FORK_CLEAN = 1 } hegel_fork_mode;
+void hegel_set_fork_mode (hegel_fork_mode mode);
+
 /* ---- Test runners ---- */
 
 /* Run a property test: test_fn is called once per generated test case.
@@ -41,14 +59,15 @@ void hegel_run_test (void (*test_fn)(hegel_testcase *));
 void hegel_run_test_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases);
 
 /* Same semantics but returns 0 on success, 1 on failure instead of
-** calling exit().  Allows running multiple tests in one binary while
-** sharing a single Hegel server process. */
+** calling exit().  Allows running multiple tests in one binary. */
 int hegel_run_test_result (void (*test_fn)(hegel_testcase *));
 int hegel_run_test_result_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases);
 
-/* Same as above but WITHOUT fork isolation.
-** NOT RECOMMENDED: a crash kills the process with no shrinking.
-** Provided for benchmarking fork overhead. */
+/* Same as above but WITHOUT per-case fork isolation: the body runs in
+** the runner's own process, so generation is a plain function call into
+** the engine.  A crash outside a HEGEL_ISOLATED block kills the run with
+** no shrinking — wrap the code under test in HEGEL_ISOLATED (below) to
+** get crash isolation exactly where it matters. */
 void hegel_run_test_nofork (void (*test_fn)(hegel_testcase *));
 void hegel_run_test_nofork_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases);
 
@@ -61,6 +80,7 @@ uint64_t hegel_draw_u64    (hegel_testcase * tc, uint64_t min_val, uint64_t max_
 size_t   hegel_draw_usize  (hegel_testcase * tc, size_t min_val, size_t max_val);
 float    hegel_draw_float  (hegel_testcase * tc, float min_val, float max_val);
 double   hegel_draw_double (hegel_testcase * tc, double min_val, double max_val);
+bool     hegel_draw_bool   (hegel_testcase * tc);
 
 /* Draw a random text string with length in [min_size, max_size].
 ** Writes a null-terminated string to buf.  Returns the string length
@@ -81,16 +101,16 @@ int hegel_draw_text  (hegel_testcase * tc, int min_size, int max_size,
 int hegel_draw_bytes (hegel_testcase * tc, int min_size, int max_size,
                       uint8_t * buf, int capacity);
 
-/* Draw a string matching a regex pattern.  Same return semantics as
+/* Draw a string the whole of which matches a regex pattern (Python `re`
+** syntax, full match; never contains NUL).  Same return semantics as
 ** hegel_draw_text. */
 int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
                       char * buf, int capacity);
 
 /* ---- Test suite ---- */
 
-/* A test suite runs multiple tests in one binary, sharing a single
-** Hegel server process.  This amortizes the ~1s server startup cost
-** across all tests instead of paying it per-binary.
+/* A test suite runs multiple tests in one binary; each test is its own
+** engine run.
 **
 ** Example:
 **   hegel_suite * s = hegel_suite_new ();
@@ -118,14 +138,14 @@ void          hegel_suite_free (hegel_suite * suite);
 **   - invariants: assertions checked after every successful rule
 **     application.  Use HEGEL_ASSERT inside an invariant to fail.
 **
-** The framework picks rules randomly and applies up to ~50 of them per
-** case.  Sequence shrinking (dropping rules, simplifying operands) is
-** what makes this kind of test catch interesting state-machine bugs
-** that single-shot property tests miss.
+** The engine's state machine picks the rules (swarm testing included)
+** and applies up to ~50 of them per case.  Sequence shrinking (dropping
+** rules, simplifying operands) is what makes this kind of test catch
+** interesting state-machine bugs that single-shot property tests miss.
+** A rule that calls hegel_assume(false), or whose precondition is false,
+** is rejected: the step doesn't count and another rule is picked.
 **
-** V0 limits:
-**   - up to 32 rules and 32 invariants per state machine
-**   - nofork mode only — fork-mode is a future addition
+** Limits: up to 64 rules and 64 invariants per state machine.
 **
 ** Example: integer stack
 **   typedef struct { int data[100]; int len; } stk_t;
@@ -158,19 +178,18 @@ hegel_state_machine * hegel_state_machine_new (
 
 void hegel_state_machine_free (hegel_state_machine * sm);
 
-/* Returns 0 on success, -1 if the rule/invariant table is full (32 slots). */
+/* Returns 0 on success, -1 if the rule/invariant table is full (64 slots). */
 int hegel_state_machine_add_rule (
     hegel_state_machine * sm, const char * name,
     void (*rule_fn) (void * state, hegel_testcase * tc));
 
-/* Add a rule with a precondition.  The precondition is evaluated
-** before each step; rules whose precondition returns false are
-** EXCLUDED from rule-index selection — invisible to the byte stream
-** (so they don't pollute counterexample traces).  Use this when a
-** rule's applicability is state-dependent (e.g. close_seq only when
-** a sequence is open; pop only when stack non-empty).  The
-** precondition MUST NOT mutate the state and MUST NOT call any
-** hegel_draw_* function — it's a pure observation. */
+/* Add a rule with a precondition.  When the engine picks a rule whose
+** precondition is false, the rule is not run and the pick is rejected
+** (it doesn't count as a step, and isn't printed in the
+** counterexample).  Use this when a rule's applicability is
+** state-dependent (e.g. close_seq only when a sequence is open; pop only
+** when stack non-empty).  The precondition MUST NOT mutate the state and
+** MUST NOT call any hegel_draw_* function — it's a pure observation. */
 int hegel_state_machine_add_rule_with_precondition (
     hegel_state_machine * sm, const char * name,
     bool (*precondition_fn) (const void * state),
@@ -180,15 +199,19 @@ int hegel_state_machine_add_invariant (
     hegel_state_machine * sm, const char * name,
     void (*invariant_fn) (const void * state, hegel_testcase * tc));
 
-/* Run the state machine for n_cases.  V0 is nofork-only — a crash
-** in a rule body kills the process. */
+/* Run the state machine for n_cases, each case in a forked child (a
+** crash in a rule body is a shrinkable failure); exit(1) on failure. */
 void hegel_state_machine_run_n (hegel_state_machine * sm, uint64_t n_cases);
+
+/* Same without per-case fork isolation (see hegel_run_test_nofork). */
+void hegel_state_machine_run_nofork_n (hegel_state_machine * sm, uint64_t n_cases);
 
 /* ---- Debug output ---- */
 
-/* Print a message during the final replay of a failing test case only.
-** Does nothing during generation and shrinking — use this to annotate
-** the minimal counterexample with computed values.
+/* Attach a line to the counterexample report: printed with the minimal
+** failing test case only (the engine stamps the executions whose output
+** can end up in the report; everything else is dropped) — use this to
+** annotate the minimal counterexample with computed values.
 ** Example:
 **   char buf[128];
 **   snprintf(buf, sizeof(buf), "computed hash = %u", hash);
@@ -220,10 +243,12 @@ void hegel_note (hegel_testcase * tc, const char * msg);
 **   }
 **   hegel_stop_span(tc, 0);
 **
-** `label` identifies the kind of span.  Built-in labels mirror
-** hegeltest's internal labels (LIST, ONE_OF, etc.) so the server
-** treats them the same as native generators.  User code should use
-** values >= HEGEL_SPAN_USER to avoid colliding with built-ins. */
+** `label` identifies the generator that opened the span: the engine
+** treats spans with the same label as candidates for swapping and
+** duplicating, and does nothing else with them.  Derive labels from
+** names with hegel_label("mylib.thing") so differently-shaped
+** generators get different labels; the HEGEL_SPAN_* constants are
+** small legacy identities kept for existing callers. */
 
 #define HEGEL_SPAN_LIST          1
 #define HEGEL_SPAN_LIST_ELEMENT  2
@@ -242,12 +267,121 @@ void hegel_note (hegel_testcase * tc, const char * msg);
 #define HEGEL_SPAN_ENUM_VARIANT 15
 #define HEGEL_SPAN_USER       1024  /* user labels start here */
 
+/* The span label for a generator name: 64-bit FNV-1a of the name's
+** bytes, as libhegel's hegel_label_from_name.  Pure — callable anywhere,
+** including at file scope via a static initializer function. */
+uint64_t hegel_label (const char * name);
+
 void hegel_start_span (hegel_testcase * tc, uint64_t label);
 
 /* End the current span.  Pass 0 for `discard` in normal use.
 ** Pass non-zero only when the span turned out to be a dead end
 ** (e.g. filtered out) so the shrinker can ignore its bytes. */
 void hegel_stop_span  (hegel_testcase * tc, int discard);
+
+/* ---- Collections ----
+**
+** For variable-length values the ENGINE decides how many elements to
+** produce: loop on hegel_collection_more, drawing one element per true.
+** Shrinking then deletes elements directly — prefer this over drawing a
+** length and looping.  hegel_collection_reject tells the engine the last
+** element was invalid (e.g. a duplicate) so it can draw another.
+**
+**   hegel_collection c = hegel_collection_new (tc, 0, 10);
+**   while (hegel_collection_more (tc, c)) items[n++] = hegel_draw_int (tc, 0, 99);
+**   hegel_collection_free (tc, c);
+**
+** Handles are freed automatically at the end of the test case if the
+** body escaped (failure, assume) before freeing them. */
+
+typedef struct { int64_t id; } hegel_collection;
+
+hegel_collection hegel_collection_new    (hegel_testcase * tc, uint64_t min_size,
+                                          uint64_t max_size);  /* UINT64_MAX = unbounded */
+bool             hegel_collection_more   (hegel_testcase * tc, hegel_collection c);
+void             hegel_collection_reject (hegel_testcase * tc, hegel_collection c);
+void             hegel_collection_free   (hegel_testcase * tc, hegel_collection c);
+
+/* ---- Recursion ----
+**
+** One recursive value (a tree, an expression) per hegel_recursion_new;
+** the engine owns branch probabilities, depth and leaf budgets, so
+** recursive values shrink and distribute like every other Hegel
+** frontend's.  Protocol, starting with the root at depth 0:
+**   - hegel_recursion_branch(depth): true -> build a branch, drawing its
+**     children at depth+1 with this same protocol; false -> a leaf:
+**   - hegel_recursion_leaf: 0 -> draw the leaf; 1 -> the attempt
+**     outgrew its budget: unwind without drawing anything more, call
+**     hegel_recursion_retry (which discards the case once attempts are
+**     exhausted), and start again from the root.
+**   - hegel_recursion_finish once the root is complete: 0 -> keep the
+**     value; 1 -> the engine discarded it: start again from the root
+**     (WITHOUT calling retry). */
+
+typedef struct { int64_t id; } hegel_recursion;
+
+hegel_recursion hegel_recursion_new    (hegel_testcase * tc, uint64_t max_depth,
+                                        uint64_t max_leaves);
+bool            hegel_recursion_branch (hegel_testcase * tc, hegel_recursion r, uint64_t depth);
+int             hegel_recursion_leaf   (hegel_testcase * tc, hegel_recursion r);
+void            hegel_recursion_retry  (hegel_testcase * tc, hegel_recursion r);
+int             hegel_recursion_finish (hegel_testcase * tc, hegel_recursion r);
+void            hegel_recursion_free   (hegel_testcase * tc, hegel_recursion r);
+
+/* ---- Variable pools ----
+**
+** A pool tracks ids of values the test generated earlier (typically in
+** stateful tests: "act on some existing handle").  hegel_pool_add
+** returns a fresh id to associate with the value just made;
+** hegel_pool_draw lets the engine pick (and shrink) which earlier id to
+** reuse — consume=true removes it.  Drawing from an empty pool discards
+** the case.  Ids are stable while shrinking. */
+
+typedef struct { int64_t id; } hegel_pool;
+
+hegel_pool hegel_pool_new     (hegel_testcase * tc);
+int64_t    hegel_pool_add     (hegel_testcase * tc, hegel_pool p);
+int64_t    hegel_pool_draw    (hegel_testcase * tc, hegel_pool p, bool consume);
+void       hegel_pool_restore (hegel_testcase * tc, hegel_pool p, int64_t var);
+void       hegel_pool_free    (hegel_testcase * tc, hegel_pool p);
+
+/* ---- Crash isolation for a block: HEGEL_ISOLATED ----
+**
+** Generate first, then run the code under test in a block that may
+** crash without taking the run down:
+**
+**   Graph * g = gen_graph (tc);              // draws: talk to the engine
+**   HEGEL_ISOLATED (tc) {                    // no draws in here
+**     int r = graph_build (g);
+**     HEGEL_ASSERT (r == 0, "build failed: %d", r);
+**   }
+**
+** Under hegel_run_test_nofork the block runs in a forked child that sees
+** every value drawn before it (copy-on-write — nothing is serialized);
+** a crash there is a failure whose origin names the block, and it
+** shrinks like any other.  HEGEL_ASSERT / hegel_assume / hegel_note
+** inside the block work as usual.  Under the fork runners the whole case
+** is already isolated, so the block runs inline.
+**
+** The block is one bug: every failure inside it — crash, abort,
+** HEGEL_ASSERT, hegel_fail — reports origin "HEGEL_ISOLATED at file:line"
+** (the message still says which).  So code whose one bug shows up as a
+** crash on some runs and a bad result on others (memory garbage decides)
+** shrinks as one failure: put the call AND its check in the block.  Two
+** asserts that witness different bugs belong in different blocks, or
+** after the block.  HEGEL_C_MERGE_ORIGINS=1 in the environment does the
+** same for a whole run, with no code change (and merges distinct bugs).
+**
+** Rules: no hegel_draw_* / span / collection calls inside the block (a
+** health failure says so), no nesting, and don't leave the block with
+** break / return / goto. */
+
+#define HEGEL_ISOLATED(tc) \
+  for (int hegel__iso_ = hegel__isolate_enter ((tc), __FILE__ ":" HEGEL__STR (__LINE__)); \
+       hegel__iso_; hegel__iso_ = hegel__isolate_leave (tc))
+
+int hegel__isolate_enter (hegel_testcase * tc, const char * site);
+int hegel__isolate_leave (hegel_testcase * tc);
 
 /* ---- Assertions and assumptions ---- */
 
@@ -305,8 +439,6 @@ void hegel_health_fail (const char * msg);
 ** asserts are tracked as distinct bugs even when the formatted message
 ** varies with the drawn values.
 */
-#define HEGEL__STR2(x) #x
-#define HEGEL__STR(x) HEGEL__STR2(x)
 #define HEGEL_ASSERT(cond, ...) \
   do { \
     if (!(cond)) { \

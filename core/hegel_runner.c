@@ -7,16 +7,20 @@
 ** test-body transports —
 **
 **   fork mode (default): each test case runs in a freshly forked
-**   child; the parent serves its draw requests over a pipe pair and
-**   converts the child's terminal message (or its crash) into a
-**   test-case status for the engine.
+**   child; the parent serves its requests over a pipe pair and converts
+**   the child's terminal message (or its crash) into a test-case status
+**   for the engine.
 **
-**   nofork mode: the body runs in-process; failures longjmp back
-**   here.  No crash isolation.
+**   nofork mode: the body runs in-process and calls the server
+**   directly; failures longjmp back here.  No crash isolation (outside
+**   HEGEL_ISOLATED blocks).
 **
-** Plus the suite API, which is now just a loop — there is no server
-** process left to amortize, but the API keeps multi-test binaries
-** working unchanged.
+** Failure output follows the engine's capture contract: only test cases
+** the engine stamps (hegel_test_case_should_capture) record their notes
+** and draw traces; a stamped case that fails stores its lines under its
+** origin, and the report prints, for each failure the run surfaced, the
+** lines of the last stamped execution with that origin (the final
+** replay of the minimal example).
 */
 
 #include "hegel_internal.h"
@@ -28,221 +32,271 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
+#ifdef __linux__
+#include <sys/personality.h>
+#endif
 
 #define HEGEL_DEFAULT_CASES 100
 
-/* ---- Per-case outcome collected by the drivers ---- */
+/* ---- Captured failure reports, keyed by origin ---- */
 
 typedef struct {
-  int  status;        /* HG_STATUS_*, or -1 = no terminal message (crash?) */
-  int  health;        /* hegel_health_fail fired — abort the whole run     */
-  char origin[512];
-  char msg[1024];
-} case_outcome;
+  char * origin;
+  char * msg;
+  char * lines;
+} captured;
+
+static captured * g_caps = NULL;
+static int        g_n_caps = 0;
+
+static void capture_store (const char * origin, const char * msg, char * lines)
+{
+  for (int i = 0; i < g_n_caps; i++)
+    if (strcmp (g_caps[i].origin, origin) == 0) {
+      free (g_caps[i].msg);
+      free (g_caps[i].lines);
+      g_caps[i].msg = strdup (msg);
+      g_caps[i].lines = lines;
+      return;
+    }
+  g_caps = realloc (g_caps, (size_t) (g_n_caps + 1) * sizeof *g_caps);
+  if (!g_caps) abort ();
+  g_caps[g_n_caps].origin = strdup (origin);
+  g_caps[g_n_caps].msg = strdup (msg);
+  g_caps[g_n_caps].lines = lines;
+  g_n_caps++;
+}
+
+static const captured * capture_find (const char * origin, size_t len)
+{
+  for (int i = 0; i < g_n_caps; i++)
+    if (strlen (g_caps[i].origin) == len && memcmp (g_caps[i].origin, origin, len) == 0)
+      return &g_caps[i];
+  return NULL;
+}
+
+static void capture_clear (void)
+{
+  for (int i = 0; i < g_n_caps; i++) {
+    free (g_caps[i].origin);
+    free (g_caps[i].msg);
+    free (g_caps[i].lines);
+  }
+  free (g_caps);
+  g_caps = NULL;
+  g_n_caps = 0;
+}
 
 /* ---- Fork-mode parent: serve one child's requests ---- */
 
-/* Map an engine-layer draw result (0 ok / 1 stop / 2 assume) to a
-** wire status byte. */
-static uint8_t rc_status (int rc)
+static void serve_child (hegel_case_srv * srv, int req_fd, int resp_fd, hegel_outcome * out)
 {
-  if (rc == 1) return HEGEL_RESP_STOP;
-  if (rc == 2) return HEGEL_RESP_ASSUME;
-  return HEGEL_RESP_OK;
-}
-
-static void serve_reply_scalar (int resp_fd, int rc, uint64_t value)
-{
-  uint8_t head[8] = {0};
-  head[0] = rc_status (rc);
-  hegel__write_full (resp_fd, head, sizeof head);
-  if (rc == 0) hegel__write_full (resp_fd, &value, 8);
-}
-
-static void serve_reply_buffer (int resp_fd, int rc, const uint8_t * p, size_t n)
-{
-  uint8_t head[8] = {0};
-  head[0] = rc_status (rc);
-  hegel__write_full (resp_fd, head, sizeof head);
-  if (rc == 0) {
-    uint32_t len = (uint32_t)n;
-    hegel__write_full (resp_fd, &len, 4);
-    if (n) hegel__write_full (resp_fd, p, n);
-  }
-}
-
-static void serve_child (const hg_engine * eng, hg_tc * htc,
-                         int req_fd, int resp_fd, case_outcome * out)
-{
-  out->status = -1;
-  out->health = 0;
-  out->origin[0] = '\0';
-  out->msg[0] = '\0';
-  int served_stop = 0;
-
-  uint8_t small[4096];
+  hegel_buf payload, resp;
+  hegel__buf_init (&payload);
+  hegel__buf_init (&resp);
 
   for (;;) {
     hegel_msg_header h;
-    if (hegel__read_full (req_fd, &h, sizeof h) != 0) return;  /* EOF */
-
-    uint8_t * payload = small;
-    if (h.len > sizeof small) {
-      payload = malloc (h.len);
-      if (!payload) return;
+    if (hegel__read_full (req_fd, &h, sizeof h) != 0) break;  /* EOF: crash */
+    payload.len = 0;
+    uint8_t chunk[4096];
+    uint32_t left = h.len;
+    int eof = 0;
+    while (left) {
+      uint32_t n = left < sizeof chunk ? left : (uint32_t) sizeof chunk;
+      if (hegel__read_full (req_fd, chunk, n) != 0) { eof = 1; break; }
+      hegel__buf_put (&payload, chunk, n);
+      left -= n;
     }
-    if (h.len && hegel__read_full (req_fd, payload, h.len) != 0) {
-      if (payload != small) free (payload);
-      return;
-    }
+    if (eof) break;
 
-    switch (h.op) {
-      case HEGEL_OP_DRAW_INT: {
-        int64_t mm[2];
-        memcpy (mm, payload, sizeof mm);
-        int64_t v = 0;
-        int rc = hegel__eng_draw_int (eng, htc, mm[0], mm[1], &v);
-        if (rc == 1) served_stop = 1;
-        serve_reply_scalar (resp_fd, rc, (uint64_t)v);
-        break;
-      }
-      case HEGEL_OP_DRAW_U64: {
-        uint64_t mm[2];
-        memcpy (mm, payload, sizeof mm);
-        uint64_t v = 0;
-        int rc = hegel__eng_draw_u64 (eng, htc, mm[0], mm[1], &v);
-        if (rc == 1) served_stop = 1;
-        serve_reply_scalar (resp_fd, rc, v);
-        break;
-      }
-      case HEGEL_OP_DRAW_DOUBLE: {
-        struct { double min, max; uint64_t width; } p;
-        memcpy (&p, payload, sizeof p);
-        double v = 0;
-        int rc = hegel__eng_draw_double (eng, htc, p.min, p.max, (int)p.width, &v);
-        if (rc == 1) served_stop = 1;
-        uint64_t bits;
-        memcpy (&bits, &v, 8);
-        serve_reply_scalar (resp_fd, rc, bits);
-        break;
-      }
-      case HEGEL_OP_DRAW_BOOL: {
-        int v = 0;
-        int rc = hegel__eng_draw_bool (eng, htc, &v);
-        if (rc == 1) served_stop = 1;
-        serve_reply_scalar (resp_fd, rc, (uint64_t)v);
-        break;
-      }
-      case HEGEL_OP_DRAW_TEXT: {
-        int64_t mm[2];
-        memcpy (mm, payload, sizeof mm);
-        const uint8_t * s = NULL; size_t slen = 0;
-        int rc = hegel__eng_draw_text_raw (eng, htc, mm[0], mm[1], &s, &slen);
-        if (rc == 1) served_stop = 1;
-        serve_reply_buffer (resp_fd, rc, s, slen);
-        break;
-      }
-      case HEGEL_OP_DRAW_BYTES: {
-        int64_t mm[2];
-        memcpy (mm, payload, sizeof mm);
-        const uint8_t * s = NULL; size_t slen = 0;
-        int rc = hegel__eng_draw_bytes_raw (eng, htc, mm[0], mm[1], &s, &slen);
-        if (rc == 1) served_stop = 1;
-        serve_reply_buffer (resp_fd, rc, s, slen);
-        break;
-      }
-      case HEGEL_OP_DRAW_REGEX: {
-        /* Payload is the (non-NUL-terminated) pattern. */
-        char * pattern = malloc (h.len + 1);
-        if (!pattern) { if (payload != small) free (payload); return; }
-        memcpy (pattern, payload, h.len);
-        pattern[h.len] = '\0';
-        const uint8_t * s = NULL; size_t slen = 0;
-        int rc = hegel__eng_draw_regex_raw (eng, htc, pattern, &s, &slen);
-        free (pattern);
-        if (rc == 1) served_stop = 1;
-        serve_reply_buffer (resp_fd, rc, s, slen);
-        break;
-      }
-      case HEGEL_OP_SPAN_START: {
-        uint64_t label;
-        memcpy (&label, payload, 8);
-        eng->start_span (htc, label);
-        serve_reply_scalar (resp_fd, 0, 0);
-        break;
-      }
-      case HEGEL_OP_SPAN_STOP: {
-        uint64_t discard;
-        memcpy (&discard, payload, 8);
-        eng->stop_span (htc, discard != 0);
-        serve_reply_scalar (resp_fd, 0, 0);
-        break;
-      }
-      case HEGEL_OP_TARGET: {
-        double value;
-        memcpy (&value, payload, 8);
-        char * label = malloc (h.len - 8 + 1);
-        if (label) {
-          memcpy (label, payload + 8, h.len - 8);
-          label[h.len - 8] = '\0';
-          eng->target (htc, value, label);
-          free (label);
-        }
-        serve_reply_scalar (resp_fd, 0, 0);
-        break;
-      }
-
-      /* Terminal messages */
-      case HEGEL_OP_DONE:
-        out->status = served_stop ? HG_STATUS_OVERRUN : HG_STATUS_VALID;
-        if (payload != small) free (payload);
-        return;
-      case HEGEL_OP_STOPPED:
-        out->status = HG_STATUS_OVERRUN;
-        if (payload != small) free (payload);
-        return;
-      case HEGEL_OP_ASSUME:
-        out->status = HG_STATUS_INVALID;
-        if (payload != small) free (payload);
-        return;
-      case HEGEL_OP_FAIL: {
-        uint32_t olen, mlen;
-        memcpy (&olen, payload, 4);
-        size_t ocopy = olen < sizeof out->origin - 1 ? olen : sizeof out->origin - 1;
-        memcpy (out->origin, payload + 4, ocopy);
-        out->origin[ocopy] = '\0';
-        memcpy (&mlen, payload + 4 + olen, 4);
-        size_t mcopy = mlen < sizeof out->msg - 1 ? mlen : sizeof out->msg - 1;
-        memcpy (out->msg, payload + 4 + olen + 4, mcopy);
-        out->msg[mcopy] = '\0';
-        out->status = HG_STATUS_INTERESTING;
-        if (payload != small) free (payload);
-        return;
-      }
-      case HEGEL_OP_HEALTH: {
-        size_t mcopy = h.len < sizeof out->msg - 1 ? h.len : sizeof out->msg - 1;
-        memcpy (out->msg, payload, mcopy);
-        out->msg[mcopy] = '\0';
-        out->health = 1;
-        out->status = HG_STATUS_INVALID;
-        if (payload != small) free (payload);
-        return;
-      }
-
-      default:
-        fprintf (stderr, "hegel-c: parent received unknown op %u\n", h.op);
-        if (payload != small) free (payload);
-        return;
-    }
-    if (payload != small) free (payload);
+    resp.len = 0;
+    uint8_t st = 0;
+    int kind = hegel__serve_op (srv, h.op, payload.data, h.len, &st, &resp, out);
+    if (kind == 2) break;          /* terminal */
+    if (kind == 1) continue;       /* fire-and-forget */
+    hegel_msg_header rh = { st, {0,0,0}, (uint32_t) resp.len };
+    if (hegel__write_full (resp_fd, &rh, sizeof rh) != 0
+        || (resp.len && hegel__write_full (resp_fd, resp.data, resp.len) != 0))
+      break;
   }
+  hegel__buf_free (&payload);
+  hegel__buf_free (&resp);
+}
+
+static void crash_outcome (hegel_case_srv * srv, int wstatus, hegel_outcome * out)
+{
+  const char * site = hegel__srv_iso_site (srv);
+  char where[300] = "";
+  if (site) snprintf (where, sizeof where, " in HEGEL_ISOLATED at %s", site);
+  out->status = HG_STATUS_INTERESTING;
+  if (site)   /* the block is the origin, whatever the crash (see hegel_fail_with_origin) */
+    snprintf (out->origin, sizeof out->origin, "HEGEL_ISOLATED at %s", site);
+  if (WIFSIGNALED (wstatus)) {
+    int sig = WTERMSIG (wstatus);
+    if (!site)
+      snprintf (out->origin, sizeof out->origin, "crash: signal %d (%s)", sig, strsignal (sig));
+    snprintf (out->msg, sizeof out->msg, "test case crashed with signal %d (%s)%s",
+              sig, strsignal (sig), where);
+  } else {
+    int code = WIFEXITED (wstatus) ? WEXITSTATUS (wstatus) : -1;
+    if (!site)
+      snprintf (out->origin, sizeof out->origin, "crash: exit %d", code);
+    snprintf (out->msg, sizeof out->msg,
+              "test case exited without a verdict (exit code %d)%s", code, where);
+  }
+  char line[1100];
+  int n = snprintf (line, sizeof line, "Property test failed: %s", out->msg);
+  hegel__srv_add_line (srv, line, (size_t) n);
 }
 
 /* Run one test case in a forked child; fill `out`. */
-static void run_case_forked (const hg_engine * eng, hg_tc * htc,
-                             void (*test_fn)(hegel_testcase *),
-                             int final_replay, case_outcome * out)
+/* ---- Fork modes: fast (fork) and clean (fork + exec) ----
+**
+** fast:  the child is a fork of the runner, so it inherits the runner's
+**        heap — engine allocations included, different on every case.
+**        Code that reads or writes past its buffers then sees different
+**        neighbours from case to case, and its outcome can change on
+**        replay (the engine reports a "nondeterministic failure" caveat
+**        and shrinks worse).
+** clean: the child execs the test binary again (/proc/self/exe, same
+**        argv, ASLR off), so every case starts from the same pristine
+**        process.  The re-exec'd binary runs main() from the top with
+**        stdout/stderr muted; each hegel run it reaches before the target
+**        returns "passed" at once, and the target run becomes the child,
+**        talking over the inherited pipe.  main() must therefore reach
+**        the same runs in the same order each time (it does, unless it
+**        branches on time, input or randomness before the run).  Costs
+**        one exec + main() prologue per case.  Linux only.
+**
+** Choose with hegel_set_fork_mode() or HEGEL_C_FORK=fast|clean (the
+** environment wins). */
+
+#define CLEAN_ENV "HEGEL_C__CLEAN_CHILD"
+
+static hegel_fork_mode g_fork_mode = HEGEL_FORK_FAST;
+static uint64_t        g_run_index;           /* runs started by this process */
+static char            g_results[4096];       /* '0'/'1' per finished run, in order */
+
+static struct {
+  int      active;                            /* this process is a re-exec'd child   */
+  uint64_t target;                            /* ... for this run index              */
+  int      req_fd, resp_fd, capture;
+  int      out_fd, err_fd;                    /* the real stdout/stderr while muted  */
+  char     results[4096];                     /* the parent's results of earlier runs */
+} g_clean;
+
+void hegel_set_fork_mode (hegel_fork_mode mode)
 {
+  g_fork_mode = mode;
+}
+
+static hegel_fork_mode fork_mode (void)
+{
+  const char * e = getenv ("HEGEL_C_FORK");
+  if (e && strcmp (e, "clean") == 0) return HEGEL_FORK_CLEAN;
+  if (e && strcmp (e, "fast") == 0) return HEGEL_FORK_FAST;
+  if (e && *e) {
+    fprintf (stderr, "hegel-c: HEGEL_C_FORK must be 'fast' or 'clean', got '%s'\n", e);
+    exit (1);
+  }
+  return g_fork_mode;
+}
+
+static void clean_child_unreached (void)
+{
+  if (!g_clean.active) return;
+  dup2 (g_clean.err_fd, 2);
+  snprintf (hegel__fail_msg, sizeof hegel__fail_msg,
+            "fork-clean: the re-executed test binary exited before reaching hegel run #%llu "
+            "(main() must reach the same runs in the same order every time)",
+            (unsigned long long) g_clean.target);
+  hegel__send_terminal (g_clean.req_fd, HEGEL_OP_HEALTH);
+}
+
+__attribute__((constructor))
+static void clean_child_init (void)
+{
+  const char * e = getenv (CLEAN_ENV);
+  unsigned long long target;
+  int req, resp, cap, used = 0;
+  if (!e || sscanf (e, "%llu:%d:%d:%d:%n", &target, &req, &resp, &cap, &used) != 4 || !used) return;
+  snprintf (g_clean.results, sizeof g_clean.results, "%s", e + used);
+  unsetenv (CLEAN_ENV);                       /* not for the test's own subprocesses */
+  g_clean.active = 1;
+  g_clean.target = target;
+  g_clean.req_fd = req;
+  g_clean.resp_fd = resp;
+  g_clean.capture = cap;
+  g_clean.out_fd = dup (1);
+  g_clean.err_fd = dup (2);
+  int null = open ("/dev/null", O_WRONLY);
+  if (null >= 0) { dup2 (null, 1); dup2 (null, 2); close (null); }
+  atexit (clean_child_unreached);
+}
+
+/* In a re-exec'd child: replay the result of each run before the target
+** (as the parent got it, so main() takes the same path), become the child
+** at the target. */
+static int clean_child_run (uint64_t index, void (*test_fn)(hegel_testcase *))
+{
+  if (index != g_clean.target)
+    return index <= strlen (g_clean.results) && g_clean.results[index - 1] == '1';
+  fflush (stdout);
+  fflush (stderr);
+  dup2 (g_clean.out_fd, 1);
+  dup2 (g_clean.err_fd, 2);
+  g_clean.active = 0;
+
+  hegel_testcase tc;
+  memset (&tc, 0, sizeof tc);
+  tc.mode = HEGEL_TC_CHILD;
+  tc.req_fd = g_clean.req_fd;
+  tc.resp_fd = g_clean.resp_fd;
+  tc.capture = g_clean.capture;
+  hegel__current_tc = &tc;
+  if (hegel__case_setup) hegel__case_setup ();
+  test_fn (&tc);
+  if (tc.cleanup) tc.cleanup (tc.cleanup_arg);
+  fflush (NULL);
+  hegel__send_terminal (tc.req_fd, tc.stop_seen ? HEGEL_OP_STOPPED : HEGEL_OP_DONE);
+  _exit (0);
+}
+
+/* In the forked child (clean mode): exec ourselves.  Never returns. */
+static void clean_child_exec (uint64_t index, int req_fd, int resp_fd, int capture)
+{
+  char env[128 + sizeof g_results];
+  snprintf (env, sizeof env, "%llu:%d:%d:%d:%s", (unsigned long long) index,
+            req_fd, resp_fd, capture, g_results);
+  setenv (CLEAN_ENV, env, 1);
+
+  /* argv from /proc/self/cmdline: NUL-separated. */
+  static char buf[65536];
+  char * argv[1024];
+  int n = 0;
+  int fd = open ("/proc/self/cmdline", O_RDONLY);
+  ssize_t len = fd >= 0 ? read (fd, buf, sizeof buf - 1) : -1;
+  if (fd >= 0) close (fd);
+  for (ssize_t i = 0; len > 0 && i < len && n < 1023; i += (ssize_t) strlen (buf + i) + 1)
+    argv[n ++] = buf + i;
+  argv[n] = NULL;
+#ifdef __linux__
+  personality (ADDR_NO_RANDOMIZE);            /* same addresses every case; best effort */
+#endif
+  if (n > 0) execv ("/proc/self/exe", argv);
+  snprintf (hegel__fail_msg, sizeof hegel__fail_msg,
+            "fork-clean: cannot re-execute the test binary via /proc/self/exe "
+            "(Linux only; use HEGEL_C_FORK=fast)");
+  hegel__send_terminal (req_fd, HEGEL_OP_HEALTH);
+  _exit (127);
+}
+
+static void run_case_forked (hegel_case_srv * srv, void (*test_fn)(hegel_testcase *),
+                             hegel_outcome * out)
+{
+  int clean = fork_mode () == HEGEL_FORK_CLEAN;
   int req[2], resp[2];
   if (pipe (req) != 0 || pipe (resp) != 0) {
     fprintf (stderr, "hegel-c: pipe() failed\n");
@@ -258,69 +312,47 @@ static void run_case_forked (const hg_engine * eng, hg_tc * htc,
   }
 
   if (pid == 0) {
-    /* Child: run the body, draws go over the pipe. */
+    /* Child: run the body, requests go over the pipe. */
     close (req[0]);
     close (resp[1]);
+    if (clean) clean_child_exec (g_run_index, req[1], resp[0], hegel__srv_capture (srv));
     hegel_testcase tc;
     memset (&tc, 0, sizeof tc);
     tc.mode = HEGEL_TC_CHILD;
     tc.req_fd = req[1];
     tc.resp_fd = resp[0];
-    tc.final_replay = final_replay;
+    tc.capture = hegel__srv_capture (srv);
     hegel__current_tc = &tc;
     if (hegel__case_setup) hegel__case_setup ();
     test_fn (&tc);
-    fflush (stdout);
-    hegel__child_send_terminal (&tc, tc.stop_seen ? HEGEL_OP_STOPPED : HEGEL_OP_DONE);
+    if (tc.cleanup) tc.cleanup (tc.cleanup_arg);
+    fflush (NULL);
+    hegel__send_terminal (tc.req_fd, tc.stop_seen ? HEGEL_OP_STOPPED : HEGEL_OP_DONE);
     _exit (0);
   }
 
   /* Parent */
   close (req[1]);
   close (resp[0]);
-  serve_child (eng, htc, req[0], resp[1], out);
+  serve_child (srv, req[0], resp[1], out);
   close (req[0]);
   close (resp[1]);
 
   int wstatus = 0;
   while (waitpid (pid, &wstatus, 0) < 0) { /* EINTR */ }
 
-  if (out->status == -1) {
-    /* No terminal message — the child died mid-body. */
-    out->status = HG_STATUS_INTERESTING;
-    if (WIFSIGNALED (wstatus)) {
-      int sig = WTERMSIG (wstatus);
-      snprintf (out->origin, sizeof out->origin, "crash: signal %d (%s)",
-                sig, strsignal (sig));
-      snprintf (out->msg, sizeof out->msg, "test case crashed with signal %d (%s)",
-                sig, strsignal (sig));
-    } else {
-      snprintf (out->origin, sizeof out->origin, "crash: exit %d",
-                WIFEXITED (wstatus) ? WEXITSTATUS (wstatus) : -1);
-      snprintf (out->msg, sizeof out->msg,
-                "test case exited without a verdict (exit code %d)",
-                WIFEXITED (wstatus) ? WEXITSTATUS (wstatus) : -1);
-    }
-    if (final_replay)
-      printf ("Property test failed: %s\n", out->msg);
-  }
+  if (out->status == -1) crash_outcome (srv, wstatus, out);
 }
 
 /* Run one test case in-process; fill `out`. */
-static void run_case_inproc (const hg_engine * eng, hg_tc * htc,
-                             void (*test_fn)(hegel_testcase *),
-                             int final_replay, case_outcome * out)
+static void run_case_inproc (hegel_case_srv * srv, void (*test_fn)(hegel_testcase *),
+                             hegel_outcome * out)
 {
-  out->health = 0;
-  out->origin[0] = '\0';
-  out->msg[0] = '\0';
-
   hegel_testcase tc;
   memset (&tc, 0, sizeof tc);
   tc.mode = HEGEL_TC_INPROC;
-  tc.eng = eng;
-  tc.htc = htc;
-  tc.final_replay = final_replay;
+  tc.srv = srv;
+  tc.capture = hegel__srv_capture (srv);
 
   jmp_buf env;
   tc.escape = &env;
@@ -330,96 +362,176 @@ static void run_case_inproc (const hg_engine * eng, hg_tc * htc,
   if (code == 0) {
     if (hegel__case_setup) hegel__case_setup ();
     test_fn (&tc);
+    if (tc.mode == HEGEL_TC_ISO) {
+      /* A HEGEL_ISOLATED child returned out of the test function. */
+      fflush (NULL);
+      hegel__send_terminal (tc.req_fd, HEGEL_OP_DONE);
+      _exit (0);
+    }
     out->status = tc.stop_seen ? HG_STATUS_OVERRUN : HG_STATUS_VALID;
   }
 
-  /* Per-case cleanup runs on every exit path (normal or escape) —
-  ** the C analogue of stateful.rs's RAII teardown guard. */
+  /* Per-case cleanup runs on every exit path (normal or escape). */
   if (tc.cleanup) {
     void (*fn)(void *) = tc.cleanup;
     tc.cleanup = NULL;
     fn (tc.cleanup_arg);
   }
 
-  if (code != 0) {
-    switch (code) {
-      case HEGEL_ESC_FAIL:
-        out->status = HG_STATUS_INTERESTING;
-        snprintf (out->origin, sizeof out->origin, "%s", hegel__fail_origin);
-        snprintf (out->msg, sizeof out->msg, "%s", hegel__fail_msg);
-        break;
-      case HEGEL_ESC_ASSUME:
-        out->status = HG_STATUS_INVALID;
-        break;
-      case HEGEL_ESC_STOP:
-        out->status = HG_STATUS_OVERRUN;
-        break;
-      case HEGEL_ESC_HEALTH:
-        out->status = HG_STATUS_INVALID;
-        out->health = 1;
-        snprintf (out->msg, sizeof out->msg, "%s", hegel__fail_msg);
-        break;
-    }
+  switch (code) {
+    case 0: break;
+    case HEGEL_ESC_FAIL:
+      out->status = HG_STATUS_INTERESTING;
+      snprintf (out->origin, sizeof out->origin, "%s", hegel__fail_origin);
+      snprintf (out->msg, sizeof out->msg, "%s", hegel__fail_msg);
+      break;
+    case HEGEL_ESC_ASSUME:
+      out->status = HG_STATUS_INVALID;
+      break;
+    case HEGEL_ESC_STOP:
+      out->status = HG_STATUS_OVERRUN;
+      break;
+    case HEGEL_ESC_HEALTH:
+      out->status = HG_STATUS_INVALID;
+      out->health = 1;
+      snprintf (out->msg, sizeof out->msg, "%s", hegel__fail_msg);
+      break;
   }
   hegel__current_tc = NULL;
 }
 
 /* ---- The run loop ---- */
 
-static int report_failures (const hg_engine * eng, const hg_result * result)
+static void print_str (FILE * f, const char * label, const hg_str * s)
 {
-  size_t nf = eng->result_failure_count (result);
-  for (size_t i = 0; i < nf; i++) {
-    const hg_failure * f = eng->result_failure (result, i);
-    const char * panic = eng->failure_panic_message (f);
-    const char * diag  = eng->failure_diagnostic (f);
-    if (panic && strncmp (panic, "FailedHealthCheck", 17) == 0) {
-      fprintf (stderr, "Health check failure: %s\n", panic);
-    } else {
-      fprintf (stderr, "\n=== hegel-c: property test FAILED ===\n");
-      const char * origin = eng->failure_origin (f);
-      if (origin) fprintf (stderr, "origin: %s\n", origin);
-      if (diag)   fprintf (stderr, "%s\n", diag);
-      const char * blob = eng->failure_reproduction_blob (f);
-      if (blob)   fprintf (stderr, "reproduce blob: %s\n", blob);
-    }
-  }
-  return nf > 0 ? 1 : 0;
+  if (s && s->len) fprintf (f, "%s%.*s\n", label, (int) s->len, s->data);
 }
 
-static int run_property (void (*test_fn)(hegel_testcase *),
-                         uint64_t n_cases, int use_fork)
+static int report (const hg_engine * e, const hg_result * result)
 {
-  const hg_engine * eng = hg_engine_get ();
-  if (!eng) return 1;
+  uint32_t status = HG_RUN_PASSED;
+  e->result_status (e->ctx, result, &status);
+  if (status == HG_RUN_PASSED) return 0;
 
-  hg_settings * s = eng->settings_new ();
-  eng->settings_test_cases (s, n_cases);
-  eng->settings_verbosity (s, HG_VERBOSITY_QUIET);
-  eng->settings_database (s, "");           /* no example DB — match old behavior */
-  eng->settings_report_multiple_failures (s, false);
-
-  hg_run * run = eng->run_start (s);
-  if (!run) {
-    fprintf (stderr, "hegel-c: hegel_run_start failed: %s\n",
-             eng->last_error_message ());
-    eng->settings_free (s);
+  if (status == HG_RUN_ERROR) {
+    uint32_t kind = 0, hc = 0;
+    const hg_str * msg = NULL;
+    e->result_error_kind (e->ctx, result, &kind, &hc);
+    e->result_error (e->ctx, result, &msg);
+    const char * prefix =
+        kind == HG_RUN_ERROR_HEALTH_CHECK     ? "Health check failure: "
+      : kind == HG_RUN_ERROR_FLAKY            ? "hegel-c: flaky test: "
+      : kind == HG_RUN_ERROR_NONDETERMINISTIC ? "hegel-c: nondeterministic generation: "
+      : kind == HG_RUN_ERROR_UNSATISFIABLE    ? "Health check failure: unsatisfiable: "
+      : kind == HG_RUN_ERROR_USAGE            ? "hegel-c: engine usage error: "
+      :                                         "hegel-c: engine internal error: ";
+    fprintf (stderr, "%s%.*s\n", prefix, msg ? (int) msg->len : 0, msg ? msg->data : "");
     return 1;
   }
 
+  size_t nf = 0;
+  e->result_failure_count (e->ctx, result, &nf);
+  for (size_t i = 0; i < nf; i++) {
+    hg_failure * f = NULL;
+    if (e->result_failure (e->ctx, result, i, &f) != HG_OK) continue;
+    hg_str origin = { "", 0 };
+    const hg_str * blob = NULL, * caveat = NULL;
+    e->failure_origin (e->ctx, f, &origin);
+    e->failure_blob (e->ctx, f, &blob);
+    e->failure_caveat (e->ctx, f, &caveat);
+
+    const captured * cap = capture_find (origin.data, origin.len);
+    if (cap && cap->lines[0]) {
+      fputs (cap->lines, stdout);
+      fflush (stdout);
+    }
+    fprintf (stderr, "\n=== hegel-c: property test FAILED ===\n");
+    fprintf (stderr, "origin: %.*s\n", (int) origin.len, origin.data);
+    if (cap && cap->msg[0]) fprintf (stderr, "message: %s\n", cap->msg);
+    print_str (stderr, "caveat: ", caveat);
+    print_str (stderr, "reproduce blob: ", blob);
+    e->failure_free (e->ctx, f);
+  }
+  return 1;
+}
+
+static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork);
+
+/* Every run goes through here: numbered, and its result recorded so a
+** fork-clean child can replay main() exactly (see clean_child_run). */
+static int run_property (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
+{
+  uint64_t run_index = ++ g_run_index;
+  if (g_clean.active) return clean_child_run (run_index, test_fn);
+  int rc = run_property_inner (test_fn, n_cases, use_fork);
+  size_t n = strlen (g_results);
+  if (n + 1 < sizeof g_results) { g_results[n] = rc ? '1' : '0'; g_results[n + 1] = 0; }
+  return rc;
+}
+
+static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
+{
+  const hg_engine * e = hg_engine_get ();
+  if (!e) return 1;
+  hg_context * x = e->ctx;
+  const char * merge_env = getenv ("HEGEL_C_MERGE_ORIGINS");
+  int merge_origins = merge_env && *merge_env && strcmp (merge_env, "0") != 0;
+
+  hg_settings * s = NULL;
+  if (e->settings_new (x, &s) != HG_OK) {
+    fprintf (stderr, "hegel-c: settings: %s\n", hg_last_error (e));
+    return 1;
+  }
+  hg_str no_db = { "", 0 };
+  e->settings_set_test_cases (x, s, n_cases);
+  e->settings_set_verbosity (x, s, HG_VERBOSITY_QUIET);
+  e->settings_set_database (x, s, &no_db);         /* no example DB */
+  e->settings_set_report_multiple_failures (x, s, false);
+
+  hg_run * run = NULL;
+  if (e->run_start (x, s, NULL, NULL, &run) != HG_OK) {
+    fprintf (stderr, "hegel-c: hegel_run_start failed: %s\n", hg_last_error (e));
+    e->settings_free (x, s);
+    return 1;
+  }
+
+  int rc = 0;
   int health_failed = 0;
-  hg_tc * htc;
-  while ((htc = eng->next_test_case (run)) != NULL) {
-    int final_replay = eng->tc_is_final_replay (htc);
-    case_outcome out;
+  for (;;) {
+    hg_tc * htc = NULL;
+    if (e->next_test_case (x, run, &htc) != HG_OK) {
+      fprintf (stderr, "hegel-c: run loop error: %s\n", hg_last_error (e));
+      rc = 1;
+      break;
+    }
+    if (!htc) break;
 
+    bool capture = false;
+    e->test_case_should_capture (x, htc, &capture);
+    hegel_case_srv * srv = hegel__srv_case_new (e, htc, capture);
+
+    hegel_outcome out;
+    memset (&out, 0, sizeof out);
+    out.status = -1;
     if (use_fork)
-      run_case_forked (eng, htc, test_fn, final_replay, &out);
+      run_case_forked (srv, test_fn, &out);
     else
-      run_case_inproc (eng, htc, test_fn, final_replay, &out);
+      run_case_inproc (srv, test_fn, &out);
 
-    eng->mark_complete (htc, out.status,
-                        out.status == HG_STATUS_INTERESTING ? out.origin : NULL);
+    /* HEGEL_C_MERGE_ORIGINS=1: every failure is the same bug to the engine,
+    ** so a test whose one bug shows up as a crash OR a bad result (heap
+    ** garbage decides) shrinks deterministically.  Distinct bugs merge too:
+    ** the report shows only the one the engine settled on. */
+    if (merge_origins && out.status == HG_STATUS_INTERESTING)
+      snprintf (out.origin, sizeof out.origin, "%s", "any failure (HEGEL_C_MERGE_ORIGINS)");
+    if (capture && out.status == HG_STATUS_INTERESTING)
+      capture_store (out.origin, out.msg, hegel__srv_take_lines (srv));
+    hegel__srv_case_free (srv);
+
+    hg_str origin = HG_STR_Z (out.origin);
+    e->mark_complete (x, htc, (uint32_t) out.status,
+                      out.status == HG_STATUS_INTERESTING ? &origin : NULL);
+    e->test_case_free (x, htc);
 
     if (out.health) {
       fprintf (stderr, "Health check failure: %s\n", out.msg);
@@ -428,28 +540,23 @@ static int run_property (void (*test_fn)(hegel_testcase *),
     }
   }
 
-  int rc;
   if (health_failed) {
     rc = 1;
-  } else {
-    const char * err = eng->last_error_message ();
-    if (err && err[0]) {
-      fprintf (stderr, "hegel-c: run loop error: %s\n", err);
+  } else if (rc == 0) {
+    hg_result * result = NULL;
+    if (e->run_result (x, run, &result) != HG_OK) {
+      fprintf (stderr, "hegel-c: hegel_run_result failed: %s\n", hg_last_error (e));
       rc = 1;
     } else {
-      const hg_result * result = eng->run_result (run);
-      if (!result) {
-        fprintf (stderr, "hegel-c: hegel_run_result failed: %s\n",
-                 eng->last_error_message ());
-        rc = 1;
-      } else {
-        rc = report_failures (eng, result);
-      }
+      rc = report (e, result);
+      e->run_result_free (x, result);
     }
   }
 
-  eng->run_free (run);
-  eng->settings_free (s);
+  capture_clear ();
+  hegel__srv_run_end ();
+  e->run_free (x, run);
+  e->settings_free (x, s);
   return rc;
 }
 
@@ -485,11 +592,9 @@ void hegel_run_test_nofork_n (void (*test_fn)(hegel_testcase *), uint64_t n_case
   if (run_property (test_fn, n_cases, 0)) exit (1);
 }
 
-/* Internal entry for the stateful runner (hegel_stateful.c): nofork
-** driver with a custom body. */
-int hegel__run_property_nofork (void (*test_fn)(hegel_testcase *), uint64_t n_cases)
+int hegel__run_property (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
 {
-  return run_property (test_fn, n_cases, 0);
+  return run_property (test_fn, n_cases, use_fork);
 }
 
 /* ---- Suite ---- */

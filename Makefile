@@ -24,12 +24,22 @@ PBT_C_GITHUB_REPOS = silentbicycle/theft \
 # `inspiration/targets/`
 TARGET_GITLAB_REPOS = scotch/scotch
 
+# Complementary (non-PBT) bug-finding systems aimed at the same targets —
+# `inspiration/kernel-review/`.  Sashiko is static LLM patch review of
+# Linux kernel changes (Apache-2.0); we study its per-stage review
+# prompts as a bug-class checklist for hegel-bughunt.  Pinned SHA +
+# stage-by-stage gap analysis live in docs/sashiko-gap-analysis.md —
+# bump SASHIKO_PIN only after re-reading the stage prompts and
+# refreshing that doc.
+KERNEL_REVIEW_GITHUB_REPOS = sashiko-dev/sashiko
+SASHIKO_PIN = a434adcd821bbc3767657f8c41e979082acf127a
+
 # ---- Library build (pure C — no cargo) ----
 
 CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -O2
 BUILD    = build
-CORE_SRC = core/hegel_cbor.c core/hegel_engine.c core/hegel_runtime.c \
+CORE_SRC = core/hegel_engine.c core/hegel_server.c core/hegel_runtime.c \
            core/hegel_runner.c core/hegel_stateful.c \
            hegel_gen.c
 CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
@@ -39,17 +49,21 @@ CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
 # must match the runtime ABI, so it is version-locked in-tree rather
 # than tracked loosely like the inspiration/ reference clones).
 LIBHEGEL_CRATE_DIR = deps/hegel-rust
-LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel.so
+# The crate's lib is named `hegel_c` since hegeltest-c 0.4x, so cargo
+# writes libhegel_c.so; we install it under the release-artifact name.
+LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel_c.so
 
-.PHONY: help lib libhegel clean-lib inspiration clean-inspiration clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+.PHONY: help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-reuse clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
 	@echo ""
 	@echo "Targets:"
 	@echo "  help                          Show this help (default)"
-	@echo "  inspiration                   Clone/update third-party repos into inspiration/{hegel,existing-pbt-in-c,targets}/"
+	@echo "  inspiration                   Clone/update third-party repos into inspiration/{hegel,existing-pbt-in-c,targets,kernel-review}/"
 	@echo "  clean-inspiration             Remove inspiration/"
+	@echo "  check-sashiko                 Report whether upstream sashiko moved past our pinned SHA (see docs/sashiko-gap-analysis.md)"
+	@echo "  check-reuse                   Lint per-file licensing against REUSE.toml + LICENSES/ (needs reuse or uvx)"
 	@echo "  clean-cores                   Remove core dumps from repo root (core.*)"
 	@echo ""
 	@echo "Proxy targets (forwarded to sub-Makefiles):"
@@ -66,6 +80,7 @@ help:
 	@echo "  make from-hegel-rust-verify   Verify C tests match Rust originals (requires claude)"
 	@echo "  make scotch-test-local        Run Scotch tests with inspiration/targets/scotch (built from source)"
 	@echo "  make scotch-test-deb          Run Scotch tests with system libscotch-dev (CI)"
+	@echo "  make scotch-test-pins         Run each Scotch bug pin (tests/irl/scotch/pins/) buggy + fixed"
 	@echo "  make mpi-test                 Run MPI tests (requires mpicc/mpiexec)"
 	@echo "  make bench-bench              Run fork-vs-nofork benchmarks (see docs/benchmarking.md)"
 	@echo "  make docs-check               Verify transcluded snippets in docs/*.md match source"
@@ -90,7 +105,7 @@ lib: $(BUILD)/libhegel_c.a
 $(BUILD)/libhegel_c.a: $(CORE_OBJ)
 	ar rcs $@ $^
 
-$(BUILD)/%.o: core/%.c core/hegel_internal.h core/hegel_engine.h core/hegel_cbor.h hegel_c.h
+$(BUILD)/%.o: core/%.c core/hegel_internal.h core/hegel_engine.h hegel_c.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -I. -c -o $@ $<
 
@@ -125,7 +140,7 @@ clean-lib:
 	rm -rf $(BUILD)
 
 inspiration:
-	@mkdir -p $(INSPIRATION_DIR)/hegel $(INSPIRATION_DIR)/existing-pbt-in-c $(INSPIRATION_DIR)/targets
+	@mkdir -p $(INSPIRATION_DIR)/hegel $(INSPIRATION_DIR)/existing-pbt-in-c $(INSPIRATION_DIR)/targets $(INSPIRATION_DIR)/kernel-review
 	@# hegel-rust lives as a pinned submodule at deps/hegel-rust; expose it
 	@# under the old inspiration path for discoverability.  The symlink is
 	@# never committed (inspiration/ is gitignored), so it poses no
@@ -167,6 +182,37 @@ inspiration:
 			git clone --depth 1 "https://gitlab.inria.fr/$$repo.git" "$$dest"; \
 		fi; \
 	done
+	@# kernel-review repos are PINNED, not pulled-latest: the gap analysis
+	@# in docs/sashiko-gap-analysis.md is written against a specific SHA.
+	@for repo in $(KERNEL_REVIEW_GITHUB_REPOS); do \
+		name=$$(basename $$repo); \
+		dest="$(INSPIRATION_DIR)/kernel-review/$$name"; \
+		if [ ! -d "$$dest" ]; then \
+			echo "  kernel-review/$$name: cloning"; \
+			git clone "https://github.com/$$repo.git" "$$dest"; \
+		fi; \
+		echo "  kernel-review/$$name: checking out pin $(SASHIKO_PIN)"; \
+		cd "$$dest" && git fetch origin "$(SASHIKO_PIN)" 2>/dev/null; \
+		git checkout --detach "$(SASHIKO_PIN)" && cd - >/dev/null; \
+	done
+
+check-sashiko:
+	@latest=$$(git ls-remote https://github.com/sashiko-dev/sashiko.git HEAD | cut -f1); \
+	if [ -z "$$latest" ]; then \
+		echo "check-sashiko: could not reach upstream"; exit 1; \
+	elif [ "$$latest" = "$(SASHIKO_PIN)" ]; then \
+		echo "sashiko pin $(SASHIKO_PIN) is upstream HEAD — gap analysis is current"; \
+	else \
+		echo "sashiko upstream HEAD is $$latest (pin: $(SASHIKO_PIN))"; \
+		echo "-> re-read the stage prompts in src/worker/prompts.rs, refresh"; \
+		echo "   docs/sashiko-gap-analysis.md, then bump SASHIKO_PIN in this Makefile."; \
+		exit 1; \
+	fi
+
+# Licensing is per file (MIT for hegel-c, GPL/BSD/LGPL for the kernel
+# excerpts under tests/irl/); see the License section of README.md.
+check-reuse:
+	@if command -v reuse >/dev/null; then reuse lint; else uvx reuse lint; fi
 
 clean-inspiration:
 	rm -rf $(INSPIRATION_DIR)
