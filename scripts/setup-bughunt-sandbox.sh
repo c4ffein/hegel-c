@@ -39,48 +39,60 @@ fi
 
 mkdir -p "$SANDBOX"/{hegel-c,scotch,workspace}
 
-# ---- Stage 1: copy hegel-c essentials ----
+# ---- Stage 0: ensure the artifacts under test are current ----
+#
+# The sandbox ships PREBUILT binaries (Stage 1), so a stale build would
+# mean dogfooding against old code.  Rebuild both from source, then diff
+# their checksums against the previous run — so a change in the library
+# under test is visible before we launch the agent.
+
+echo "==== Ensuring engine + lib are current (make lib libhegel) ===="
+make -C "$SOURCE_ROOT" lib libhegel
+
+LIB_A="$SOURCE_ROOT/build/libhegel_c.a"
+LIB_SO="$SOURCE_ROOT/build/libhegel.so"
+for f in "$LIB_A" "$LIB_SO"; do
+    [[ -f "$f" ]] || { echo "ERROR: expected prebuilt $f is missing." >&2; exit 1; }
+done
+
+HASH_RECORD="$SOURCE_ROOT/build/.bughunt-sandbox-libhashes"
+NEW_HASHES="$(cd "$SOURCE_ROOT/build" && sha256sum libhegel_c.a libhegel.so)"
+echo "==== Library-under-test checksums ===="
+echo "$NEW_HASHES" | sed 's/^/    /'
+if [[ -f "$HASH_RECORD" ]]; then
+    if [[ "$NEW_HASHES" == "$(cat "$HASH_RECORD")" ]]; then
+        echo "    (identical to the previous sandbox run)"
+    else
+        echo "    CHANGED since the previous sandbox run:"
+        diff <(cat "$HASH_RECORD") <(echo "$NEW_HASHES") | sed 's/^/      /' || true
+    fi
+fi
+printf '%s\n' "$NEW_HASHES" > "$HASH_RECORD"
+
+# ---- Stage 1: copy hegel-c essentials (PREBUILT, no source) ----
 #
 # The agent gets:
-#   - public headers (hegel_c.h, hegel_gen.h, hegel_gen.c)
+#   - public headers (hegel_c.h, hegel_gen.h)
+#   - the PREBUILT static lib (build/libhegel_c.a) and engine cdylib
+#     (build/libhegel.so) — no hegel-c or engine source at all
 #   - the .claude/skills/hegel and .claude/skills/hegel-bughunt skills
 #   - CLAUDE.md (project conventions; vetted clean of bug content)
-#   - rust-version/Cargo.toml + Cargo.lock + build.rs (so cargo build works)
-#   - rust-version/target/release/libhegel_c.a (pre-built; src/ is stripped)
 #
 # The agent does NOT get:
 #   - README.md / TODO.md / NEXT.md (mention the bug)
 #   - docs/* (internal docs)
 #   - tests/* (any of them — would leak example tests / patterns)
 #   - inspiration/* (other than scotch — would leak hegel-skill, theft, etc.)
+#   - core/ or hegel_gen.c source (internal; already inside libhegel_c.a)
 #   - .git/ (deleted bug-tests are in history)
-#   - rust-version/src/ (FFI implementation is internal)
 
-cp "$SOURCE_ROOT/hegel_c.h"  "$SANDBOX/hegel-c/"
-cp "$SOURCE_ROOT/hegel_gen.h" "$SANDBOX/hegel-c/"
-cp "$SOURCE_ROOT/hegel_gen.c" "$SANDBOX/hegel-c/"
-cp "$SOURCE_ROOT/CLAUDE.md"   "$SANDBOX/hegel-c/"
-
-cp -r "$SOURCE_ROOT/.claude" "$SANDBOX/hegel-c/"
-
-# rust-version: copy build files, pre-build, then strip src/
-mkdir -p "$SANDBOX/hegel-c/rust-version"
-cp "$SOURCE_ROOT/rust-version/Cargo.toml" "$SANDBOX/hegel-c/rust-version/" 2>/dev/null || true
-cp "$SOURCE_ROOT/rust-version/Cargo.lock" "$SANDBOX/hegel-c/rust-version/" 2>/dev/null || true
-cp "$SOURCE_ROOT/rust-version/build.rs"   "$SANDBOX/hegel-c/rust-version/" 2>/dev/null || true
-
-# We need the source temporarily to build the .a
-cp -r "$SOURCE_ROOT/rust-version/src" "$SANDBOX/hegel-c/rust-version/src"
-
-echo "==== Building libhegel_c.a ===="
-( cd "$SANDBOX/hegel-c/rust-version" && cargo build --release )
-
-# Strip the Rust src now that the .a is built
-rm -rf "$SANDBOX/hegel-c/rust-version/src"
-rm -rf "$SANDBOX/hegel-c/rust-version/target/release/build"
-rm -rf "$SANDBOX/hegel-c/rust-version/target/release/deps"
-rm -rf "$SANDBOX/hegel-c/rust-version/target/release/incremental"
-rm -rf "$SANDBOX/hegel-c/rust-version/target/release/.fingerprint"
+mkdir -p "$SANDBOX/hegel-c/build"
+cp "$SOURCE_ROOT/hegel_c.h"          "$SANDBOX/hegel-c/"
+cp "$SOURCE_ROOT/hegel_gen.h"        "$SANDBOX/hegel-c/"
+cp "$SOURCE_ROOT/CLAUDE.md"          "$SANDBOX/hegel-c/"
+cp "$LIB_A"                          "$SANDBOX/hegel-c/build/"
+cp "$LIB_SO"                         "$SANDBOX/hegel-c/build/"
+cp -r "$SOURCE_ROOT/.claude"         "$SANDBOX/hegel-c/"
 
 # ---- Stage 2: copy Scotch ----
 #
@@ -162,7 +174,7 @@ echo "==== Sandbox ready ===="
 echo "  Path: $SANDBOX"
 echo
 echo "  Layout:"
-echo "    hegel-c/         hegel-c headers + .claude/skills/ + pre-built libhegel_c.a"
+echo "    hegel-c/         headers + .claude/skills/ + prebuilt build/{libhegel_c.a,libhegel.so}"
 echo "    scotch/          upstream Scotch source + pre-built libscotch"
 echo "    workspace/       empty; agent writes its test suite into workspace/tests/"
 echo
@@ -172,6 +184,7 @@ echo
 echo "  Agent should be told to:"
 echo "    - cd $SANDBOX/workspace"
 echo "    - read .claude/skills/ in $SANDBOX/hegel-c/"
-echo "    - link against $SANDBOX/hegel-c/rust-version/target/release/libhegel_c.a"
+echo "    - compile with -I$SANDBOX/hegel-c and link $SANDBOX/hegel-c/build/libhegel_c.a"
+echo "    - export HEGEL_LIBHEGEL_PATH=$SANDBOX/hegel-c/build/libhegel.so  (runtime engine)"
 echo "    - link against $SANDBOX/scotch/lib/ + $SANDBOX/scotch/include/"
 echo "    - write the audit suite into $SANDBOX/workspace/tests/"

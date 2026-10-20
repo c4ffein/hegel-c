@@ -5,7 +5,7 @@
 hegel-c is a C binding for Hegel, a property-based testing framework. It is pure C end to end: tests include the headers and link a static `libhegel_c.a`; at runtime the library dlopens `libhegel.so` — Hegel's official native engine (a Rust cdylib from the hegel-rust repo, prebuilt per platform on its GitHub releases). There is no server process, no Python, and no Rust in our build. (History: until 2026-06 this binding was a Rust FFI bridge to the Python `hegel-core` server; upstream 0.17.0 deleted the server and shipped the in-process engine + C ABI we now sit on.)
 
 **Two layers of public API:**
-- `hegel_c.h` — primitive draws, spans, asserts, runners. The transport boundary.
+- `hegel_c.h` — primitive draws, spans, engine collections / recursion / pools, `HEGEL_ISOLATED`, asserts, runners. Thin over libhegel's own protocols; the transport boundary.
 - `hegel_gen.h` — higher-level schema/shape system for describing and generating C structs declaratively. Pure C, uses `hegel_c.h` as its backend.
 
 Most new code should use the schema API — it handles allocation, span annotation, ownership tracking, and cleanup automatically. The primitive API is still there for simple scalar tests or when you need finer control.
@@ -14,27 +14,28 @@ Most new code should use the schema API — it handles allocation, span annotati
 
 ## Architecture
 
-- `hegel_c.h` — Public C API (opaque types, draw functions, old combinator generators, assertions, suite API, spans)
+- `hegel_c.h` — Public C API (opaque types, draw functions, spans, collections, recursion, pools, `HEGEL_ISOLATED`, assertions, suite API, stateful)
 - `hegel_gen.h` / `hegel_gen.c` — Schema system (declarations + pure-C implementation). See `docs/schema-api.md` and `docs/patterns.md`.
 - `core/` — The pure-C runtime under `hegel_c.h`:
-  - `hegel_engine.{c,h}` — dlopen binding to `libhegel.so` (search order: `$HEGEL_LIBHEGEL_PATH`, `./build/libhegel.so`, `./.hegel/libhegel/libhegel.so`, system). dlsym keeps our `hegel_start_span`/`hegel_stop_span` from colliding with libhegel's same-named exports.
-  - `hegel_cbor.{c,h}` — minimal CBOR codec (descended from `purec/`) for `hegel_generate`'s schema-in / value-out exchange. Strings arrive as tag 91 (WTF-8) byte strings; floats at the smallest lossless width (incl. float16).
-  - `hegel_runtime.c` — draws (schema encode → generate → decode), spans, notes, assume/fail/health, target. Each draw has an INPROC path (call engine) and a CHILD path (framed pipe request to the fork parent).
-  - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, failure reporting, suite API.
-  - `hegel_stateful.c` — stateful run loop (preconditions, rule-level escapes), port of the old `stateful.rs`.
-  - `hegel_internal.h` — test-case struct, wire-protocol message defs (designed to extend to a remote/board transport later).
-- `tests/selftest/` — 76 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, and stateful tests
+  - `hegel_engine.{c,h}` — dlopen binding to `libhegel.so` (search order: `$HEGEL_LIBHEGEL_PATH`, `./build/libhegel.so`, `./.hegel/libhegel/libhegel.so`, system). Mirrors upstream's types with an `hg_` prefix; dlsym keeps our same-named public functions (`hegel_start_span`, `hegel_note`, `hegel_collection_more`, ...) from colliding with libhegel's exports. One process-wide `hegel_context_t`.
+  - `hegel_internal.h` — the wire protocol (every engine operation a body can perform is one request op) and the test-case struct.
+  - `hegel_server.c` — `hegel__serve_op`: the ONLY code that calls the engine on a body's behalf. Per-case handle table (collections/recursions/pools/state machines, auto-freed at case end), captured output lines, run-scoped string-generator cache.
+  - `hegel_runtime.c` — the public primitives as requests; `hegel__call` picks the transport (INPROC = direct call into the server, CHILD = fork parent's pipe). Also `HEGEL_ISOLATED`.
+  - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, capture-by-origin failure reporting, suite API.
+  - `hegel_stateful.c` — stateful driver on the engine's state machine (`hegel_new_state_machine`), shaped like hegel-rust's `run_sequential`; preconditions map onto `rule_rejected`. Works in fork and nofork mode.
+- `tests/selftest/` — 87 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
-- `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI)
+- `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI) + bug pins (`pins/`)
+- `tests/irl/linux/` — Linux kernel bug-hunt harnesses, one per target, each built against a pinned kernel checkout (`pins/`)
 - `docs/schema-api.md` — schema system reference
 - `docs/patterns.md` — pattern catalog (tests as documentation)
 - `docs/mpi-testing.md` — MPI integration guide
 - `TODO.md` — deferred items
 
 Two execution modes:
-- **Fork mode** (default): each test case runs in a forked child; parent serves draw requests via pipe IPC. Crash-safe.
-- **Nofork mode**: single process, no crash isolation. For benchmarking or MPI_Comm_spawn.
+- **Fork mode** (default): each test case runs in a forked child; parent serves draw requests via pipe IPC. Crash-safe. Two flavours: *fast* (default, plain fork — the child inherits the parent's heap, so a bug that reads uninitialized memory can behave differently on replay) and *clean* (`hegel_set_fork_mode(HEGEL_FORK_CLEAN)` or `HEGEL_C_FORK=clean`: fork + re-exec the test binary with ASLR off, so every child starts from the same heap; ~2.5x slower per case). Tests that key files by PID can't run in clean mode.
+- **Nofork mode**: the body runs in the runner's process and calls the engine directly. Crash isolation only inside `HEGEL_ISOLATED` blocks (generate first, then isolate the code under test — the block forks, sees every drawn value copy-on-write, and turns a crash into a shrinkable failure). Also for benchmarking or MPI_Comm_spawn.
 
 ## Build and test
 
@@ -48,7 +49,7 @@ make help                       # all targets and proxy commands
 make lib                        # build build/libhegel_c.a (pure C, seconds)
 make libhegel                   # place the engine at build/libhegel.so (cargo or prebuilt)
 
-make selftest-test              # 76 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
+make selftest-test              # 87 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
 make from-hegel-rust-test       # 11 tests (5 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
@@ -68,13 +69,18 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 - `hegel_run_test_nofork(fn)` / `_n(fn, n)` — no fork, no crash isolation
 - `hegel_suite_new/add/run/free` — multi-test runner (one binary, several tests; each test is its own engine run)
 
-**Primitive draws:** `hegel_draw_int`, `_i64`, `_u64`, `_usize`, `_float`, `_double`, `_text`, `_regex`
+**Primitive draws:** `hegel_draw_int`, `_i64`, `_u64`, `_usize`, `_float`, `_double`, `_bool`, `_text`, `_bytes`, `_regex` (full match)
 
-**Spans:** `hegel_start_span(tc, label)`, `hegel_stop_span(tc, discard)` — structural shrinking hints. Users rarely call these directly; the schema API emits them automatically.
+**Spans:** `hegel_start_span(tc, label)`, `hegel_stop_span(tc, discard)` — structural shrinking hints; derive labels with `hegel_label("lib.thing")` (FNV-1a, as libhegel's `hegel_label_from_name`). Users rarely call these directly; the schema API emits them automatically.
 
-**Legacy combinator generators:** `hegel_gen_int`, `_i64`, `_u64`, `_float`, `_double`, `_bool`, `_text`, `_regex`, `_one_of`, `_sampled_from`, `_optional`, `_map_*`, `_filter_*`, `_flat_map_*`. These predate the schema API and overlap with it; prefer `hegel_gen.h` for new code.
+**Engine protocols** (handles are `{ int64_t id; }` newtypes, ids into the server's per-case table — so they work across the fork pipe):
+- Collections: `hegel_collection_new(tc, min, max)` / `_more` / `_reject` / `_free` — engine owns the length; shrinks by element deletion.
+- Recursion: `hegel_recursion_new(tc, max_depth, max_leaves)` / `_branch` / `_leaf` / `_retry` / `_finish` / `_free` — engine owns branch probabilities and budgets (see `tests/selftest/test_recursion_tree.c`).
+- Pools: `hegel_pool_new` / `_add` / `_draw(consume)` / `_restore` / `_free` — ids are opaque int64s chosen by the engine (map them, don't index with them).
 
-**Other:** `hegel_note(tc, msg)` (debug on final replay), `hegel_assume(tc, cond)`, `hegel_fail(msg)` (code-under-test broken), `hegel_health_fail(msg)` (test-setup broken — emits "Health check failure:" prefix), `HEGEL_ASSERT(cond, fmt, ...)`
+**Crash isolation for a block:** `HEGEL_ISOLATED(tc) { ... }` — no draws inside (health failure), no nesting, no break/return out of it. Every failure inside a block (crash, `HEGEL_ASSERT`, `hegel_fail`) shares one origin, `HEGEL_ISOLATED at <file:line>`, so a bug that sometimes asserts and sometimes segfaults shrinks as one bug. If a plain test shrinks poorly, wrapping the code under test in a block is the fix. `HEGEL_C_MERGE_ORIGINS=1` merges every failure in a run into one origin.
+
+**Other:** `hegel_note(tc, msg)` (captured for the counterexample report), `hegel_assume(tc, cond)`, `hegel_fail(msg)` (code-under-test broken), `hegel_health_fail(msg)` (test-setup broken — emits "Health check failure:" prefix), `HEGEL_ASSERT(cond, fmt, ...)`
 
 ## Schema API (`hegel_gen.h`)
 
@@ -171,45 +177,48 @@ Do NOT inline the "function under test" into the assertion — layer 1 must be a
 
 ## License headers
 
-All source files (.c, .h, .rs, .md, Makefile) must start with an SPDX header:
+Our own source files (.c, .h, .rs, .md, Makefile) start with an MIT SPDX header:
 ```
 /* SPDX-License-Identifier: MIT
 ** Copyright (c) 2026 c4ffein
 ** Part of hegel-c — see hegel/LICENSE for terms. */
 ```
-Markdown files use `<!-- SPDX-License-Identifier: MIT ... -->`. Enforced by `check-license` target in each Makefile.
+Markdown files use the same lines inside an HTML comment. Enforced by the `check-license` target in each test Makefile.
+
+Third-party excerpts (Linux kernel code under `tests/irl/`) keep their upstream SPDX license and get a modification notice plus `SPDX-FileCopyrightText` lines right after it — never relabel them MIT, and never let them into `libhegel_c.a`. Licensing follows REUSE: texts in `LICENSES/`, header-less files covered by `REUSE.toml`, full check with `make check-reuse` (note: it over-reports ignored build artifacts inside still-untracked directories — a git `ls-files --directory` quirk).
 
 ## Key dependencies
 
-- **Runtime**: `libhegel.so` ≥ 0.17 (Hegel's native engine, loaded via dlopen). No Rust or Python dependency in our build.
+- **Runtime**: `libhegel.so` from hegeltest-c ≥ 0.47 (Hegel's native engine, loaded via dlopen). No Rust or Python dependency in our build.
 - **C linking**: `-lhegel_c -lpthread -lm -ldl` (add `-lscotch -lscotcherr -lz -lrt` for Scotch tests)
 
 ## libhegel (the engine)
 
-We sit on the official C ABI from the hegel-rust repo (`hegel-c/include/hegel.h` there, crate `hegeltest-c`, prebuilt `libhegel-<goos>-<goarch>.so` on GitHub releases). Run loop: `hegel_run_start` → `hegel_next_test_case` (engine on a worker thread) → draws via `hegel_generate(schema_cbor) → value_cbor` → `hegel_mark_complete(status, origin)` → `hegel_run_result`.
+We sit on the official C ABI from the hegel-rust repo (`hegel-c/include/hegel.h` there, crate `hegeltest-c`, prebuilt `libhegel-<goos>-<goarch>.so` on GitHub releases; a source build writes `target/release/libhegel_c.so`, which `make libhegel` installs as `build/libhegel.so`). Pinned at hegel-rust v0.50.1 = hegeltest-c 0.47.1 (the C crate has its own version line). Run loop, all context-first: `hegel_settings_new` → `hegel_run_start` → `hegel_next_test_case` (the engine resumes on the calling thread — no worker thread) → typed draws (`hegel_generate_integer` / `_float` / `_boolean` / `_bytes` / `_string` with a string-generator handle) and protocols (collection / recursion / pool / state machine) → `hegel_mark_complete(status, origin)` → `hegel_run_result` (status PASSED / FAILED / ERROR, error kind, failures with origin + blob + caveat).
 
-Engine facts that shaped the runtime (verified against 0.17.4):
-- Schema dialect is the old hegel-core "library API" spec: `{"type": "integer", "min_value", "max_value"}` etc. Spec reference: `inspiration/hegel/hegel-core/docs/library-api.md`.
-- Strings come back as CBOR tag 91 (WTF-8) wrapping a byte string; floats at the smallest lossless width (float16/32/64). Our codec handles all of these.
-- Float schemas default `allow_nan`/`allow_infinity` to TRUE — the runtime sets them explicitly for bounded draws (Hypothesis's "bounds imply no NaN" is NOT inferred engine-side).
-- Text schemas get `min_codepoint=1` so drawn strings never contain NUL (they're C strings).
-- `hegel_generate` can return `HEGEL_E_ASSUME` (engine-side rejection, e.g. a discarded filter span exhausting retries) — treated as "discard the case" (INVALID), alongside `HEGEL_E_STOP_TEST` → OVERRUN.
+Engine facts that shaped the runtime (verified against 0.47.1):
+- `hegel_settings_new` resolves profiles + `hegel.toml` + `HEGEL_*` env vars (`HEGEL_SEED`, `HEGEL_TEST_CASES`, ...) — they apply to our runs for free. Verbosity enum: NORMAL=0, QUIET=1.
+- The engine no longer produces a failure diagnostic: the caller captures output for test cases stamped by `hegel_test_case_should_capture` (the final replay, and first-check replays of each discovered failure), keyed by origin. Our runner stores the lines of the last stamped failing execution per origin and prints them with the report. "Draw N:" traces and notes are OUR output.
+- Float draws: bounded draws never allow NaN; infinities only from an unbounded end. 32-bit bounds must be exactly representable as `float`.
+- Text generators get `min_codepoint=1` so drawn strings never contain NUL (they're C strings); regex draws are full-match with a NUL-free alphabet.
+- `u64` ranges above `INT64_MAX` go through `hegel_generate_integer_big` (9-byte two's-complement LE bounds).
+- Draws can return `HEGEL_E_ASSUME` (engine-side rejection) → INVALID, and `HEGEL_E_STOP_TEST` → OVERRUN. Any other error is misuse (bad bounds, bad pattern) → the body aborts the run as a health failure with the engine's diagnostic.
 - `origin` strings passed to `mark_complete` identify *which bug* a failure is — `HEGEL_ASSERT` passes its file:line so distinct asserts shrink as distinct bugs; messages embedding drawn values must never be origins.
-- Engine health checks surface as failures whose panic message starts with `FailedHealthCheck` — the runner prints them with our `Health check failure:` prefix (same prefix as `hegel_health_fail`).
-- `hegel_target()` is now exposed (the 0.4.3-era "blocked upstream" note is obsolete).
-- "Draw N:" traces are printed by OUR runtime, gated on `hegel_test_case_is_final_replay` — the engine no longer prints them.
+- Engine health checks surface as a run ERROR of kind HEALTH_CHECK — printed with our `Health check failure:` prefix (same as `hegel_health_fail`).
+- A test case may make 2^20 choices before overrunning (the old ~8 KB byte budget is gone) — "huge minimum input" health tests need >1M draws now.
+- The engine state machine has no preconditions — rules reject via assume (`hegel_state_machine_rule_rejected`); invariants are `always_check` in our driver to keep "check after every rule".
 
 ## Fork mode architecture
 
 In fork mode, the **parent** process owns the engine (in-process, via libhegel). For each test case:
 1. Parent calls `hegel_next_test_case`, creates request/response pipes, then `fork()`s
-2. Child runs the C test function; `hegel_draw_*()` calls write framed requests to the pipe
-3. Parent serves requests by calling the engine, writes responses back
+2. Child runs the C test function; every engine call (`hegel_draw_*`, spans, collections, ...) writes a framed request to the pipe
+3. Parent serves each request with `hegel__serve_op` — the same function nofork mode calls directly — and writes the response back
 4. Child ends with a terminal message (DONE / STOPPED / ASSUME / FAIL / HEALTH); if it crashes instead (SIGSEGV, SIGABRT), parent catches it via `waitpid()` and marks the case INTERESTING so the engine shrinks it
 
 The child never touches the engine — the parent proxies all draws. The message protocol (in `core/hegel_internal.h`) is deliberately transport-shaped: the same message set is meant to later run over a serial/TCP link to a remote target (embedded board), with the board taking the child's role and watchdog-reset taking fork's role as crash isolation.
 
-In nofork mode the body runs in the parent itself; failures longjmp back to the run loop (no crash isolation).
+In nofork mode the body runs in the parent itself and calls `hegel__serve_op` directly; failures longjmp back to the run loop. `HEGEL_ISOLATED` gives a block crash isolation there: the block forks, its child may only send notes and a verdict (mode ISO), and a crash becomes a failure whose origin names the block. In fork mode the block runs inline, after an `ISO_SITE` frame tells the parent which block a crash belongs to.
 
 ## Shrinking
 
@@ -236,7 +245,15 @@ MPI_Comm_spawn in singleton mode works with OpenMPI 5.x inside hegel fork childr
 
 The one build-critical dependency, **hegel-rust** (the engine source), is a pinned git submodule at **`deps/hegel-rust`** — see Build and test. Everything else is reference material: `make inspiration` clones sister bindings and study repos into three categorized subdirs of `inspiration/`, and symlinks `deps/hegel-rust` under `inspiration/hegel/hegel-rust` for discoverability (the symlink lives in the gitignored `inspiration/`, so it is never committed).
 
-Bug-hunt targets (Linux subsets, Scotch) are not vendored either: `scripts/fetch-target.sh` reads a committed `target.conf` (repo + pinned fix-SHA + sparse paths) and materialises a minimal, gitignored checkout at `--state buggy|fixed` — the pin is committed, the GPL source never is.
+Bug-hunt targets (Scotch, Linux) are not vendored either; they use **pins**. `tests/irl/<project>/project.conf` says where upstream lives and how to build it; `pins/<pin>.conf` names one bug's states:
+- `PIN_FIX_SHA` (upstream fix: `buggy` = its parent must be RED, `fixed` must be GREEN)
+- `PIN_BUGGY_REF` + `PIN_FIX_PATCH` (our own fix as a patch)
+- `PIN_REF` (no known bug: `current`, expected green)
+- optionally `PIN_UPSTREAM_REF` (upstream's own attempt, with its expectation).
+
+`scripts/pin-worktree.sh <project> <pin> --state S [--asan]` materialises a gitignored worktree from a shared object store under `inspiration/targets/`. For Linux that store is a partial clone: sparse, shallow, ~15 s per new commit. `scripts/pin-run.sh` judges the run. Use `make test-pin PIN=x STATE=s` / `test-pins` / `fetch-pins` in `tests/irl/scotch` or `tests/irl/linux`. Linux harnesses copy the kernel files they compile into `*_pinned.c` / `pinned-include/` at build time (`tests/irl/linux/pin.mk`). The pin is committed; the GPL source never is. Pin files say what the bug is, so they're hidden from blind bug hunters.
+
+The `fixed` state is what keeps rediscoveries honest: a test that is also red on the fixed commit found an artifact, not the bug.
 
 **`deps/hegel-rust`** (submodule) — home of the native engine AND the `hegel-c/` crate whose `libhegel` cdylib we sit on. `hegel-c/include/hegel.h` is the ABI contract; `hegel-c/examples/*.c` are canonical usage; `tests/common/utils.rs` has the `find_any`/`minimal()` test helpers our ported tests mirror.
 
@@ -252,6 +269,9 @@ Bug-hunt targets (Linux subsets, Scotch) are not vendored either: `scripts/fetch
 
 **`inspiration/targets/`** — real-world libraries we point hegel-c at to find bugs:
 - **Scotch**: built from source with `cd inspiration/targets/scotch/src && make scotch` (and `make ptscotch` for MPI). Requires `Makefile.inc` — copy from `Make.inc/Makefile.inc.x86-64_pc_linux2` and set `CCS=CCP=CCD=mpicc` for PT-Scotch.
+
+**`inspiration/kernel-review/`** — complementary (non-PBT) bug-finding systems aimed at our targets:
+- **sashiko** (Linux Foundation, Apache-2.0): agentic static LLM review of Linux kernel patches — 11-stage pipeline (7 specialist lenses + dedup/verify/report). The methodological complement of `hegel-bughunt`: same domain, static vs. dynamic. Unlike the other inspiration clones, it is **pinned** (`SASHIKO_PIN` in the Makefile), because `docs/sashiko-gap-analysis.md` maps its stage prompts (`src/worker/prompts.rs`) to what PBT can/can't reach and must stay in sync — `make check-sashiko` reports pin drift.
 
 ## Important notes
 

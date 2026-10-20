@@ -33,10 +33,14 @@ HEGEL_TEST_ULIMIT ?= 0
 # pattern: same input -> same garbage -> same outcome -> clean shrink.
 HEGEL_SHRINK_ENV ?= MALLOC_PERTURB_=170
 
+# ASAN=1: link against an AddressSanitizer Scotch (see test-pin).
+ASAN       ?=
+ASAN_FLAGS  = $(if $(filter 1,$(ASAN)),-fsanitize=address -fno-omit-frame-pointer -g)
+
 CC       = gcc
 MPICC    = mpicc
-CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) $(SCOTCH_INC) -funwind-tables -fexceptions
-LDFLAGS      = -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lscotch -lscotcherr -lz -lm -lpthread -ldl -lrt
+CFLAGS   = -Wall -Wextra -O2 -I$(REPO_ROOT) $(SCOTCH_INC) -funwind-tables -fexceptions $(ASAN_FLAGS)
+LDFLAGS      = $(ASAN_FLAGS) -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lscotch -lscotcherr -lz -lm -lpthread -ldl -lrt
 LDFLAGS_MPI  = -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lptscotch -lscotch -lptscotcherr -lscotcherr -lz -lm -lpthread -ldl -lrt
 
 # Sequential Scotch tests
@@ -62,7 +66,7 @@ TESTS_PAIRING = test_arch_build_pairing_classic test_arch_build_pairing
 ALL_TESTS = $(TESTS_PASS) $(TESTS_SHRINK) $(TESTS_MPI)
 
 .PHONY: help all clean test test-local test-deb _run-tests hegel-c-lib check-license \
-	test-pin test-pins _run-pin
+	test-pin test-pins fetch-pins
 
 help:
 	@echo "tests/irl/scotch Makefile"
@@ -72,11 +76,12 @@ help:
 	@echo "  all               Build all test binaries (requires SCOTCH_INC / SCOTCH_LIB)"
 	@echo "  test-local        Build and test with inspiration/scotch (built from source)"
 	@echo "  test-deb          Build and test with system libscotch-dev"
-	@echo "  test-pin PIN=x [STATE=buggy|fixed|upstream]"
+	@echo "  test-pin PIN=x [STATE=buggy|fixed|upstream] [ASAN=1]"
 	@echo "                    Build Scotch at bug pin x (pins/x.conf) in a worktree and"
 	@echo "                    run its tests: buggy must fail + shrink small, fixed must pass,"
 	@echo "                    upstream (if the pin has one) as the pin says"
 	@echo "  test-pins         test-pin for every pin and state ($(PINS))"
+	@echo "  fetch-pins        Build every pin's Scotch worktrees (then works offline)"
 	@echo "  hegel-c-lib       Build libhegel_c.a only"
 	@echo "  check-license     Verify SPDX headers"
 	@echo "  clean             Remove test binaries"
@@ -144,25 +149,32 @@ _run-pairing: hegel-c-lib $(TESTS_PAIRING)
 	if [ $$errors -ne 0 ]; then exit 1; fi
 
 # ---- Bug pins: one Scotch worktree per (bug, state) ----------------------
-# A pin (pins/<name>.conf) names the commit that fixed a bug and the tests
-# that witness it.  scripts/scotch-worktree.sh builds Scotch at the fix's
-# parent (buggy) or at the fix (fixed) in inspiration/targets/scotch@<pin>-<state>;
-# the pin's tests are rebuilt against that worktree and judged by state.
+# A pin (pins/<name>.conf) names a bug's before/after states and the tests
+# that witness it.  scripts/pin-worktree.sh builds Scotch at the requested
+# state in a worktree of inspiration/targets/scotch (shared with the Linux
+# pins, see tests/irl/linux/); the pin's tests are rebuilt against it and
+# judged by scripts/pin-run.sh.  ASAN=1 uses an AddressSanitizer build of
+# Scotch (separate worktree) and links the tests with it.
 PIN   ?=
-STATE ?= buggy
+STATE ?=
 PINS   = $(basename $(notdir $(wildcard pins/*.conf)))
-WORKTREE = $(REPO_ROOT)/scripts/scotch-worktree.sh
+WORKTREE = $(REPO_ROOT)/scripts/pin-worktree.sh scotch
+PINRUN   = $(REPO_ROOT)/scripts/pin-run.sh
 
-test-pin:
-	@[ -n "$(PIN)" ] || { echo "usage: make test-pin PIN=<pin> [STATE=buggy|fixed]  (pins: $(PINS))" >&2; exit 2; }
-	@$(WORKTREE) $(PIN) --state $(STATE)
-	@dir=$$($(WORKTREE) $(PIN) --state $(STATE) --path); \
-	expect=$$($(WORKTREE) $(PIN) --states | awk '$$1 == "$(STATE)" { print $$2 }'); \
-	. pins/$(PIN).conf; \
+test-pin: hegel-c-lib
+	@[ -n "$(PIN)" ] || { echo "usage: make test-pin PIN=<pin> [STATE=buggy|fixed|upstream] [ASAN=1]  (pins: $(PINS))" >&2; exit 2; }
+	@set -e; . pins/$(PIN).conf; \
+	state="$(STATE)"; \
+	[ -n "$$state" ] || state=$$($(WORKTREE) $(PIN) --states | head -1 | cut -d' ' -f1); \
+	expect=$$($(WORKTREE) $(PIN) --states | awk -v s="$$state" '$$1 == s { print $$2 }'); \
+	dir=$$($(WORKTREE) $(PIN) --state $$state $(if $(filter 1,$(ASAN)),--asan)); \
+	echo ""; echo "==== Pin $(PIN) [$$state$(if $(filter 1,$(ASAN)),+asan), expect $$expect] ===="; \
 	rm -f $$PIN_TESTS; \
-	$(MAKE) --no-print-directory _run-pin EXPECT="$$expect" \
-		PIN_TESTS="$$PIN_TESTS" PIN_MAX_NVERT="$${PIN_MAX_NVERT:-5}" \
-		SCOTCH_INC="-I$$dir/include" SCOTCH_LIB="-L$$dir/lib"
+	$(MAKE) --no-print-directory $$PIN_TESTS SCOTCH_INC="-I$$dir/include" SCOTCH_LIB="-L$$dir/lib" \
+		ASAN=$(ASAN) >/dev/null; \
+	bins=""; for t in $$PIN_TESTS; do bins="$$bins $(CURDIR)/$$t"; done; \
+	PIN_MAX_NVERT=$${PIN_MAX_NVERT:-} PIN_RUN_ENV="$(HEGEL_SHRINK_ENV) $${PIN_ENV:-}" \
+		HEGEL_TEST_ULIMIT=$(HEGEL_TEST_ULIMIT) $(PINRUN) $$expect $$bins
 
 test-pins:
 	@errors=0; \
@@ -172,38 +184,10 @@ test-pins:
 	echo ""; echo "==== Pins: $$errors failing (pin, state) pair(s) ===="; \
 	[ $$errors -eq 0 ]
 
-_run-pin: hegel-c-lib $(PIN_TESTS)
-	@errors=0; \
-	echo ""; \
-	echo "==== Pin $(PIN) [$(STATE), expect $(EXPECT)] ===="; \
-	for t in $(PIN_TESTS); do \
-		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(HEGEL_SHRINK_ENV) timeout 300 $(CURDIR)/$$t 2>&1); \
-		rc=$$?; \
-		if [ "$(EXPECT)" = green ]; then \
-			if [ $$rc -eq 0 ]; then echo "OK (green)"; \
-			else echo "FAIL — expected green, got exit $$rc"; echo "$$output" | tail -20; errors=$$((errors + 1)); fi; \
-			continue; \
-		fi; \
-		if [ $$rc -eq 0 ]; then \
-			echo "FAIL — expected red, bug not found (exit 0)"; errors=$$((errors + 1)); continue; \
-		fi; \
-		minimal=$$(echo "$$output" | grep -oE 'MINIMAL nvert=[0-9]+ nedges=[0-9]+ edges=\[[^]]*\]' | tail -1); \
-		caveat=$$(echo "$$output" | grep -m1 -oE 'caveat: .*'); \
-		if [ -z "$$minimal" ]; then \
-			echo "OK (found, exit $$rc; no MINIMAL line)"; \
-		else \
-			nvert=$$(echo "$$minimal" | sed -n 's/MINIMAL nvert=\([0-9]*\).*/\1/p'); \
-			if [ "$$nvert" -gt $(PIN_MAX_NVERT) ]; then \
-				echo "FAIL — shrunk to nvert=$$nvert (expected <= $(PIN_MAX_NVERT)): $$minimal"; \
-				errors=$$((errors + 1)); \
-			else \
-				echo "OK (shrunk to $$minimal)"; \
-			fi; \
-		fi; \
-		[ -z "$$caveat" ] || echo "      $$caveat"; \
-	done; \
-	[ $$errors -eq 0 ]
+fetch-pins:
+	@for p in $(PINS); do for s in $$($(WORKTREE) $$p --states | cut -d' ' -f1); do \
+		$(WORKTREE) $$p --state $$s >/dev/null || exit 1; \
+	done; done; echo "all pins fetched and built"
 
 test:
 	@echo "ERROR: use 'make test-local' or 'make test-deb'" >&2; exit 1
