@@ -20,3 +20,11 @@ tests/mpi/test_*
 !tests/mpi/test_*.c
 tests/bench/test_*
 !tests/bench/test_*.c
+.corpus/
+tests/irl/linux/sg_split/full_*
+tests/irl/linux/sg_split/ladder_*
+tests/irl/linux/asn1/probe_*
+!tests/irl/**/*.c
+tests/irl/linux/*/*_pinned.c
+tests/irl/linux/*/build-pin.log
+tests/irl/linux/*/pinned-include/

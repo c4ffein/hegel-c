@@ -1,0 +1,21 @@
+Our sg_split candidate "fixed_alt": the v1 series' fix alone — break the
+sg_calculate_split() loop on nb_splits <= 0 (was !nb_splits), so the double
+decrement cannot overshoot to -1.
+Also the sg_split pin's PIN_PATCH (see sg_split.conf): the hunk applies
+unchanged at 8b46fdaea819 and its parent.
+
+Against lib/sg_split.c at v7.1 (same file as the v2 series base 08d0d3466664).
+Made from the former vendored tests/irl/linux/sg_split/sg_split_fixed_alt.c; the
+sg_split harness Makefile applies it (patch -o) to build that variant.
+
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -67,7 +67,7 @@
+ 			size = *(++sizes);
+ 		}
+ 
+-		if (!nb_splits)
++		if (nb_splits <= 0)
+ 			break;
+ 	}
+ 

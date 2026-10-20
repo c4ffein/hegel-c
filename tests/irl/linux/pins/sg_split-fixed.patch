@@ -1,0 +1,26 @@
+Our early (v1-era) sg_split candidate "fixed": skip input entries while the
+current split size is zero.  Superseded; kept for the record.
+
+Against lib/sg_split.c at v7.1 (same file as the v2 series base 08d0d3466664).
+Made from the former vendored tests/irl/linux/sg_split/sg_split_fixed.c; the
+sg_split harness Makefile applies it (patch -o) to build that variant.
+
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+  * Copyright (C) 2015 Robert Jarzmik <robert.jarzmik@free.fr>
++ * Copyright (C) 2026 Charles Pellegrini <c4ffein@gmail.com>
+  *
+  * Scatterlist splitting helpers.
+  */
+@@ -38,6 +39,8 @@
+ 			skip -= sglen;
+ 			continue;
+ 		}
++		if (!size)
++			continue;
+ 
+ 		len = min_t(size_t, size, sglen - skip);
+ 		if (!curr->in_sg0) {

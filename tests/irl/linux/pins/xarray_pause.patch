@@ -1,0 +1,27 @@
+Our fix for xas_pause() (lib/xarray.c), against the tree just before
+upstream c9ba5249ef8b.  xas_pause() moves xa_index forward by
+(offset - xa_offset) << shift, where offset is the first slot past the
+current entry and its siblings.  But after a walk that starts inside a
+multi-index entry, xa_index is neither aligned to node->shift (what
+c9ba5249 fixed, by masking those bits) nor in the slot xa_offset names:
+xas_descend() resolves a sibling slot to the entry's canonical slot, so
+xa_offset is the canonical slot while xa_index still points at the
+sibling.  E.g. a leaf (shift 0) with an order-1 entry at 0..1 and an
+entry at 2: a walk from index 1 yields index 1 with xa_offset 0, and
+xas_pause() sets xa_index = 1 + (2 - 0) = 3, skipping index 2.  Still
+present in v7.1.  Fix: measure the step from xa_index's own slot
+(get_offset()), after masking the bits under node->shift.
+Applied by scripts/pin-worktree.sh (git apply) for the pin's fixed state.
+
+--- a/lib/xarray.c
++++ b/lib/xarray.c
+@@ -1152,7 +1152,8 @@
+ 			if (!xa_is_sibling(xa_entry(xas->xa, node, offset)))
+ 				break;
+ 		}
+-		xas->xa_index += (offset - xas->xa_offset) << node->shift;
++		xas->xa_index &= ~0UL << node->shift;
++		xas->xa_index += (offset - get_offset(xas->xa_index, node)) << node->shift;
+ 		if (xas->xa_index == 0)
+ 			xas->xa_node = XAS_BOUNDS;
+ 	} else {

@@ -35,3 +35,16 @@ path = "tests/irl/scotch/pins/*.patch"
 precedence = "override"
 SPDX-FileCopyrightText = ["IPB, Universite de Bordeaux, INRIA & CNRS", "2026 c4ffein (modifications)"]
 SPDX-License-Identifier = "CECILL-C"
+
+# Patches against the Linux kernel (GPL-2.0-only): diff context is kernel source.
+[[annotations]]
+path = "tests/irl/linux/pins/*.patch"
+precedence = "override"
+SPDX-FileCopyrightText = ["The Linux kernel authors", "2026 c4ffein (modifications)"]
+SPDX-License-Identifier = "GPL-2.0-only"
+
+# Workflow scripts must start with `export const meta`, so no header comment.
+[[annotations]]
+path = "tools/rediscovery-workflow.js"
+SPDX-FileCopyrightText = "2026 c4ffein"
+SPDX-License-Identifier = "MIT"

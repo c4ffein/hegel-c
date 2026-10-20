@@ -1,0 +1,70 @@
+Our sg_split candidate "bugc": the v2 series MINUS its ->length clobber fix
+(nb_splits overshoot fix + zero-nents copier guards only), to isolate bug C
+(sg_dma_len aliasing ->length on !CONFIG_NEED_SG_DMA_LENGTH).
+
+Against lib/sg_split.c at v7.1 (same file as the v2 series base 08d0d3466664).
+Made from the former vendored tests/irl/linux/sg_split/sg_split_bugc.c; the
+sg_split harness Makefile applies it (patch -o) to build that variant.
+
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -1,8 +1,23 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+  * Copyright (C) 2015 Robert Jarzmik <robert.jarzmik@free.fr>
++ * Copyright (C) 2026 Charles Pellegrini <c4ffein.work@gmail.com>
+  *
+  * Scatterlist splitting helpers.
++ *
++ * This is v2 MINUS the bug-C fix (overshoot + OOB guard only) to
++ * isolate bug C under review, so the userspace harness exercises exactly what
++ * the patch series ships:
++ *
++ *   patch 1 — sg_calculate_split() nb_splits overshoot: break on <= 0
++ *             (was `if (!nb_splits)`, missed the decrement to -1).
++ *   patch 2 — sg_split_phys() ->length clobber (bug C): write ->length
++ *             AFTER `sg_dma_len(out_sg) = 0`, so on !NEED_SG_DMA_LENGTH
++ *             arches (where sg_dma_len aliases ->length) the length the
++ *             loop just computed is not wiped.
++ *   patch 4 — zero-nents OOB guard in BOTH copiers: a split that covers
++ *             no input entry must not run `out_sg[-1] = ...` against a
++ *             zero-size (ZERO_SIZE_PTR) buffer.
+  */
+ 
+ #include <linux/scatterlist.h>
+@@ -67,7 +82,7 @@
+ 			size = *(++sizes);
+ 		}
+ 
+-		if (!nb_splits)
++		if (nb_splits <= 0)		/* patch 1: was `if (!nb_splits)` */
+ 			break;
+ 	}
+ 
+@@ -81,6 +96,8 @@
+ 	struct sg_splitter *split;
+ 
+ 	for (i = 0, split = splitters; i < nb_splits; i++, split++) {
++		if (!split->nents)		/* patch 4: zero-nents OOB guard */
++			continue;
+ 		in_sg = split->in_sg0;
+ 		out_sg = split->out_sg;
+ 		for (j = 0; j < split->nents; j++, out_sg++) {
+@@ -90,7 +107,7 @@
+ 				out_sg->length -= split->skip_sg0;
+ 			}
+ 			sg_dma_address(out_sg) = 0;
+-			sg_dma_len(out_sg) = 0;
++			sg_dma_len(out_sg) = 0;	/* BUG C: clobbers ->length on !NEED */
+ 			in_sg = sg_next(in_sg);
+ 		}
+ 		out_sg[-1].length = split->length_last_sg;
+@@ -105,6 +122,8 @@
+ 	struct sg_splitter *split;
+ 
+ 	for (i = 0, split = splitters; i < nb_splits; i++, split++) {
++		if (!split->nents)		/* patch 4: zero-nents OOB guard */
++			continue;
+ 		in_sg = split->in_sg0;
+ 		out_sg = split->out_sg;
+ 		for (j = 0; j < split->nents; j++, out_sg++) {

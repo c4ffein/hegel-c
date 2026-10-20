@@ -1,0 +1,28 @@
+Our fix for the heap OOB in lib/packing.c calculate_box_addr(), against
+v7.1 (lib/packing.c unchanged on master as of 2026-10-19).  Without
+QUIRK_LSW32_IS_FIRST, offset_of_group = len - (this_group + 1) * 4
+underflows when len is not a multiple of 4 and box lies in the short,
+most significant group; the big-endian offset_in_group term cancels the
+wrap, the little-endian one does not, so pack()/unpack() index far
+outside pbuf.  Size the group from the octets actually present and
+derive its offset from that.  Applied by scripts/pin-worktree.sh
+(git apply) for the pin's fixed state.
+
+--- a/lib/packing.c
++++ b/lib/packing.c
+@@ -63,12 +63,12 @@
+ 	size_t offset_of_group, offset_in_group, this_group = box / 4;
+ 	size_t group_size;
+ 
++	group_size = min(4, len - this_group * 4);
++
+ 	if (quirks & QUIRK_LSW32_IS_FIRST)
+ 		offset_of_group = this_group * 4;
+ 	else
+-		offset_of_group = len - ((this_group + 1) * 4);
+-
+-	group_size = min(4, len - offset_of_group);
++		offset_of_group = len - this_group * 4 - group_size;
+ 
+ 	if (quirks & QUIRK_LITTLE_ENDIAN)
+ 		offset_in_group = box - this_group * 4;
