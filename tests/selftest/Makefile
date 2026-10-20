@@ -79,7 +79,8 @@ TESTS_PASS = test_pass_simple \
              test_isolated_pass \
              test_collection_basic \
              test_recursion_tree \
-             test_pool_basic
+             test_pool_basic \
+             test_schema_self_limits
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -116,7 +117,6 @@ TESTS_CRASH = test_crash_segfault \
 # ok" marker the test prints).
 TESTS_HEALTH = test_filter_too_much \
                test_filter_too_much_suite \
-               test_schema_depth_health \
                test_isolated_draw_inside
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)

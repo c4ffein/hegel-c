@@ -504,6 +504,53 @@ elements with their own bindings don't cross-pollute.
 
 ---
 
+## Shared value across union / variant / optional boundaries
+
+A drawn value that must stay coherent between a struct and the
+polymorphic part it carries — a message header whose `len` repeats
+inside the chosen body variant, a config whose optional section
+mirrors a top-level field. `HEGEL_USE` inside a case (or an
+optional's inner struct) walks the scope chain out to the enclosing
+struct's `HEGEL_LET`; a case-local `HEGEL_LET` shadows the outer
+binding for that case only.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  int  n;
+  int  tag;
+  union {
+    struct { int a; }         one;   /* a == n */
+    struct { int x; int y; }  two;   /* x == n */
+  } u;
+} UBox;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+ubox_schema = HEGEL_STRUCT (UBox,
+    HEGEL_LET   (n, HEGEL_INT (0, 50)),
+    HEGEL_USE   (n),
+    HEGEL_UNION (
+        HEGEL_CASE (HEGEL_USE (n)),
+        HEGEL_CASE (HEGEL_USE (n), HEGEL_INT (0, 5))));
+```
+
+**Tests:**
+- [`test_binding_use_in_union.c`](../tests/selftest/test_binding_use_in_union.c) — tagged + untagged unions, plus a case-local LET shadowing the outer binding
+- [`test_binding_use_in_variant.c`](../tests/selftest/test_binding_use_in_variant.c) — variant case structs resolving the outer LET; also documents the cluster-alignment constraint (the tag+ptr cluster is pointer-aligned, so it can't directly follow a lone int field)
+- [`test_binding_use_in_optional.c`](../tests/selftest/test_binding_use_in_optional.c) — optional inner struct with a USE field and an inner ARR_OF sized by the outer LET
+- [`test_binding_shrink_use_in_cases.c`](../tests/selftest/test_binding_shrink_use_in_cases.c) — shrink-quality probes: all three paths shrink to the expected minimal with USE coherence intact
+
+Exercises: the scope chain crosses every composite draw boundary —
+union case bodies, variant case structs, optional inner structs —
+so one binding can feed slots on both sides of the polymorphism.
+
+---
+
 ## Length-prefixed buffer (Pascal string, BER-style)
 
 Some C interfaces carry the length inside the buffer rather than in
@@ -704,42 +751,38 @@ for the full story.
 
 ---
 
-## Max recursion depth health check
+## Recursive trees: depth cap and leaf budget
 
-`HEGEL_SELF`-bearing schemas are bounded by
-`HEGEL_DEFAULT_MAX_DEPTH = 50`. Exhausting the cap calls
-`hegel_health_fail`, which emits `Health check failure: max
-recursion depth reached ...` to stderr and exits non-zero — a
-**test-setup** failure rather than a property failure. The selftest
-Makefile's `TESTS_HEALTH` category matches on that prefix.
+`HEGEL_SELF` slots are drawn through the engine's recursion protocol:
+each slot either holds a child or is NULL (a leaf), as the engine
+decides. Drawn with `max_depth` d (default `HEGEL_DEFAULT_MAX_DEPTH =
+50`), a tree has at most d levels of structs; it has at most 100 NULL
+slots, with over-budget attempts unwound and redrawn from the root.
+Neither limit fails the test.
 
-**Test:** [`test_schema_depth_health.c`](../tests/selftest/test_schema_depth_health.c)
+**Test:** [`test_schema_self_limits.c`](../tests/selftest/test_schema_self_limits.c)
 
 **Schema** (transcluded from the test — kept in sync by
 `make docs-check`):
 
-<!-- /include tests/selftest/test_schema_depth_health.c:69-71 -->
+<!-- /include tests/selftest/test_schema_self_limits.c:119-122 -->
 ```c
   node_schema = HEGEL_STRUCT (Node,
       HEGEL_INT  (0, 100),
+      HEGEL_SELF (),
       HEGEL_SELF ());
 ```
 <!-- /endinclude -->
 
-Forces the check to trip by calling `hegel_schema_draw_at_n(tc, &n,
-schema, 0)` with `max_depth=0` — any present=1 draw on the
-`HEGEL_SELF` triggers the health check immediately. In production
-tests the cap rarely trips; if it does, either restructure the
-schema for lower branching or pass a higher cap via
-`hegel_schema_draw_n` / `_at_n`. See
-[schema-api.md → Recursion depth](schema-api.md#recursion-depth)
-for why 50.
+A binary tree, the shape that used to need the cap: two `HEGEL_SELF`
+slots per node. The test checks the depth cap (drawn with
+`max_depth` 3), the leaf budget at the default depth, and that the
+budget isn't met by drawing only tiny trees. See
+[schema-api.md → Recursion depth](schema-api.md#recursion-depth).
 
 ---
 
 ## Test count
 
-As of this document's last update: **9 schema test files**, all
-passing under AddressSanitizer with no leaks, use-after-frees, or
-double frees. Full suite: **32/32 selftests** in the `selftest`
-target.
+As of this document's last update (2026-07-13): **81/81 selftests**
+in the `selftest` target (PASS/FAIL/CRASH/HEALTH-CHECK buckets).

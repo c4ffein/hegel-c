@@ -225,7 +225,7 @@ into macros and runtime, which is the C way.
 Every integer type has a **full-range** version (no args) and a
 **range-constrained** version:
 
-<!-- /include hegel_gen.h:528-529 -->
+<!-- /include hegel_gen.h:533-534 -->
 ```c
 hegel_schema_t hegel_schema_i8          (void);  /* [-128, 127] */
 hegel_schema_t hegel_schema_i8_range    (int64_t lo, int64_t hi);
@@ -237,7 +237,7 @@ Same shape for `i16`, `i32`, `i64`, `int`, `long`, `u8`, `u16`, `u32`,
 
 Floats:
 
-<!-- /include hegel_gen.h:553-556 -->
+<!-- /include hegel_gen.h:558-561 -->
 ```c
 hegel_schema_t hegel_schema_float        (void);  /* [-FLT_MAX, FLT_MAX] */
 hegel_schema_t hegel_schema_float_range  (double lo, double hi);
@@ -249,7 +249,7 @@ hegel_schema_t hegel_schema_double_range (double lo, double hi);
 Text (currently char-by-char from `[a-z]`, see TODO.md for the
 `hegel_draw_regex` fullmatch fix):
 
-<!-- /include hegel_gen.h:562-562 -->
+<!-- /include hegel_gen.h:567-567 -->
 ```c
 hegel_schema_t hegel_schema_text (int min_len, int max_len);
 ```
@@ -358,10 +358,9 @@ HEGEL_SELF ()    /* Tree *left; — optional recursive */
 
 Shorthand for `HEGEL_OPTIONAL (hegel_schema_self ())`. Must be used
 inside a `HEGEL_STRUCT` that declares the type. The field must be
-a pointer to the enclosing struct type. Automatically optional
-(50/50 NULL) because recursive chains need termination — unbounded
-recursion is capped at `HEGEL_DEFAULT_MAX_DEPTH = 50` (see
-[Recursion depth](#recursion-depth) below for why 50).
+a pointer to the enclosing struct type. Whether the slot holds a
+child or NULL is decided by the engine's recursion protocol, not a
+coin flip — see [Recursion depth](#recursion-depth) below.
 
 ### `HEGEL_BINDING` / `HEGEL_LET` / `HEGEL_USE` — let-bindings
 
@@ -401,6 +400,14 @@ LETs in different ctxs do not share — each struct instance draws
 its own value. See `test_binding_jagged_2d.c` for the full
 demonstration (n groups, each with its own m_i elements).
 
+The chain crosses every composite boundary: `HEGEL_UNION` /
+`HEGEL_UNION_UNTAGGED` case bodies, `HEGEL_VARIANT` case structs,
+and the inner struct of a `HEGEL_OPTIONAL` all resolve outer LETs,
+and a LET inside a case is case-local (shadows an outer same-ID
+binding for that case only). Tests: `test_binding_use_in_union.c`,
+`test_binding_use_in_variant.c`, `test_binding_use_in_optional.c`;
+shrink-quality coverage in `test_binding_shrink_use_in_cases.c`.
+
 **Non-positional means layout order is independent of dependency
 order.** A struct `{ int *items; int tag; int n; }` can be built
 with LET anywhere in the entry list and USE for `n` at the last
@@ -419,10 +426,12 @@ needs it, and the shrinker sees cleaner locality.
 
 **One LET per id per scope.** Calling `HEGEL_LET(n, ...)` twice
 in the same struct's entry list is a hard abort — almost always
-a typo'd name colliding with an earlier binding. Use a separate
-`HEGEL_BINDING` declaration for a second value. Nested structs
-*can* re-LET the same id (inner shadows outer); that's per-scope,
-not per-process.
+a typo'd name colliding with an earlier binding. The abort names
+the binding as written in source (`HEGEL_LET (n) appears twice`);
+`HEGEL_LET` stringifies the name into the schema via
+`hegel_schema_bind_named`. Use a separate `HEGEL_BINDING`
+declaration for a second value. Nested structs *can* re-LET the
+same id (inner shadows outer); that's per-scope, not per-process.
 
 LET's inner schema may be a scalar INTEGER (width 4 or 8), a FLOAT
 (single or double), or a composed schema producing one of those
@@ -852,26 +861,34 @@ type, not in the macro name.
 
 ### Recursion depth
 
-Schemas with `HEGEL_SELF` need a termination strategy.
-`HEGEL_SELF()` expands to a 50/50 `HEGEL_OPTIONAL(self)`, but for
-schemas with branching factor ≥ 2 (e.g. a binary tree with left +
-right self-references), the branching process is **critical** under
-uniform 50/50 probabilities — a non-trivial fraction of draws would
-recurse arbitrarily deep.
+`HEGEL_SELF` slots are drawn through the engine's recursion protocol
+(`hegel_recursion_*` in `hegel_c.h`), the same one every Hegel
+frontend uses for recursive values. Each `HEGEL_SELF` slot is a
+sub-value: it either *branches* (holds a child struct, whose own
+`HEGEL_SELF` slots are the next level's sub-values) or is a *leaf*
+(NULL). The engine owns the branch probabilities and adapts them to
+the arity the schema actually produces, so a binary tree is as
+well-behaved as a linked list: values aim at a size drawn per test
+case and shrink toward small trees.
 
-`HEGEL_DEFAULT_MAX_DEPTH = 50` is the cap. When a draw hits the
-bound, it calls `hegel_health_fail` — signalling a **test-setup**
-failure, not a code-under-test failure. The 50 is the empirical
-value at which the selftest's binary-tree schema draws reliably
-(>1000 consecutive runs without tripping the cap).
+Two limits, both enforced by the engine:
 
-For schemas with lower branching (single `HEGEL_SELF`, linear
-chains) smaller caps work fine; for heavier branching, increase the
-cap with `hegel_schema_draw_n(tc, schema, &out, max_depth)` or
-`hegel_schema_draw_at_n(tc, addr, schema, max_depth)`.
+- **Depth.** Drawn with `max_depth` d, a tree has at most d levels of
+  structs, root included; slots at the limit are always NULL.
+  `HEGEL_DEFAULT_MAX_DEPTH = 50`; pass another cap with
+  `hegel_schema_draw_n(tc, schema, &out, max_depth)` or
+  `hegel_schema_draw_at_n(tc, addr, schema, max_depth)`.
+- **Leaves.** At most 100 NULL slots per drawn value (hegel-rust's
+  default). An attempt that outgrows the budget is unwound — freed,
+  without drawing anything more — and redrawn from the root, steering
+  toward a smaller size; after repeated overruns the engine discards
+  the test case.
 
-This isn't a shrinking-quality concern — the cap does most of the
-termination work for deep recursive schemas, and that's by design.
+Neither limit is a failure: hitting the depth cap just ends that
+branch, and budget overruns are retried. Non-recursive schemas never
+call the recursion protocol, so their draws are unchanged.
+
+Test: [`test_schema_self_limits.c`](../tests/selftest/test_schema_self_limits.c).
 
 ## Shape accessors
 

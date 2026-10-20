@@ -108,7 +108,7 @@ The schema system lets tests describe C structs declaratively and get generation
 - `HEGEL_INT(lo, hi)` / `HEGEL_INT()` (full range) — 0-vs-2-arg overloaded via `__VA_OPT__`; same for `_I8`/`_U8`/`_I16`/…/`_DOUBLE` / `_LONG` / `_FLOAT`
 - `HEGEL_TEXT(lo, hi)` — `char *` field, pointer-sized slot
 - `HEGEL_OPTIONAL(inner)` — 50/50 nullable pointer; 1 slot
-- `HEGEL_SELF()` — optional recursive pointer; 1 slot
+- `HEGEL_SELF()` — optional recursive pointer; 1 slot. Child-or-NULL is decided by the engine's recursion protocol (branch = child, leaf = NULL), which owns the probabilities, the depth cap and a 100-leaf budget; over-budget attempts are unwound (longjmp, tracked allocations freed) and redrawn from the root — see `hegel__draw_root` in `hegel_gen.c`.
 - `HEGEL_BINDING(name)` — declares a compile-time binding id (expands to `enum { name = __COUNTER__ }`). Typo → compile error. Function-local scope is the pit of success; file-scope works; headers discouraged (per-TU `__COUNTER__` values don't match across translation units).
 - `HEGEL_LET(name, inner)` — non-positional: draws `inner` and caches the value under `name` in the enclosing struct's draw ctx. No slot consumed. Inner must be a scalar INTEGER (width 4 or 8) or FLOAT (single or double); composed scalar schemas (`HEGEL_MAP_INT`, etc.) are also accepted.
 - `HEGEL_USE(name)` / `_I64` / `_U64` / `_FLOAT` / `_DOUBLE` — reads the cached value and writes it to the current slot (1 slot, width matching the variant). Also usable as a length parameter to `HEGEL_ARR_OF` (int variant only). Walks the scope chain outward, so a USE in an inner struct resolves a LET in any enclosing struct. Width / sign / float-ness must match the LET inner kind — mismatch is a hard abort. Unresolved → hard abort with actionable message (schema authoring error, not a discardable filter).
@@ -149,7 +149,7 @@ The positional form means **the user writes a flat list of generators in the sam
 - `HEGEL_DRAW_INT(lo, hi)` / `HEGEL_DRAW_INT()` (full range) — dispatches directly to the `hegel_draw_int` primitive. Same `(lo, hi)` / `()` overloading for `_I64` / `_U64` / `_DOUBLE` / `_FLOAT`. `HEGEL_DRAW_BOOL()` takes no args. No schema allocation. For composed scalar schemas (`HEGEL_MAP_INT`, `HEGEL_FILTER_INT`, `HEGEL_FLAT_MAP_INT`, `HEGEL_ONE_OF`), hoist and use `HEGEL_DRAW(&x, sch)`. No `HEGEL_DRAW_ARRAY` by design.
 - `hegel_shape_free(sh)` — walks shape tree, frees value memory + shape (NULL-safe)
 - `hegel_schema_free(schema)` — refcount-decrement, free schema at zero
-- `HEGEL_DEFAULT_MAX_DEPTH = 50` — recursion cap for `HEGEL_SELF`. Exhaustion calls `hegel_health_fail`. Override via `hegel_schema_draw_n` / `hegel_schema_draw_at_n`.
+- `HEGEL_DEFAULT_MAX_DEPTH = 50` — depth cap for `HEGEL_SELF` trees (at most that many levels of structs, root included; slots at the cap are NULL — not a failure). Override via `hegel_schema_draw_n` / `hegel_schema_draw_at_n`.
 
 **Shape accessors** (for untagged unions, parallel-length patterns):
 - `hegel_shape_tag(sh)` — variant index

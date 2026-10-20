@@ -16,6 +16,164 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <float.h>
+#include <setjmp.h>
+
+/* ================================================================
+** Recursive draws: HEGEL_SELF on the engine's recursion protocol
+** ================================================================
+**
+** Whether a HEGEL_SELF slot holds a child is the engine's call
+** (hegel_recursion_branch), not a coin flip: the engine owns branch
+** probabilities, the depth cap and the leaf budget, so recursive values
+** stay finite and shrink like every other Hegel frontend's.  Each
+** HEGEL_SELF slot is one sub-value: "branch" = a child struct whose own
+** SELF slots are the next level's sub-values, "leaf" = NULL.  The root
+** struct is always a branch, so its slots are decided at depth 1.
+**
+** When the engine says an attempt outgrew its leaf budget, the protocol
+** wants the generator unwound WITHOUT drawing anything more, then the
+** value redrawn from the root.  That is a longjmp back to the top-level
+** draw (hegel__draw_root), as hegel-rust's recursive generator does
+** with catch_unwind.  To make it leak-free, every allocation this file
+** makes while a top-level draw is running is recorded (the calloc /
+** malloc / free macros below), and every span it opens is counted, so
+** the unwind can free the abandoned partial value and close its spans.
+**
+** Top-level draws don't nest (map / filter / flat_map callbacks are
+** pure; they never draw), so one record is live at a time.  A record
+** still set when a new top-level draw starts belongs to a draw that a
+** non-local exit abandoned (nofork mode: a filter's hegel_assume, a
+** health failure); its partial value is unreachable and is freed then. */
+
+typedef struct hegel__rec_s {
+  int                  created;      /* handle made (lazily, at the first SELF slot) */
+  hegel_recursion      handle;
+  uint64_t             max_depth;
+  uint64_t             depth;        /* SELF nesting of the struct being drawn; root = 0 */
+  int                  open_spans;   /* spans this attempt opened and has not closed */
+  void **              allocs;       /* live allocations made by this attempt */
+  size_t               n_allocs;
+  size_t               cap_allocs;
+  jmp_buf              jb;
+} hegel__rec;
+
+static hegel__rec * hegel__rec_cur = NULL;
+
+static void
+hegel__rec_abandon (hegel__rec * r)
+{
+  size_t i;
+  for (i = 0; i < r->n_allocs; i ++)
+    free (r->allocs[i]);
+  free (r->allocs);
+  free (r);
+}
+
+/* Leaf budget for one HEGEL_SELF value — hegel-rust's recursive default. */
+#define HEGEL__SELF_MAX_LEAVES 100
+
+static void
+hegel__rec_track (void * p)
+{
+  hegel__rec * r = hegel__rec_cur;
+  if (r == NULL || p == NULL)
+    return;
+  if (r->n_allocs == r->cap_allocs) {
+    size_t  cap = r->cap_allocs ? r->cap_allocs * 2 : 64;
+    void ** a = (void **) realloc (r->allocs, cap * sizeof (void *));
+    if (a == NULL) {
+      fprintf (stderr, "hegel: out of memory\n");
+      abort ();
+    }
+    r->allocs = a;
+    r->cap_allocs = cap;
+  }
+  r->allocs[r->n_allocs ++] = p;
+}
+
+static void
+hegel__rec_untrack (void * p)
+{
+  hegel__rec * r = hegel__rec_cur;
+  size_t       i;
+  if (r == NULL || p == NULL)
+    return;
+  for (i = r->n_allocs; i -- > 0; )
+    if (r->allocs[i] == p) {
+      r->allocs[i] = r->allocs[-- r->n_allocs];
+      return;
+    }
+}
+
+static void *
+hegel__xcalloc (size_t n, size_t sz)
+{
+  void * p = calloc (n, sz);
+  hegel__rec_track (p);
+  return (p);
+}
+
+static void *
+hegel__xmalloc (size_t sz)
+{
+  void * p = malloc (sz);
+  hegel__rec_track (p);
+  return (p);
+}
+
+static void
+hegel__xfree (void * p)
+{
+  hegel__rec_untrack (p);
+  free (p);
+}
+
+static void
+hegel__span_start (hegel_testcase * tc, uint64_t label)
+{
+  hegel_start_span (tc, label);
+  if (hegel__rec_cur != NULL)
+    hegel__rec_cur->open_spans ++;
+}
+
+static void
+hegel__span_stop (hegel_testcase * tc, int discard)
+{
+  hegel_stop_span (tc, discard);
+  if (hegel__rec_cur != NULL)
+    hegel__rec_cur->open_spans --;
+}
+
+/* Everything below allocates and opens spans through the trackers.
+** `(free) (p)` / `(hegel_stop_span) (tc, d)` reach the real functions. */
+#define calloc(n, sz)              hegel__xcalloc ((n), (sz))
+#define malloc(sz)                 hegel__xmalloc ((sz))
+#define free(p)                    hegel__xfree ((p))
+#define hegel_start_span(tc, l)    hegel__span_start ((tc), (l))
+#define hegel_stop_span(tc, d)     hegel__span_stop ((tc), (d))
+
+/* Presence of the HEGEL_SELF slot about to be drawn.  Returns 1 for a
+** child (the caller draws it with hegel__rec_cur->depth one higher),
+** 0 for NULL; longjmps out when the attempt exceeds its leaf budget. */
+static int
+hegel__self_present (hegel_testcase * tc)
+{
+  hegel__rec * r = hegel__rec_cur;
+
+  if (r == NULL) {
+    fprintf (stderr, "hegel: HEGEL_SELF drawn outside a top-level schema draw\n");
+    abort ();
+  }
+  if (!r->created) {
+    r->handle  = hegel_recursion_new (tc, r->max_depth, HEGEL__SELF_MAX_LEAVES);
+    r->created = 1;
+  }
+  if (hegel_recursion_branch (tc, r->handle, r->depth + 1))
+    return (1);
+  if (hegel_recursion_leaf (tc, r->handle))
+    longjmp (r->jb, 1);
+  return (0);
+}
 
 /* ================================================================
 ** Internal fatal-error helper
@@ -2266,14 +2424,16 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
     case HEGEL_SCH_OPTIONAL_PTR: {
       int present;
+      int is_self = gen->optional_ptr.inner->kind == HEGEL_SCH_SELF;
       shape = (hegel_shape *) calloc (1, sizeof (hegel_shape));
       shape->kind = HEGEL_SHAPE_OPTIONAL;
       shape->schema = gen;
 
       hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
-      present = hegel_draw_int (tc, 0, 1);
+      /* HEGEL_SELF: the engine decides, and enforces depth itself. */
+      present = is_self ? hegel__self_present (tc) : hegel_draw_int (tc, 0, 1);
 
-      if (present && depth == 0) {
+      if (present && depth == 0 && !is_self) {
         /* The draw *wanted* to recurse but the depth bound stops it.
         ** That's a signal the schema's termination probability is too
         ** low (or max_depth is too shallow) — treat as a health check
@@ -2287,9 +2447,13 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
       if (present) {
         void * child;
+        if (is_self)
+          hegel__rec_cur->depth ++;
         shape->optional_shape.inner =
             hegel__draw_alloc (tc, gen->optional_ptr.inner, &child,
                                depth - 1, ctx);
+        if (is_self)
+          hegel__rec_cur->depth --;
         shape->optional_shape.is_some =
             (shape->optional_shape.inner != NULL);
         if (shape->optional_shape.is_some)
@@ -2941,14 +3105,17 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
           hegel_shape * opt_sh = (hegel_shape *) calloc (
               1, sizeof (hegel_shape));
           int           present;
+          int           is_self =
+              elem->optional_ptr.inner->kind == HEGEL_SCH_SELF;
 
           opt_sh->kind   = HEGEL_SHAPE_OPTIONAL;
           opt_sh->schema = elem;
 
           hegel_start_span (tc, HEGEL_SPAN_OPTIONAL);
-          present = hegel_draw_int (tc, 0, 1);
+          present = is_self ? hegel__self_present (tc)
+                            : hegel_draw_int (tc, 0, 1);
 
-          if (present && depth == 0) {
+          if (present && depth == 0 && !is_self) {
             hegel_health_fail ("max recursion depth reached in "
                                "HEGEL_ARR_OF element — raise "
                                "max_depth or terminate recursion.");
@@ -2957,9 +3124,13 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 
           if (present) {
             void * child;
+            if (is_self)
+              hegel__rec_cur->depth ++;
             opt_sh->optional_shape.inner =
                 hegel__draw_alloc (tc, elem->optional_ptr.inner,
                                    &child, depth - 1, ctx);
+            if (is_self)
+              hegel__rec_cur->depth --;
             opt_sh->optional_shape.is_some =
                 (opt_sh->optional_shape.inner != NULL);
             ((void **) arr)[i] =
@@ -3132,6 +3303,75 @@ hegel__draw_field (hegel_testcase * tc, hegel_schema * gen,
 ** ================================================================ */
 
 
+/* Run one top-level draw under the recursion protocol (see the top of
+** this file).  `as_struct`: draw `g` as an allocated struct whose
+** pointer lands in *(void **) addr; otherwise as a field written at
+** `addr`.  Non-recursive schemas never touch the engine's recursion
+** API — the handle is made at the first HEGEL_SELF slot — so their
+** choice sequences are unchanged; they just pay for the bookkeeping. */
+static hegel_shape *
+hegel__draw_root (hegel_testcase * tc, hegel_schema * g, void * addr,
+                  int as_struct, int max_depth)
+{
+  /* On the heap: fields change between setjmp and longjmp, and an
+  ** automatic object's value would be indeterminate after the jump. */
+  hegel__rec *  rec;
+  hegel_shape * sh  = NULL;
+  size_t        i;
+
+  if (hegel__rec_cur != NULL) {
+    hegel__rec_abandon (hegel__rec_cur);
+    hegel__rec_cur = NULL;
+  }
+  rec = (hegel__rec *) (calloc) (1, sizeof (hegel__rec));
+  if (rec == NULL) {
+    fprintf (stderr, "hegel: out of memory\n");
+    abort ();
+  }
+  rec->max_depth = max_depth > 0 ? (uint64_t) max_depth : 0;
+
+  for (;;) {
+    rec->depth      = 0;
+    rec->open_spans = 0;
+    hegel__rec_cur  = rec;
+    if (setjmp (rec->jb) == 0) {
+      if (as_struct) {
+        void * ptr = NULL;
+        sh = hegel__draw_struct (tc, g, &ptr, max_depth, NULL);
+        *(void **) addr = ptr;
+      } else {
+        sh = hegel__draw_field (tc, g, addr, 0, max_depth, NULL);
+      }
+      hegel__rec_cur = NULL;
+      if (!rec->created || !hegel_recursion_finish (tc, rec->handle))
+        break;
+      /* The engine judged the finished value mispriced and dropped
+      ** it: free it and redraw from the root (no retry call). */
+      rec->n_allocs = 0;
+      hegel_shape_free (sh);
+      sh = NULL;
+      continue;
+    }
+    /* Over the leaf budget: free the partial value, close the spans
+    ** it left open, let the engine retry (it discards the test case
+    ** once attempts run out), then redraw from the root. */
+    hegel__rec_cur = NULL;
+    for (i = 0; i < rec->n_allocs; i ++)
+      (free) (rec->allocs[i]);
+    rec->n_allocs = 0;
+    for (; rec->open_spans > 0; rec->open_spans --)
+      (hegel_stop_span) (tc, 1);
+    hegel_recursion_retry (tc, rec->handle);
+  }
+
+  if (rec->created)
+    hegel_recursion_free (tc, rec->handle);
+  /* The value is the caller's now (freed with its shape). */
+  (free) (rec->allocs);
+  (free) (rec);
+  return (sh);
+}
+
 hegel_shape *
 hegel_schema_draw_n (hegel_testcase * tc, hegel_schema_t gen,
                      void ** out, int max_depth)
@@ -3146,7 +3386,7 @@ hegel_schema_draw_n (hegel_testcase * tc, hegel_schema_t gen,
   ** scoping, so bindings in different struct instances (even of the
   ** same schema) stay independent.  NULL parent_ctx marks this as
   ** the root of the scope chain. */
-  return (hegel__draw_struct (tc, g, out, max_depth, NULL));
+  return (hegel__draw_root (tc, g, out, 1, max_depth));
 }
 
 hegel_shape *
@@ -3202,11 +3442,7 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
       /* Allocating path — identical to hegel_schema_draw's existing
       ** semantics.  The caller's addr is treated as `void **` because
       ** what lands there is a pointer to the allocation. */
-      void *         ptr = NULL;
-      hegel_shape *  sh;
-      sh = hegel__draw_struct (tc, g, &ptr, max_depth, NULL);
-      *(void **) addr = ptr;
-      return (sh);
+      return (hegel__draw_root (tc, g, addr, 1, max_depth));
     }
 
     case HEGEL_SCH_INTEGER:
@@ -3230,7 +3466,7 @@ hegel_schema_draw_at_n (hegel_testcase * tc, void * addr,
     case HEGEL_SCH_CONST_INT:
       /* Direct write at addr.  No binding ctx needed — these kinds
       ** don't touch the binding table. */
-      return (hegel__draw_field (tc, g, addr, 0, max_depth, NULL));
+      return (hegel__draw_root (tc, g, addr, 0, max_depth));
 
     case HEGEL_SCH_ARRAY_INLINE:
       hegel__abort ("hegel_schema_draw_at: HEGEL_ARRAY_INLINE cannot be "

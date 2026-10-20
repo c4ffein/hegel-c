@@ -25,7 +25,7 @@
 #include "hegel_c.h"
 #include "hegel_gen.h"
 
-#define N_CASES   2
+#define N_CASES   100
 
 typedef struct {
   int *               maybe_val;
