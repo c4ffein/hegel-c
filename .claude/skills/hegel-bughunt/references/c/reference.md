@@ -316,7 +316,7 @@ clean-cores:
 
 check-license:
 	@for f in *.c *.h Makefile; do \
-		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier:"; then \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:]"; then \
 			echo "MISSING SPDX: $$f"; exit 1; \
 		fi; \
 	done

@@ -10,13 +10,13 @@ A property-based testing library for C, built on top of [Hegel](https://hegel.de
 
 **Property-based testing** (PBT) = fuzzer + reducer. You declare a property your code should hold; a generator fuzzes random inputs until one violates it, then a reducer shrinks that failing input down to a minimal counterexample.
 
-**[Hegel](https://hegel.dev)** is a universal PBT protocol with per-language frontends, all backed by a shared Python [Hypothesis](https://hypothesis.works) core — so every language binding inherits Hypothesis' mature integrated shrinker and data generators. Background: [*Hypothesis, Antithesis, Synthesis*](https://antithesis.com/blog/2026/hegel/) on the Antithesis blog.
+**[Hegel](https://hegel.dev)** is a universal PBT engine with per-language frontends, all backed by one native engine (a Rust port of [Hypothesis](https://hypothesis.works)' conjecture engine, shipped as a C-ABI shared library) — so every language binding inherits Hypothesis' mature integrated shrinker and data generators. Background: [*Hypothesis, Antithesis, Synthesis*](https://antithesis.com/blog/2026/hegel/) on the Antithesis blog.
 
 hegel-c is the C frontend: your tests include a header, link a `.a`, and get integrated shrinking + rich structured-data generation with no Python / Rust visible at the source level.
 
 ## Two API layers
 
-**Primitive API** (`hegel_c.h`) — scalar draws, assertions, spans, test runners. For simple tests that hand-roll everything.
+**Primitive API** (`hegel_c.h`) — scalar draws, assertions, spans, test runners, plus thin wrappers over the engine's own protocols: engine-sized collections (shrink by deleting elements), recursion, variable pools, and stateful state machines. For simple tests that hand-roll everything.
 
 Small example — addition commutes:
 ```c
@@ -27,6 +27,19 @@ static void test_add_commutes (hegel_testcase *tc) {
 }
 
 int main (void) { hegel_run_test (test_add_commutes); return 0; }
+```
+
+Crash isolation where it matters — generate in-process, isolate only the code under test (a crash in the block is a shrinkable failure naming the block):
+```c
+static void test_build (hegel_testcase *tc) {
+  Graph *g = gen_graph (tc);        /* draws: plain calls into the engine */
+  HEGEL_ISOLATED (tc) {             /* forked; sees g copy-on-write */
+    HEGEL_ASSERT (graph_build (g) == 0, "build failed");
+  }
+  graph_free (g);
+}
+
+int main (void) { hegel_run_test_nofork (test_build); return 0; }
 ```
 
 **Schema API** (`hegel_gen.h`) — describe your C struct declaratively and get generation, allocation, span-based structural shrinking, and cleanup for free. Typed in terms of `hegel_schema_t` (a zero-cost newtype wrapper). See [docs/schema-api.md](docs/schema-api.md) for the reference and [docs/patterns.md](docs/patterns.md) for a catalog mapping common C memory layouts to the test files that demonstrate each one.
@@ -94,4 +107,17 @@ The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+hegel-c itself — the library (`hegel_c.h`, `hegel_gen.*`, `core/`), its
+tests, tools and docs — is MIT, see [LICENSE](LICENSE). Nothing under any
+other license is compiled into `libhegel_c.a`.
+
+The bug-hunting harnesses under `tests/irl/` don't vendor their targets: each
+one names an upstream commit (a *pin*), and the Linux / Scotch sources are
+fetched and copied in at build time, never committed. The only third-party
+text in the repo is the fix patches under `tests/irl/*/pins/` — their diff
+context is upstream source, so they keep the upstream license (GPL-2.0-only
+for Linux, CeCILL-C for Scotch). Test binaries built from fetched sources are
+covered by those sources' licenses. Licensing is tracked per file following
+[REUSE](https://reuse.software): license texts are in [LICENSES/](LICENSES/),
+files that can't carry a header are covered by [REUSE.toml](REUSE.toml), and
+`make check-reuse` lints it all.

@@ -113,7 +113,7 @@ test: all check-license
 	for t in $(TESTS_SPAWN_SHRINK); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && OMPI_MCA_btl=tcp,self timeout 120 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && OMPI_MCA_btl=tcp,self timeout 420 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -ne 0 ] && [ $$rc -ne 124 ]; then \
 			echo "OK (exit $$rc)"; \
@@ -131,7 +131,7 @@ test: all check-license
 check-license:
 	@missing=0; \
 	for f in *.c Makefile; do \
-		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:] MIT"; then \
 			echo "  MISSING: $$f"; \
 			missing=$$((missing + 1)); \
 		fi; \

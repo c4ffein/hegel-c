@@ -166,7 +166,7 @@ bench-rss: test_bench_rss
 check-license:
 	@missing=0; \
 	for f in *.c *.h Makefile; do \
-		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:] MIT"; then \
 			echo "  MISSING: $$f"; \
 			missing=$$((missing + 1)); \
 		fi; \

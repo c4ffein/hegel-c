@@ -249,6 +249,22 @@ A comprehensive audit takes multiple sessions. Plan for it.
 
 Each session reads the prior `REPORT.md` and builds on it. Don't restart from scratch.
 
+## Corpus-calibrated hunting (blind rediscovery)
+
+When the target has a **labeled bug corpus** — a list of known-fixed bugs with buggy-commit and fix-commit SHAs — use it for target selection and scoring instead of hand-picking. For the Linux kernel, hegel-c keeps **two** corpora and merges them (`docs/rediscovery-corpus.md`): our own `docs/our_corpus.json` (curated candidates + bugs hegel-c has actually found, with `harness_dir`/`status` metadata) and sashiko's `benchmarks/benchmark.json` (~1000 unfiltered `Fixes:`-tagged upstream bugs). `tools/filter-corpus.py` extracts the PBT-eligible slice of sashiko's; `tools/merge-corpus.py` unions both and dedupes by fix SHA. Keep both: the curated one carries selection bias toward findable bugs but records which harnesses exist; the unfiltered one measures what the method *actually* reaches. Bugs in **both** are a free cross-validation signal (the idr range bug `c6e8e595a079` is one).
+
+The method is still PBT, unchanged — checkout the buggy commit, build the userspace harness, sweep properties, watch what falls out. What the corpus changes is the protocol around it:
+
+1. **Blind hygiene is structural, not aspirational.** The hunter may see only `{buggy SHA, fix SHA, subsystem}` — never the problem description or the fix diff. Descriptions go in a separate judge-only file (`filter-corpus.py` enforces this split). Scan scaffolding for leaked hints — comments, test names, Makefile text — before the hunt starts; a leaked hint invalidates the run's recall number, and post-hoc leak audits have caught this before.
+2. **Filter by bug class, not by whether it looks easy.** Eligible classes are the dynamically observable ones: leaks, UAF, double-free, OOB, overflow, off-by-one, uninitialized reads, NULL derefs, hangs, wrong-results. Locking/DT/build/hardware classes are static-review territory — excluding them is honest scoping, not cherry-picking (see `docs/sashiko-gap-analysis.md` for the boundary).
+3. **Judge with an asymmetric burden of proof.** A hunter finding matches a corpus entry only if the judge can trace both to the same root cause in the code. But findings that match *no* corpus entry are not noise — they're candidate new bugs (past runs produced several). Discard a finding only with concrete disproof; uncertain means report.
+4. **Report recall per class, not one number.** "Found 4/9 leaks, 2/2 wrong-results, 0/3 error-path leaks" tells you which recipe needs work. A single percentage hides exactly the information a multi-session audit needs.
+
+Class distribution drives recipe priorities. In the kernel corpus, **leaks are the largest reachable class** (~90/999) and **error-path bugs** (~24) hide behind allocation failures the happy path never takes. So a corpus-calibrated harness needs, beyond the usual generators:
+
+- **LSAN-visible ownership**: the shim layer must not hide leaks behind arenas or interned pools — every allocation the target leaks must be one LSAN can report.
+- **Failable allocator stubs**: give the stub `malloc`/`kmalloc` a drawn fail-at-N counter (`HEGEL_LET(fail_at, HEGEL_INT(0, 50))`, decrement per allocation, return NULL at zero). Every drawn case then also probes one error path, and shrinking minimizes *which* allocation failing triggers the bug. Without this, the ~25% of reachable bugs that live on cleanup paths are invisible by construction.
+
 ## Anti-patterns
 
 1. **Diving deep on one property in session 1.** You'll write three excellent tests on the most obvious algorithm function and never touch the rest of the public API — and the bug is in a function you didn't get to. Breadth before depth.
@@ -287,5 +303,6 @@ If the session ends with fewer than 10 tests, the bottleneck is probably the bui
 
 - API surface of hegel-c (draws, schemas, runners): see the `hegel` skill's `references/c/reference.md`.
 - Bug-hunting patterns specific to C (shared `_gen.h` headers, `make test-loop` recipe, core dump capture, fork-mode discipline at scale): see `references/c/reference.md` in this skill.
+- Which bug classes PBT structurally can and cannot reach — and where static LLM review (sashiko-style) is the right tool instead: see `docs/sashiko-gap-analysis.md` in the hegel-c repo. Read it when scoping a kernel audit, so the report can honestly state what the sweep does *not* cover (locking, hardware, conceptual/UAPI classes). Its judge rule is also binding for verification passes: a finding may only be discarded with concrete disproof — uncertainty means report it.
 
 Always read the `hegel` skill's C reference first for the API. This skill assumes you already know how to write a single hegel-c test.

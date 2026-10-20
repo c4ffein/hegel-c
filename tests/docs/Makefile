@@ -85,12 +85,12 @@ test: all check-license
 
 check-license:
 	@if [ -z "$(wildcard $(CURDIR)/test_*.c)" ]; then \
-		head -3 Makefile | grep -q "SPDX-License-Identifier: MIT"; \
+		head -3 Makefile | grep -q "SPDX-License-Identifier[:] MIT"; \
 		exit $$?; \
 	fi; \
 	missing=0; \
 	for f in $(wildcard $(CURDIR)/test_*.c) Makefile; do \
-		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:] MIT"; then \
 			echo "  MISSING: $$f"; \
 			missing=$$((missing + 1)); \
 		fi; \

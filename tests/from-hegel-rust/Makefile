@@ -116,7 +116,7 @@ test: all check-license
 check-license:
 	@missing=0; \
 	for f in *.c *.md Makefile; do \
-		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier: MIT"; then \
+		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:] MIT"; then \
 			echo "  MISSING: $$f"; \
 			missing=$$((missing + 1)); \
 		fi; \
@@ -128,7 +128,7 @@ check-license:
 	echo "All files have SPDX headers."
 
 report:
-	@echo "<!-- SPDX-License-Identifier: MIT" > $(CURDIR)/report.md; \
+	@echo "<!-- SPDX-License-Identifier"": MIT" > $(CURDIR)/report.md; \
 	echo "     Copyright (c) 2026 c4ffein" >> $(CURDIR)/report.md; \
 	echo "     Part of hegel-c — see hegel/LICENSE for terms. -->" >> $(CURDIR)/report.md; \
 	echo "" >> $(CURDIR)/report.md; \
@@ -183,7 +183,7 @@ verify:
 	fi; \
 	prompt=$$(cat $(CURDIR)/VERIFY_PROMPT.md); \
 	passed=0; failed=0; total=0; \
-	echo "<!-- SPDX-License-Identifier: MIT" > $(CURDIR)/verify-report.md; \
+	echo "<!-- SPDX-License-Identifier"": MIT" > $(CURDIR)/verify-report.md; \
 	echo "     Copyright (c) 2026 c4ffein" >> $(CURDIR)/verify-report.md; \
 	echo "     Part of hegel-c — see hegel/LICENSE for terms. -->" >> $(CURDIR)/verify-report.md; \
 	echo "" >> $(CURDIR)/verify-report.md; \

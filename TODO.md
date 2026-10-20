@@ -4,61 +4,53 @@
 
 # TODO
 
-```
-5: make this test!
-   but also, write a todo with another more comprehensive one, for which the design must be modified to be able to solve:
-  number_of_arrays = HEGEL_LET an int from 3 to 5. then HEGEL_LET an array of number_of_array ints, from 3 to 5 themselves. then
-  HEGEL_LET an array of number_of_array, each of the size of the int from the previous array. WDYT?
-```
-
-
-## Binding system — deferred items
+## Binding system — deferred items (ALL CLOSED 2026-07-13)
 
 The HEGEL_BINDING / HEGEL_LET / HEGEL_USE / HEGEL_ARR_OF system has
-replaced the old facet mechanism.  Known gaps:
+replaced the old facet mechanism.  The seven gaps originally tracked
+here are all closed; kept as a map from gap to what closed it:
 
-1. **Indexed USE for array-of-arrays.** Bindings today hold scalars.
-   The "jagged array where each sub-array's length comes from an
-   entry in a sizes array" case needs something like
-   `HEGEL_USE_AT(sizes_binding, i)`.  Design sketch: let LET bind
-   drawn arrays (pointer + length), expose `HEGEL_ARR_OF` with an
-   index-producing length schema, and allow USE_AT to resolve the
-   per-element length from the bound array.  Concrete target:
-   ```c
-   N     = HEGEL_LET  int in [3, 5]
-   sizes = HEGEL_LET  array[N] of int in [3, 5]
-   groups = array[N] where groups[i] = array[sizes[i]] of int
-   ```
+1. **Indexed USE for array-of-arrays** — DONE.  `HEGEL_LET_ARR` +
+   `HEGEL_USE_AT` (+ `HEGEL_USE_PATH`) implement the "sizes drives
+   groups" target, including the N / sizes[N] / groups[sizes[i]]
+   form.  Tests: `test_binding_let_arr`, `test_binding_jagged_3d`,
+   `test_binding_use_path`.
 
-2. **Shrinking quality tests.** The jagged-2D test asserts
-   correctness but we've never watched a failure shrink.  Need
-   hegel-rust-style `minimal()` tests: intentionally fail when a
-   condition is met, assert the shrunk result equals an expected
-   minimum.  Applies especially to re-LET patterns — does the
-   shrinker treat bindings uniformly in the byte stream?
+2. **Shrinking quality tests** — DONE.  Probe-file `minimal()`-style
+   tests: `test_binding_shrink_bag`, `_jagged`, `_arr_of_structs`,
+   and `_shadow` (the re-LET/shadowing case — shrinker treats
+   bindings uniformly).  `test_binding_shrink_use_in_cases` extends
+   this to the union-case / variant-case / optional paths.
 
-3. **HEGEL_USE inside HEGEL_VARIANT cases.**  Case-local bindings
-   should work (variant bodies are drawn in the parent ctx today —
-   plumbing is probably there, but untested).  Add a test with
-   HEGEL_USE inside a HEGEL_CASE that references an outer LET.
+3. **HEGEL_USE inside HEGEL_VARIANT cases** — DONE.  Plumbing was
+   indeed there.  `test_binding_use_in_variant` covers outer-LET
+   resolution from both cases plus case-local LET shadowing.
+   Gotcha pinned in that test: the variant cluster (tag + ptr) is
+   pointer-aligned as a unit, so it cannot directly follow a lone
+   int field the way a bare C `int tag; void *v;` pair could — the
+   sizeof assert catches the mismatch at build time.
 
-4. **HEGEL_USE inside HEGEL_UNION cases.**  Same concern as VARIANT.
-   Untested path.
+4. **HEGEL_USE inside HEGEL_UNION cases** — DONE.
+   `test_binding_use_in_union`: tagged + untagged + case-local LET
+   shadowing (LET inside HEGEL_CASE works; BIND entries are
+   zero-size in the case layout, same as in structs).
 
-5. **HEGEL_OPTIONAL wrapping a struct with HEGEL_USE.**  The
-   optional's inner struct is drawn via hegel__draw_alloc, which
-   threads parent_ctx — should work, but no test exercises it.
+5. **HEGEL_OPTIONAL wrapping a struct with HEGEL_USE** — DONE.
+   `test_binding_use_in_optional`, including an inner
+   `HEGEL_ARR_OF` whose length USE resolves through the optional.
 
-6. **Non-int binding kinds.**  Today LET only accepts int-width
-   INTEGER (or MAP/FILTER/FLAT_MAP over one).  Extending to i64,
-   double, and pointers is straightforward but requires wider slot
-   handling in USE.  Maybe `HEGEL_LET_I64` / `HEGEL_USE_I64` typed
-   variants, or extend the runtime kind-check.
+6. **Non-int binding kinds** — DONE.  LET accepts i64/u64/float/
+   double (and composed scalars); typed `HEGEL_USE_I64/_U64/_FLOAT/
+   _DOUBLE` read them with a hard width/sign/float check.  Test:
+   `test_binding_widths`.  Pointers remain out of scope.
 
-7. **Re-LET abort diagnostic could list the earlier LET's binding
-   name.**  Today we have only the integer id.  Stashing names at
-   BINDING declaration time would let the error print `HEGEL_LET(n)
-   appears twice` instead of `id=7 appears twice`.  Nice-to-have.
+7. **Re-LET abort diagnostic with binding names** — DONE.
+   `HEGEL_LET` / `HEGEL_LET_ARR` stringify the binding name into
+   the schema (`hegel_schema_bind_named` / `_let_arr_named`); the
+   duplicate-LET abort now prints `HEGEL_LET (name) appears twice`.
+   Un-named `hegel_schema_bind` / `hegel_schema_let_arr` remain for
+   dynamic construction.  Test: `test_binding_relet_abort`
+   (TESTS_CRASH).
 
 
 ## From FP
