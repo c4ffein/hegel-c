@@ -70,7 +70,7 @@ const hg_engine * hg_engine_get (void)
              "Paths tried:\n%s"
              "Set HEGEL_LIBHEGEL_PATH to the .so (or its directory), or run\n"
              "`make libhegel` at the repo root to place it under ./build/.\n"
-             "Prebuilt artifacts: https://github.com/hegeldev/hegel-rust/releases\n",
+             "Prebuilt artifacts: https://github.com/hegeldev/hegel/releases\n",
              tried);
     g_failed = 1;
     return NULL;

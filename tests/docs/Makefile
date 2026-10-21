@@ -29,7 +29,7 @@ HEGEL_TEST_ULIMIT ?= 0
 
 TESTS = $(basename $(notdir $(wildcard $(CURDIR)/test_*.c)))
 
-.PHONY: help all clean test hegel-c-lib check-license
+.PHONY: FORCE help all clean test hegel-c-lib check-license
 
 help:
 	@echo "tests/docs Makefile"
@@ -48,13 +48,19 @@ help:
 
 all: hegel-c-lib $(TESTS)
 
-hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
-		echo "Building libhegel_c.a..."; \
-		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
-	fi
+# libhegel_c.a is delegated to the root Makefile, which tracks every
+# core/ source and header.  FORCE asks it on every run (a near-instant
+# no-op when current); make then re-checks the file, so test binaries
+# relink only when the library really changed.  `libhegel` keeps
+# build/libhegel.so pointing at the pinned engine build.
+hegel-c-lib: $(HEGEL_C_LIB)/libhegel_c.a
 
-test_%: test_%.c hegel-c-lib
+$(HEGEL_C_LIB)/libhegel_c.a: FORCE
+	@$(MAKE) --no-print-directory -C $(REPO_ROOT) lib libhegel
+
+FORCE:
+
+test_%: test_%.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 test: all check-license

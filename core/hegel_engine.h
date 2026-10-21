@@ -4,8 +4,8 @@
 
 /*
 ** dlopen binding to libhegel — the official C ABI of Hegel's native
-** in-process engine (hegel-rust's `hegeltest-c` crate, header
-** `hegel.h`; verified against hegeltest-c 0.47.1 / hegel-rust 0.50.1).
+** in-process engine (the `hegeltest-c` crate in the hegeldev/hegel
+** monorepo, header `hegel.h`; verified against libhegel 0.48.0).
 **
 ** We bind at runtime via dlopen/dlsym rather than linking -lhegel,
 ** for two reasons:
@@ -21,7 +21,7 @@
 ** Types below mirror hegel.h's opaque handles and constants (we can't
 ** include hegel.h itself next to hegel_c.h — the same-named functions
 ** would clash).  The authoritative documentation is upstream's header:
-** deps/hegel-rust/hegel-c/include/hegel.h
+** deps/hegel/libhegel/include/hegel.h
 **
 ** Every engine call takes the single process-wide context `e->ctx`
 ** (single active run per process by design); `hg_last_error` reads its

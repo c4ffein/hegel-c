@@ -65,7 +65,7 @@ TESTS_PAIRING = test_arch_build_pairing_classic test_arch_build_pairing
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_SHRINK) $(TESTS_MPI)
 
-.PHONY: help all clean test test-local test-deb _run-tests hegel-c-lib check-license \
+.PHONY: FORCE help all clean test test-local test-deb _run-tests hegel-c-lib check-license \
 	test-pin test-pins fetch-pins
 
 help:
@@ -94,33 +94,39 @@ help:
 
 all: hegel-c-lib $(ALL_TESTS)
 
-hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
-		echo "Building libhegel_c.a + libhegel.so..."; \
-		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
-	fi
+# libhegel_c.a is delegated to the root Makefile, which tracks every
+# core/ source and header.  FORCE asks it on every run (a near-instant
+# no-op when current); make then re-checks the file, so test binaries
+# relink only when the library really changed.  `libhegel` keeps
+# build/libhegel.so pointing at the pinned engine build.
+hegel-c-lib: $(HEGEL_C_LIB)/libhegel_c.a
 
-test_graph_part: test_graph_part.c hegel-c-lib
+$(HEGEL_C_LIB)/libhegel_c.a: FORCE
+	@$(MAKE) --no-print-directory -C $(REPO_ROOT) lib libhegel
+
+FORCE:
+
+test_graph_part: test_graph_part.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test_graph_part_schema: test_graph_part_schema.c hegel-c-lib
+test_graph_part_schema: test_graph_part_schema.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test_graph_order_shrink: test_graph_order_shrink.c hegel-c-lib
+test_graph_order_shrink: test_graph_order_shrink.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Standalone investigation binary — not in TESTS_PASS.
 # Reproduces a fork-mode orphan bug; see the header of the .c file.
-test_array_inline_orphan_repro: test_array_inline_orphan_repro.c hegel-c-lib
+test_array_inline_orphan_repro: test_array_inline_orphan_repro.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
-test_dgraph_part: test_dgraph_part.c hegel-c-lib
+test_dgraph_part: test_dgraph_part.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS_MPI)
 
 test_arch_build_pairing_classic: test_arch_build_pairing_classic.c arch_build_pairing.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test_arch_build_pairing: test_arch_build_pairing.c arch_build_pairing.h hegel-c-lib
+test_arch_build_pairing: test_arch_build_pairing.c arch_build_pairing.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Bug-hunt runner for the arch_build.c:309 pairing bug (local Scotch

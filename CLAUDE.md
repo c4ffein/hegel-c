@@ -23,7 +23,7 @@ Most new code should use the schema API — it handles allocation, span annotati
   - `hegel_runtime.c` — the public primitives as requests; `hegel__call` picks the transport (INPROC = direct call into the server, CHILD = fork parent's pipe). Also `HEGEL_ISOLATED`.
   - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, capture-by-origin failure reporting, suite API.
   - `hegel_stateful.c` — stateful driver on the engine's state machine (`hegel_new_state_machine`), shaped like hegel-rust's `run_sequential`; preconditions map onto `rule_rejected`. Works in fork and nofork mode.
-- `tests/selftest/` — 87 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
+- `tests/selftest/` — 88 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI) + bug pins (`pins/`)
@@ -39,7 +39,9 @@ Two execution modes:
 
 ## Build and test
 
-Prerequisites: GCC. That's it for using the library — the engine cdylib (`libhegel.so`) can be a prebuilt artifact from hegel-rust's GitHub releases. `make libhegel` builds it from source instead, from the `deps/hegel-rust` submodule (pinned to the engine version the runtime is verified against), which needs cargo (the only place Rust appears, and only at build-from-source time).
+Prerequisites: GCC. That's it for using the library — the engine cdylib (`libhegel.so`) can be a prebuilt artifact from hegeldev/hegel's GitHub releases. `make libhegel` builds it from source, from the `deps/hegel` submodule (pinned to the engine version the runtime is verified against): ~30 s, needs cargo ≥ the `rust-version` libhegel declares (1.86 — newer than Debian 13's packaged 1.85, so use rustup), the only place Rust appears. `make libhegel PREBUILT=1` downloads the release artifact for `LIBHEGEL_VERSION` instead, checked against the sha256 pinned in the Makefile. Builds are tagged — `build/libhegel-<version>-{source,prebuilt}.so` — and `build/libhegel.so` is a symlink to the one in use, so a bump or a switch of origin just relinks (a plain file there is moved to `build/libhegel-untagged.so`; for an engine make must not touch, use `HEGEL_LIBHEGEL_PATH`). Source builds run cargo on every `make libhegel` (~0.1 s when current) and replace the tagged file only if the result changed; without cargo or the submodule (CI test jobs), an existing tagged build is kept. `make check-libhegel` checks the submodule tag, what the symlink points at, and upstream for a newer release.
+
+Rebuilds follow sources: `libhegel_c.a` objects track their headers (`-MMD`, `build/*.d`), and every test Makefile asks the root Makefile for the library on each run, relinking test binaries only when `libhegel_c.a` actually changed. (The `tests/irl/linux` harnesses link `build/libhegel_c.a` but don't rebuild it — run `make lib` first.)
 
 Optional: `mpicc`/OpenMPI for MPI tests, Scotch/PT-Scotch for IRL tests.
 
@@ -47,9 +49,10 @@ Optional: `mpicc`/OpenMPI for MPI tests, Scotch/PT-Scotch for IRL tests.
 make help                       # all targets and proxy commands
 
 make lib                        # build build/libhegel_c.a (pure C, seconds)
-make libhegel                   # place the engine at build/libhegel.so (cargo or prebuilt)
+make libhegel                   # build the engine into build/libhegel.so (cargo; PREBUILT=1 downloads it)
+make check-libhegel             # engine pin: submodule tag, installed version, newer upstream release
 
-make selftest-test              # 87 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
+make selftest-test              # 88 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
 make from-hegel-rust-test       # 11 tests (5 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
@@ -189,14 +192,14 @@ Third-party excerpts (Linux kernel code under `tests/irl/`) keep their upstream 
 
 ## Key dependencies
 
-- **Runtime**: `libhegel.so` from hegeltest-c ≥ 0.47 (Hegel's native engine, loaded via dlopen). No Rust or Python dependency in our build.
+- **Runtime**: `libhegel.so` from hegeltest-c ≥ 0.47 (Hegel's native engine, loaded via dlopen); ≥ 0.48 for correct shrinking when a second failure turns up mid-shrink (`test_shrink_failure_found_while_shrinking` is red on 0.47). No Rust or Python dependency in our build.
 - **C linking**: `-lhegel_c -lpthread -lm -ldl` (add `-lscotch -lscotcherr -lz -lrt` for Scotch tests)
 
 ## libhegel (the engine)
 
-We sit on the official C ABI from the hegel-rust repo (`hegel-c/include/hegel.h` there, crate `hegeltest-c`, prebuilt `libhegel-<goos>-<goarch>.so` on GitHub releases; a source build writes `target/release/libhegel_c.so`, which `make libhegel` installs as `build/libhegel.so`). Pinned at hegel-rust v0.50.1 = hegeltest-c 0.47.1 (the C crate has its own version line). Run loop, all context-first: `hegel_settings_new` → `hegel_run_start` → `hegel_next_test_case` (the engine resumes on the calling thread — no worker thread) → typed draws (`hegel_generate_integer` / `_float` / `_boolean` / `_bytes` / `_string` with a string-generator handle) and protocols (collection / recursion / pool / state machine) → `hegel_mark_complete(status, origin)` → `hegel_run_result` (status PASSED / FAILED / ERROR, error kind, failures with origin + blob + caveat).
+We sit on the official C ABI, libhegel, from the Hegel monorepo **hegeldev/hegel** (it absorbed hegel-rust on 2026-10-19; there libhegel is `libhegel/`, next to `frontends/rust` and `frontends/python`; the header is `libhegel/include/hegel.h`). Crate `hegeltest-c`, prebuilt `libhegel-<goos>-<goarch>.so` on GitHub releases (tagged `libhegel/<version>` since the move); a source build writes `target/release/libhegel_c.so` at the workspace root, which `make libhegel` installs as `build/libhegel.so`). Pinned at libhegel 0.48.0 = tag `libhegel/0.48.0` (= `frontends/rust/0.50.3`; the C crate has its own version line). We don't call 0.48's `hegel_set_unicode_version` (C has no host Unicode version), so generators use the engine's newest tables. Run loop, all context-first: `hegel_settings_new` → `hegel_run_start` → `hegel_next_test_case` (the engine resumes on the calling thread — no worker thread) → typed draws (`hegel_generate_integer` / `_float` / `_boolean` / `_bytes` / `_string` with a string-generator handle) and protocols (collection / recursion / pool / state machine) → `hegel_mark_complete(status, origin)` → `hegel_run_result` (status PASSED / FAILED / ERROR, error kind, failures with origin + blob + caveat).
 
-Engine facts that shaped the runtime (verified against 0.47.1):
+Engine facts that shaped the runtime (verified against 0.47.1, still true on 0.48.0):
 - `hegel_settings_new` resolves profiles + `hegel.toml` + `HEGEL_*` env vars (`HEGEL_SEED`, `HEGEL_TEST_CASES`, ...) — they apply to our runs for free. Verbosity enum: NORMAL=0, QUIET=1.
 - The engine no longer produces a failure diagnostic: the caller captures output for test cases stamped by `hegel_test_case_should_capture` (the final replay, and first-check replays of each discovered failure), keyed by origin. Our runner stores the lines of the last stamped failing execution per origin and prints them with the report. "Draw N:" traces and notes are OUR output.
 - Float draws: bounded draws never allow NaN; infinities only from an unbounded end. 32-bit bounds must be exactly representable as `float`.
@@ -243,7 +246,7 @@ MPI_Comm_spawn in singleton mode works with OpenMPI 5.x inside hegel fork childr
 
 ## Reference implementations
 
-The one build-critical dependency, **hegel-rust** (the engine source), is a pinned git submodule at **`deps/hegel-rust`** — see Build and test. Everything else is reference material: `make inspiration` clones sister bindings and study repos into three categorized subdirs of `inspiration/`, and symlinks `deps/hegel-rust` under `inspiration/hegel/hegel-rust` for discoverability (the symlink lives in the gitignored `inspiration/`, so it is never committed).
+The one build-critical dependency, the **Hegel monorepo** (the engine source), is a pinned git submodule at **`deps/hegel`** — see Build and test. Everything else is reference material: `make inspiration` clones sister bindings and study repos into three categorized subdirs of `inspiration/`, and symlinks `deps/hegel` as `inspiration/hegel/hegel` and its Rust frontend (`frontends/rust`) as `inspiration/hegel/hegel-rust` (the path `RUST_SOURCE:` comments resolve against) for discoverability (the symlinks live in the gitignored `inspiration/`, so they are never committed).
 
 Bug-hunt targets (Scotch, Linux) are not vendored either; they use **pins**. `tests/irl/<project>/project.conf` says where upstream lives and how to build it; `pins/<pin>.conf` names one bug's states:
 - `PIN_FIX_SHA` (upstream fix: `buggy` = its parent must be RED, `fixed` must be GREEN)
@@ -255,7 +258,7 @@ Bug-hunt targets (Scotch, Linux) are not vendored either; they use **pins**. `te
 
 The `fixed` state is what keeps rediscoveries honest: a test that is also red on the fixed commit found an artifact, not the bug.
 
-**`deps/hegel-rust`** (submodule) — home of the native engine AND the `hegel-c/` crate whose `libhegel` cdylib we sit on. `hegel-c/include/hegel.h` is the ABI contract; `hegel-c/examples/*.c` are canonical usage; `tests/common/utils.rs` has the `find_any`/`minimal()` test helpers our ported tests mirror.
+**`deps/hegel`** (submodule, hegeldev/hegel) — home of the native engine, the `hegeltest-c` crate (`libhegel/`) whose cdylib we sit on, and the Rust and Python frontends (`frontends/`). `libhegel/include/hegel.h` is the ABI contract; `libhegel/examples/*.c` are canonical usage; `frontends/rust/tests/common/utils.rs` has the `find_any`/`minimal()` test helpers our ported tests mirror.
 
 **`inspiration/hegel/`** — sister hegel bindings + the canonical Agent Skill:
 - **hegel-java / hegel-ocaml**: the other in-process bindings over libhegel (Java 22 FFM; OCaml ctypes with checksum-verified cdylib download). Closest design relatives to our core; OCaml's `lib/ffi/ffi.ml` + `lib/client.ml` is the cleanest small consumer.

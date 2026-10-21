@@ -24,7 +24,7 @@ jobs:
     name: Build engine (libhegel.so)
     runs-on: ubuntu-latest
     steps:
-      # deps/hegel-rust is a submodule pinned to the engine version the
+      # deps/hegel (the hegeldev/hegel monorepo) is a submodule pinned to the engine version the
       # runtime is verified against; checking it out here is the pin.
       # (The other jobs skip submodules — they only need the built .so.)
       - uses: actions/checkout@v4
@@ -44,7 +44,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('deps/hegel-rust/Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('deps/hegel/Cargo.lock') }}
           restore-keys: cargo-registry-${{ runner.os }}-
 
       - name: Build engine
@@ -54,7 +54,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: libhegel-so
-          path: build/libhegel.so
+          # The tagged build (libhegel-<version>-source.so); the jobs that
+          # download it run `make libhegel`, which keeps it (no cargo, no
+          # submodule there) and points build/libhegel.so at it.
+          path: build/libhegel-*-source.so
+          if-no-files-found: error
 
   selftest:
     name: Selftest suite
@@ -70,8 +74,9 @@ jobs:
           path: build/
 
       # `make selftest-test` self-delegates to `make lib libhegel`:
-      # libhegel.so is already present (no-op), libhegel_c.a is rebuilt
-      # from C with the preinstalled GCC.
+      # the downloaded tagged engine is kept and linked as
+      # build/libhegel.so, libhegel_c.a is rebuilt from C with the
+      # preinstalled GCC.
       - name: Run selftest suite
         run: make selftest-test
 

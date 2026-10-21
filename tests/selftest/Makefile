@@ -60,6 +60,7 @@ TESTS_PASS = test_pass_simple \
              test_binding_shadowing \
              test_binding_arr_shadow \
              test_binding_shrink_bag \
+             test_shrink_failure_found_while_shrinking \
              test_binding_shrink_jagged \
              test_binding_shrink_shadow \
              test_binding_shrink_arr_of_structs \
@@ -121,7 +122,7 @@ TESTS_HEALTH = test_filter_too_much \
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)
 
-.PHONY: help all clean test hegel-c-lib check-license
+.PHONY: FORCE help all clean test hegel-c-lib check-license
 
 help:
 	@echo "tests/selftest Makefile"
@@ -140,16 +141,19 @@ help:
 
 all: hegel-c-lib $(ALL_TESTS)
 
-# Always delegate to the root Makefile's dependency-tracked targets.
-# `lib` rebuilds libhegel_c.a whenever any core/ source or header
-# changes (a near-instant no-op when current); `libhegel` only builds
-# the engine .so when it is absent.  The previous `[ ! -f ]` guard
-# never rebuilt a STALE libhegel_c.a, so editing core/ and running the
-# suite silently tested the old library.
-hegel-c-lib:
-	@$(MAKE) -C $(REPO_ROOT) lib libhegel
+# libhegel_c.a is delegated to the root Makefile, which tracks every
+# core/ source and header.  FORCE asks it on every run (a near-instant
+# no-op when current); make then re-checks the file, so test binaries
+# relink only when the library really changed.  `libhegel` keeps
+# build/libhegel.so pointing at the pinned engine build.
+hegel-c-lib: $(HEGEL_C_LIB)/libhegel_c.a
 
-test_%: test_%.c hegel-c-lib
+$(HEGEL_C_LIB)/libhegel_c.a: FORCE
+	@$(MAKE) --no-print-directory -C $(REPO_ROOT) lib libhegel
+
+FORCE:
+
+test_%: test_%.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 test: all check-license

@@ -35,7 +35,7 @@ BENCH_BINS = test_bench_single test_bench_single_nofork \
              test_bench_drawloop test_bench_drawloop_nofork \
              test_bench_rss
 
-.PHONY: help all clean bench bench-single bench-suite bench-drawloop bench-rss hegel-c-lib check-license
+.PHONY: FORCE help all clean bench bench-single bench-suite bench-drawloop bench-rss hegel-c-lib check-license
 
 help:
 	@echo "tests/bench Makefile"
@@ -62,31 +62,37 @@ help:
 
 all: hegel-c-lib $(BENCH_BINS)
 
-hegel-c-lib:
-	@if [ ! -f "$(HEGEL_C_LIB)/libhegel_c.a" ] || [ ! -f "$(HEGEL_C_LIB)/libhegel.so" ]; then \
-		echo "Building libhegel_c.a..."; \
-		$(MAKE) -C $(REPO_ROOT) lib libhegel; \
-	fi
+# libhegel_c.a is delegated to the root Makefile, which tracks every
+# core/ source and header.  FORCE asks it on every run (a near-instant
+# no-op when current); make then re-checks the file, so test binaries
+# relink only when the library really changed.  `libhegel` keeps
+# build/libhegel.so pointing at the pinned engine build.
+hegel-c-lib: $(HEGEL_C_LIB)/libhegel_c.a
 
-test_bench_single: test_bench_single.c bench_lib.h hegel-c-lib
+$(HEGEL_C_LIB)/libhegel_c.a: FORCE
+	@$(MAKE) --no-print-directory -C $(REPO_ROOT) lib libhegel
+
+FORCE:
+
+test_bench_single: test_bench_single.c bench_lib.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -DBENCH_N_CASES=$(N) -o $@ $< $(LDFLAGS)
 
-test_bench_single_nofork: test_bench_single.c bench_lib.h hegel-c-lib
+test_bench_single_nofork: test_bench_single.c bench_lib.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -DBENCH_N_CASES=$(N) -DHEGEL_BENCH_NOFORK -o $@ $< $(LDFLAGS)
 
-test_bench_suite: test_bench_suite.c bench_lib.h hegel-c-lib
+test_bench_suite: test_bench_suite.c bench_lib.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test_bench_suite_nofork: test_bench_suite.c bench_lib.h hegel-c-lib
+test_bench_suite_nofork: test_bench_suite.c bench_lib.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -DHEGEL_BENCH_NOFORK -o $@ $< $(LDFLAGS)
 
-test_bench_drawloop: test_bench_drawloop.c bench_lib.h hegel-c-lib
+test_bench_drawloop: test_bench_drawloop.c bench_lib.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -DBENCH_N_CASES=$(N_LOOP) -DBENCH_N_DRAWS=$(N_DRAWS) -o $@ $< $(LDFLAGS)
 
-test_bench_drawloop_nofork: test_bench_drawloop.c bench_lib.h hegel-c-lib
+test_bench_drawloop_nofork: test_bench_drawloop.c bench_lib.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -DBENCH_N_CASES=$(N_LOOP) -DBENCH_N_DRAWS=$(N_DRAWS) -DHEGEL_BENCH_NOFORK -o $@ $< $(LDFLAGS)
 
-test_bench_rss: test_bench_rss.c hegel-c-lib
+test_bench_rss: test_bench_rss.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # run_one NAME BIN — runs BIN once, prints the elapsed wall time in
