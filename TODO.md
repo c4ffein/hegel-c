@@ -27,8 +27,23 @@
 - **Linux harnesses don't rebuild `libhegel_c.a`.** Add the FORCE
   delegation the other test Makefiles use, once, in
   `tests/irl/linux/pin.mk`.
-- **CI actions on Node 20.** Bump `actions/checkout`, `cache`,
-  `upload-artifact`, `download-artifact` to their Node 24 majors.
+- **ASan/UBSan CI job.** A selftest job with `libhegel_c.a` and the
+  tests built with `-fsanitize=address,undefined`.
+- **Case teardown.** `hegel_set_case_setup` has no partner; add
+  `hegel_set_case_teardown` (from NEXT.md item D, deepstate's `TEST_F`).
+- **Refresh the local C skill reference** (`.claude/skills/hegel/references/c/`):
+  drop the deleted `hegel_gen_*` API, add `hegel_run_options` and
+  `HEGEL_C_REPRODUCE`.
+- **Skill update for the 3 missed bug classes** (2026-05-25 rediscovery,
+  `NEXT_SESSION_PLEASE_JUST_START_HERE.md`): diagnostic content
+  (bootconfig — SKILL.md still says not to check what errors say),
+  bookkeeping-state mutators (maple_prealloc), and an explicit note on the
+  concurrency limit (maple_destroy_walk, RCU race). Validate by re-running
+  only those 3 experiments blind against the updated skill.
+- **Grow the rediscovery corpus** with the deferred filesystem picks: ext4
+  do_split, minix superblock, ADFS nzones, squashfs negative offset, UDF
+  lengthAllocDescs, HFS+ catalog record, lib/crypto/mpi underflow (2–6 h
+  of stubs each, as pins).
 
 ## Binding system — deferred items (ALL CLOSED 2026-07-13)
 
