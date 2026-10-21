@@ -27,7 +27,7 @@ jobs:
       # deps/hegel (the hegeldev/hegel monorepo) is a submodule pinned to the engine version the
       # runtime is verified against; checking it out here is the pin.
       # (The other jobs skip submodules — they only need the built .so.)
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -39,7 +39,7 @@ jobs:
       # without re-emitting it and the build has no artifact to copy.
       # The compile is ~30s, so caching target/ is not worth that trap.
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -51,7 +51,7 @@ jobs:
         run: make libhegel
 
       - name: Upload engine
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libhegel-so
           # The tagged build (libhegel-<version>-source.so); the jobs that
@@ -65,10 +65,10 @@ jobs:
     needs: engine
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download engine
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: libhegel-so
           path: build/
@@ -85,10 +85,10 @@ jobs:
     needs: engine
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download engine
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: libhegel-so
           path: build/
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:13
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -110,7 +110,7 @@ jobs:
           apt-get install -y gcc make openmpi-bin libopenmpi-dev
 
       - name: Download engine
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: libhegel-so
           path: build/
@@ -129,7 +129,7 @@ jobs:
     runs-on: ubuntu-latest
     container: debian:13
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install dependencies
         run: |
@@ -137,7 +137,7 @@ jobs:
           apt-get install -y gcc make libscotch-dev libptscotch-dev openmpi-bin libopenmpi-dev
 
       - name: Download engine
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: libhegel-so
           path: build/
