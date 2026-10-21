@@ -88,7 +88,11 @@ const hg_engine * hg_engine_get (void)
   BIND (settings_set_seed,          "hegel_settings_set_seed");
   BIND (settings_set_report_multiple_failures, "hegel_settings_set_report_multiple_failures");
   BIND (settings_set_database,      "hegel_settings_set_database");
+  BIND (settings_set_database_key,  "hegel_settings_set_database_key");
+  BIND (settings_set_phases,        "hegel_settings_set_phases");
+  BIND (settings_set_suppress_health_check, "hegel_settings_set_suppress_health_check");
   BIND (run_start,                  "hegel_run_start");
+  BIND (run_start_blob,             "hegel_run_start_blob");
   BIND (next_test_case,             "hegel_next_test_case");
   BIND (run_result,                 "hegel_run_result");
   BIND (run_result_free,            "hegel_run_result_free");

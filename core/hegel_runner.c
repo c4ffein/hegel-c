@@ -37,7 +37,6 @@
 #include <sys/personality.h>
 #endif
 
-#define HEGEL_DEFAULT_CASES 100
 
 /* ---- Captured failure reports, keyed by origin ---- */
 
@@ -407,7 +406,16 @@ static void print_str (FILE * f, const char * label, const hg_str * s)
   if (s && s->len) fprintf (f, "%s%.*s\n", label, (int) s->len, s->data);
 }
 
-static int report (const hg_engine * e, const hg_result * result)
+/* The line a failure report ends with: paste it in front of the same
+** binary to replay that failure (see HEGEL_C_REPRODUCE in hegel_c.h). */
+static void print_reproduce (const hg_str * blob, uint64_t run_index)
+{
+  if (blob && blob->len)
+    fprintf (stderr, "reproduce: HEGEL_C_REPRODUCE='%llu:%.*s'\n",
+             (unsigned long long) run_index, (int) blob->len, blob->data);
+}
+
+static int report (const hg_engine * e, const hg_result * result, uint64_t run_index)
 {
   uint32_t status = HG_RUN_PASSED;
   e->result_status (e->ctx, result, &status);
@@ -449,27 +457,81 @@ static int report (const hg_engine * e, const hg_result * result)
     fprintf (stderr, "origin: %.*s\n", (int) origin.len, origin.data);
     if (cap && cap->msg[0]) fprintf (stderr, "message: %s\n", cap->msg);
     print_str (stderr, "caveat: ", caveat);
-    print_str (stderr, "reproduce blob: ", blob);
+    print_reproduce (blob, run_index);
     e->failure_free (e->ctx, f);
   }
   return 1;
 }
 
-static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork);
+static int run_property_inner (void (*test_fn)(hegel_testcase *),
+                               const hegel_run_options * o, int use_fork, uint64_t run_index,
+                               const char * blob, size_t blob_len);
+
+/* HEGEL_C_REPRODUCE="N:blob" (or a bare blob = run 1): which run replays,
+** and the blob.  Returns 0 when the variable is unset. */
+static int reproduce_target (uint64_t * run, const char ** blob, size_t * len)
+{
+  const char * v = getenv ("HEGEL_C_REPRODUCE");
+  if (!v || !*v) return 0;
+  const char * colon = strchr (v, ':');
+  *run = 1;
+  *blob = v;
+  if (colon) {
+    char * end = NULL;
+    unsigned long long n = strtoull (v, &end, 10);
+    if (end == colon && n > 0) {
+      *run = n;
+      *blob = colon + 1;
+    }
+  }
+  *len = strlen (*blob);
+  return 1;
+}
 
 /* Every run goes through here: numbered, and its result recorded so a
 ** fork-clean child can replay main() exactly (see clean_child_run). */
-static int run_property (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
+static int run_property (void (*test_fn)(hegel_testcase *), const hegel_run_options * o,
+                         int use_fork)
 {
+  static const hegel_run_options defaults;
   uint64_t run_index = ++ g_run_index;
   if (g_clean.active) return clean_child_run (run_index, test_fn);
-  int rc = run_property_inner (test_fn, n_cases, use_fork);
+  if (!o) o = &defaults;
+
+  uint64_t target = 0;
+  const char * blob = NULL;
+  size_t blob_len = 0;
+  int rc;
+  if (reproduce_target (&target, &blob, &blob_len) && target != run_index) {
+    fprintf (stderr, "hegel-c: run %llu skipped (HEGEL_C_REPRODUCE replays run %llu)\n",
+             (unsigned long long) run_index, (unsigned long long) target);
+    rc = 0;
+  } else {
+    rc = run_property_inner (test_fn, o, use_fork, run_index, blob, blob_len);
+  }
   size_t n = strlen (g_results);
   if (n + 1 < sizeof g_results) { g_results[n] = rc ? '1' : '0'; g_results[n + 1] = 0; }
   return rc;
 }
 
-static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
+/* Database key for HEGEL_DATABASE runs: the binary and the run number,
+** stable as long as main() starts its runs in the same order. */
+static void database_key (char * buf, size_t n, uint64_t run_index)
+{
+  char exe[512];
+  ssize_t len = readlink ("/proc/self/exe", exe, sizeof exe - 1);
+  const char * name = "hegel-c";
+  if (len > 0) {
+    exe[len] = 0;
+    const char * slash = strrchr (exe, '/');
+    name = slash ? slash + 1 : exe;
+  }
+  snprintf (buf, n, "%s#%llu", name, (unsigned long long) run_index);
+}
+
+static int run_property_inner (void (*test_fn)(hegel_testcase *),
+                               const hegel_run_options * o, int use_fork, uint64_t run_index,
+                               const char * blob, size_t blob_len)
 {
   const hg_engine * e = hg_engine_get ();
   if (!e) return 1;
@@ -482,15 +544,37 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cas
     fprintf (stderr, "hegel-c: settings: %s\n", hg_last_error (e));
     return 1;
   }
-  hg_str no_db = { "", 0 };
-  e->settings_set_test_cases (x, s, n_cases);
+  /* Only what the caller set overrides the engine's profile / env. */
+  if (o->test_cases) e->settings_set_test_cases (x, s, o->test_cases);
+  if (o->has_seed) e->settings_set_seed (x, s, o->seed, true);
+  if (o->suppress_health) e->settings_set_suppress_health_check (x, s, o->suppress_health);
+  if (o->skip_phases) e->settings_set_phases (x, s, HG_PHASE_ALL & ~o->skip_phases);
   e->settings_set_verbosity (x, s, HG_VERBOSITY_QUIET);
-  e->settings_set_database (x, s, &no_db);         /* no example DB */
   e->settings_set_report_multiple_failures (x, s, false);
+  /* The example database is opt-in (HEGEL_DATABASE): replaying stored
+  ** failures first would make runs depend on what earlier runs saw. */
+  const char * db_env = getenv ("HEGEL_DATABASE");
+  if (db_env && *db_env && strcmp (db_env, "disabled") != 0) {
+    char key[600];
+    database_key (key, sizeof key, run_index);
+    hg_str k = HG_STR_Z (key);
+    e->settings_set_database_key (x, s, &k);
+  } else {
+    hg_str no_db = { "", 0 };
+    e->settings_set_database (x, s, &no_db);
+  }
 
   hg_run * run = NULL;
-  if (e->run_start (x, s, NULL, NULL, &run) != HG_OK) {
-    fprintf (stderr, "hegel-c: hegel_run_start failed: %s\n", hg_last_error (e));
+  int started;
+  if (blob) {
+    hg_str b = { blob, blob_len };
+    started = e->run_start_blob (x, s, b, NULL, NULL, &run);
+  } else {
+    started = e->run_start (x, s, NULL, NULL, &run);
+  }
+  if (started != HG_OK) {
+    fprintf (stderr, "hegel-c: %s failed: %s\n", blob ? "replaying HEGEL_C_REPRODUCE" : "hegel_run_start",
+             hg_last_error (e));
     e->settings_free (x, s);
     return 1;
   }
@@ -548,7 +632,10 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cas
       fprintf (stderr, "hegel-c: hegel_run_result failed: %s\n", hg_last_error (e));
       rc = 1;
     } else {
-      rc = report (e, result);
+      rc = report (e, result, run_index);
+      if (blob && rc == 0)
+        fprintf (stderr, "hegel-c: HEGEL_C_REPRODUCE: run %llu did not reproduce the failure "
+                         "(passes)\n", (unsigned long long) run_index);
       e->run_result_free (x, result);
     }
   }
@@ -562,39 +649,55 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *), uint64_t n_cas
 
 /* ---- Public runners ---- */
 
+static int run_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
+{
+  hegel_run_options o = { .test_cases = n_cases };
+  return run_property (test_fn, &o, use_fork);
+}
+
 void hegel_run_test (void (*test_fn)(hegel_testcase *))
 {
-  if (run_property (test_fn, HEGEL_DEFAULT_CASES, 1)) exit (1);
+  if (run_property (test_fn, NULL, 1)) exit (1);
 }
 
 void hegel_run_test_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases)
 {
-  if (run_property (test_fn, n_cases, 1)) exit (1);
+  if (run_n (test_fn, n_cases, 1)) exit (1);
 }
 
 int hegel_run_test_result (void (*test_fn)(hegel_testcase *))
 {
-  return run_property (test_fn, HEGEL_DEFAULT_CASES, 1);
+  return run_property (test_fn, NULL, 1);
 }
 
 int hegel_run_test_result_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases)
 {
-  return run_property (test_fn, n_cases, 1);
+  return run_n (test_fn, n_cases, 1);
 }
 
 void hegel_run_test_nofork (void (*test_fn)(hegel_testcase *))
 {
-  if (run_property (test_fn, HEGEL_DEFAULT_CASES, 0)) exit (1);
+  if (run_property (test_fn, NULL, 0)) exit (1);
 }
 
 void hegel_run_test_nofork_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases)
 {
-  if (run_property (test_fn, n_cases, 0)) exit (1);
+  if (run_n (test_fn, n_cases, 0)) exit (1);
+}
+
+int hegel_run_test_with (void (*test_fn)(hegel_testcase *), const hegel_run_options * opts)
+{
+  return run_property (test_fn, opts, 1);
+}
+
+int hegel_run_test_nofork_with (void (*test_fn)(hegel_testcase *), const hegel_run_options * opts)
+{
+  return run_property (test_fn, opts, 0);
 }
 
 int hegel__run_property (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork)
 {
-  return run_property (test_fn, n_cases, use_fork);
+  return run_n (test_fn, n_cases, use_fork);
 }
 
 /* ---- Suite ---- */

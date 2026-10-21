@@ -23,7 +23,7 @@ Most new code should use the schema API — it handles allocation, span annotati
   - `hegel_runtime.c` — the public primitives as requests; `hegel__call` picks the transport (INPROC = direct call into the server, CHILD = fork parent's pipe). Also `HEGEL_ISOLATED`.
   - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, capture-by-origin failure reporting, suite API.
   - `hegel_stateful.c` — stateful driver on the engine's state machine (`hegel_new_state_machine`), shaped like hegel-rust's `run_sequential`; preconditions map onto `rule_rejected`. Works in fork and nofork mode.
-- `tests/selftest/` — 88 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
+- `tests/selftest/` — 90 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI) + bug pins (`pins/`)
@@ -52,7 +52,7 @@ make lib                        # build build/libhegel_c.a (pure C, seconds)
 make libhegel                   # build the engine into build/libhegel.so (cargo; PREBUILT=1 downloads it)
 make check-libhegel             # engine pin: submodule tag, installed version, newer upstream release
 
-make selftest-test              # 88 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
+make selftest-test              # 90 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
 make from-hegel-rust-test       # 11 tests (5 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
@@ -71,6 +71,9 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 - `hegel_run_test_result(fn)` / `_n(fn, n)` — fork mode, returns 0/1 (no exit)
 - `hegel_run_test_nofork(fn)` / `_n(fn, n)` — no fork, no crash isolation
 - `hegel_suite_new/add/run/free` — multi-test runner (one binary, several tests; each test is its own engine run)
+- `hegel_run_test_with(fn, &opts)` / `hegel_run_test_nofork_with` — `hegel_run_options`: `test_cases`, `has_seed`+`seed`, `suppress_health` (`HEGEL_SUPPRESS_*` bits), `skip_phases` (`HEGEL_SKIP_*` bits); zero fields keep the engine default. Returns 0/1. See `tests/selftest/test_run_options.c`.
+- Replay: every failure report ends with `reproduce: HEGEL_C_REPRODUCE='N:<blob>'` — N is the run's number within the binary (1-based, in call order). Rerunning the binary with that variable replays exactly that failure through `hegel_run_start_blob` (other runs are skipped); with the bug fixed it prints "did not reproduce" and passes. See `tests/selftest/test_reproduce_blob.c`.
+- Example database: off unless `HEGEL_DATABASE=<dir>` is set; then failures are stored per `<binary basename>#<run number>` and replayed first by the next invocation.
 
 **Primitive draws:** `hegel_draw_int`, `_i64`, `_u64`, `_usize`, `_float`, `_double`, `_bool`, `_text`, `_bytes`, `_regex` (full match)
 
@@ -200,7 +203,7 @@ Third-party excerpts (Linux kernel code under `tests/irl/`) keep their upstream 
 We sit on the official C ABI, libhegel, from the Hegel monorepo **hegeldev/hegel** (it absorbed hegel-rust on 2026-10-19; there libhegel is `libhegel/`, next to `frontends/rust` and `frontends/python`; the header is `libhegel/include/hegel.h`). Crate `hegeltest-c`, prebuilt `libhegel-<goos>-<goarch>.so` on GitHub releases (tagged `libhegel/<version>` since the move); a source build writes `target/release/libhegel_c.so` at the workspace root, which `make libhegel` installs as `build/libhegel.so`). Pinned at libhegel 0.48.0 = tag `libhegel/0.48.0` (= `frontends/rust/0.50.3`; the C crate has its own version line). We don't call 0.48's `hegel_set_unicode_version` (C has no host Unicode version), so generators use the engine's newest tables. Run loop, all context-first: `hegel_settings_new` → `hegel_run_start` → `hegel_next_test_case` (the engine resumes on the calling thread — no worker thread) → typed draws (`hegel_generate_integer` / `_float` / `_boolean` / `_bytes` / `_string` with a string-generator handle) and protocols (collection / recursion / pool / state machine) → `hegel_mark_complete(status, origin)` → `hegel_run_result` (status PASSED / FAILED / ERROR, error kind, failures with origin + blob + caveat).
 
 Engine facts that shaped the runtime (verified against 0.47.1, still true on 0.48.0):
-- `hegel_settings_new` resolves profiles + `hegel.toml` + `HEGEL_*` env vars (`HEGEL_SEED`, `HEGEL_TEST_CASES`, ...) — they apply to our runs for free. Verbosity enum: NORMAL=0, QUIET=1.
+- `hegel_settings_new` resolves profiles + `hegel.toml` + `HEGEL_*` env vars (`HEGEL_SEED`, `HEGEL_TEST_CASES`, ...) — they apply to our runs, except what the runner sets after: verbosity (always QUIET), report-multiple-failures (always off), the database (off unless `HEGEL_DATABASE` names a dir, keyed per run), an explicit `_n` count, and any non-zero `hegel_run_options` field. Verbosity enum: NORMAL=0, QUIET=1.
 - The engine no longer produces a failure diagnostic: the caller captures output for test cases stamped by `hegel_test_case_should_capture` (the final replay, and first-check replays of each discovered failure), keyed by origin. Our runner stores the lines of the last stamped failing execution per origin and prints them with the report. "Draw N:" traces and notes are OUR output.
 - Float draws: bounded draws never allow NaN; infinities only from an unbounded end. 32-bit bounds must be exactly representable as `float`.
 - Text generators get `min_codepoint=1` so drawn strings never contain NUL (they're C strings); regex draws are full-match with a NUL-free alphabet.

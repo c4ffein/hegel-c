@@ -78,6 +78,7 @@ typedef struct { uint8_t * data; size_t len; }    hg_bytes;
 /* hegel_verbosity_t (note: NORMAL is 0 since the 0.2x ABI) */
 #define HG_VERBOSITY_NORMAL   0
 #define HG_VERBOSITY_QUIET    1
+#define HG_PHASE_ALL          31u   /* hegel_phase_t: explicit|reuse|generate|target|shrink */
 #define HG_VERBOSITY_VERBOSE  2
 #define HG_VERBOSITY_DEBUG    3
 
@@ -115,8 +116,13 @@ typedef struct {
   int (*settings_set_seed)              (hg_context *, hg_settings *, uint64_t seed, bool has);
   int (*settings_set_report_multiple_failures) (hg_context *, hg_settings *, bool yes);
   int (*settings_set_database)          (hg_context *, hg_settings *, const hg_str * db);
+  int (*settings_set_database_key)      (hg_context *, hg_settings *, const hg_str * key);
+  int (*settings_set_phases)            (hg_context *, hg_settings *, uint32_t phases);
+  int (*settings_set_suppress_health_check) (hg_context *, hg_settings *, uint32_t checks);
 
   int (*run_start)        (hg_context *, const hg_settings *, hg_output_cb, void *, hg_run ** out);
+  int (*run_start_blob)   (hg_context *, const hg_settings *, hg_str blob, hg_output_cb, void *,
+                           hg_run ** out);
   int (*next_test_case)   (hg_context *, hg_run *, hg_tc ** out);
   int (*run_result)       (hg_context *, hg_run *, hg_result ** out);
   int (*run_result_free)  (hg_context *, hg_result *);

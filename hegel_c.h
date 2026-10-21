@@ -71,6 +71,66 @@ int hegel_run_test_result_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases
 void hegel_run_test_nofork (void (*test_fn)(hegel_testcase *));
 void hegel_run_test_nofork_n (void (*test_fn)(hegel_testcase *), uint64_t n_cases);
 
+/* ---- Run options ---- */
+
+/* Per-run settings for the _with runners.  All-zero means the defaults,
+** so set only what you need:
+**
+**   hegel_run_options o = { .test_cases = 1000,
+**                           .suppress_health = HEGEL_SUPPRESS_FILTER_TOO_MUCH };
+**   int rc = hegel_run_test_with (test_foo, &o);
+**
+** Settings the code leaves at zero come from the engine: its profile
+** (`ci` on a CI server: derandomized), hegel.toml, and the HEGEL_*
+** environment variables — HEGEL_TEST_CASES, HEGEL_SEED,
+** HEGEL_DERANDOMIZE, HEGEL_DATABASE, ...  A field set here wins over
+** those.  (The plain runners behave like all-zero options; the _n ones
+** set test_cases.)
+**
+** The example database (failures remembered across runs, replayed
+** first) is OFF unless HEGEL_DATABASE names a directory; each run then
+** gets its own key, "<binary>#<run number>". */
+typedef struct {
+  uint64_t            test_cases;       /* 0: engine default (100) / HEGEL_TEST_CASES */
+  uint32_t            suppress_health;  /* HEGEL_SUPPRESS_* bits */
+  uint32_t            skip_phases;      /* HEGEL_SKIP_* bits */
+  int                 has_seed;         /* nonzero: use seed below */
+  uint64_t            seed;
+} hegel_run_options;
+
+/* Health checks a run may suppress (bits, as the engine's). */
+#define HEGEL_SUPPRESS_FILTER_TOO_MUCH          (1u << 0)
+#define HEGEL_SUPPRESS_TOO_SLOW                 (1u << 1)
+#define HEGEL_SUPPRESS_TEST_CASES_TOO_LARGE     (1u << 2)
+#define HEGEL_SUPPRESS_LARGE_INITIAL_TEST_CASE  (1u << 3)
+#define HEGEL_SUPPRESS_ALL_HEALTH               (0xfu)
+
+/* Engine phases a run may skip (bits, as the engine's). */
+#define HEGEL_SKIP_EXPLICIT   (1u << 0)
+#define HEGEL_SKIP_REUSE      (1u << 1)         /* database replay */
+#define HEGEL_SKIP_GENERATE   (1u << 2)
+#define HEGEL_SKIP_TARGET     (1u << 3)         /* hegel_target hill-climbing */
+#define HEGEL_SKIP_SHRINK     (1u << 4)         /* report failures unshrunk */
+
+/* Like hegel_run_test_result / the nofork runner, with options (NULL =
+** defaults).  Return 0 if the property held, 1 if not. */
+int hegel_run_test_with        (void (*test_fn)(hegel_testcase *),
+                                const hegel_run_options * opts);
+int hegel_run_test_nofork_with (void (*test_fn)(hegel_testcase *),
+                                const hegel_run_options * opts);
+
+/* ---- Replaying a failure ----
+**
+** Every failure report ends with a line like
+**
+**   reproduce: HEGEL_C_REPRODUCE='2:AAEAAAAACgEAAABl'
+**
+** Run the same binary with that variable set and run 2 (the second
+** property run the binary starts) replays exactly that failing case,
+** shrunk, with its notes; the binary's other runs are skipped.  A blob
+** that no longer fails reports "did not reproduce" and passes — which is
+** how to check a fix.  A bare blob (no "N:") targets run 1. */
+
 /* ---- Primitive draw functions ---- */
 
 /* Draw random values within [min_val, max_val] */
