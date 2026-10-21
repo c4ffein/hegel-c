@@ -4,6 +4,32 @@
 
 # TODO
 
+## Next up (2026-10-21)
+
+- **Gen-layer bake-off.** Two candidate designs for the generator layer
+  above `hegel_c.h` (options B and C in `docs/gen_layer_options_2026_10_05.md`,
+  compared in `docs/gen_layer_comparison_2026_10_05.md`): port the same
+  handful of real harnesses to each and pick on the result.
+- **`hegel_target(tc, score, label)`.** No longer blocked: libhegel 0.48
+  exports `hegel_target` and the TARGET phase hill-climbs toward the
+  scores. One new op in the wire protocol + a selftest where random
+  generation misses and targeting finds.
+- **Named shape accessors** — see "Named shape accessors" below.
+- **Raw-bytes schema field.** `hegel_draw_bytes` exists as a primitive;
+  the schema layer has no `HEGEL_BYTES(lo, hi)` (pointer + length) —
+  the "Binary" gap in "Missing from Go" below.
+- **Remote-board transport.** The wire protocol in `core/hegel_internal.h`
+  is transport-shaped on purpose: run it over serial/TCP with a board in
+  the child's role and a watchdog reset in fork's.
+- **hegel-skill C reference.** Add C to the canonical Agent Skill
+  (`inspiration/hegel/hegel-skill`, see its CLAUDE.md), local first,
+  upstream PR once settled.
+- **Linux harnesses don't rebuild `libhegel_c.a`.** Add the FORCE
+  delegation the other test Makefiles use, once, in
+  `tests/irl/linux/pin.mk`.
+- **CI actions on Node 20.** Bump `actions/checkout`, `cache`,
+  `upload-artifact`, `download-artifact` to their Node 24 majors.
+
 ## Binding system — deferred items (ALL CLOSED 2026-07-13)
 
 The HEGEL_BINDING / HEGEL_LET / HEGEL_USE / HEGEL_ARR_OF system has
@@ -371,7 +397,6 @@ matter for "does the API handle arbitrary foreign C code".
 | Embedded-systems demo | **TODO** — pick a target (Modbus / ring buffer / MQTT-SN / reviewer's choice), build 2–3 schemas, host-compiled |
 | `docs/review-framing.md` (one-page packet) | **TODO** — per-reviewer specific questions |
 | `HEGEL_SELF` rename / `OPTIONAL_SELF` alias | deferred — cosmetic, not a rejection issue |
-| `hegel_draw_regex` fullmatch fix | deferred — existing WARNING in `hegel_gen.h` is sufficient for review; defer to reviewer feedback on the right fix |
 
 ### Named shape accessors
 
@@ -409,12 +434,8 @@ least binary is table stakes.
 hegel_schema_float_range(lo, hi) — inclusive only, no NaN/Inf opt-out. For numerical code (Scotch-adjacent, scientific C), NaN
 handling is where bugs live. This is a real gap, not an aesthetic one.
 
-3. Options beyond n. Go has WithTestCases, SuppressHealthCheck(FilterTooMuch | TooSlow | ...). C has hegel_run_test_n and
-nothing else. The filter health check in particular is load-bearing — if a user's HEGEL_FILTER_INT is too strict, there's
-currently no escape hatch.
-
-4. FromRegex(pattern, fullmatch). Go exposes the fullmatch flag. You already know about the C footgun (hegel_draw_regex is
-contains-match), it's in TODO and memory. Go solved it by just plumbing the flag through.
+(Run options and regex fullmatch, items 3 and 4 here before, are done: `hegel_run_options`,
+and regex draws are full-match.)
 
 ## API polish
 
@@ -560,77 +581,6 @@ passes, but the bucket comment is wrong for class 2.
    build-abort population reaches ~5+.  Today there are 2 — not
    worth the Makefile boilerplate yet.
 
-## Known bugs / gotchas
-
-### Fork-mode orphan leak (FIXED 2026-04-12)
-
-**Symptom (now fixed):** schemas using `HEGEL_ARRAY_INLINE`, and in
-principle any test where the draw sequence was long enough for
-hegel's engine to discard mid-generation, caused `hegel_run_test_n`
-to silently spawn extra orphan fork children. Roughly 10% of forks
-ended up reparented to init, ran the test body to completion with
-garbage draw values, and silently swallowed any assertion failures.
-
-**Root cause:** `tc.draw()` inside `parent_serve` can panic with
-hegeltest's `__HEGEL_STOP_TEST` sentinel when the engine decides to
-abort a test case mid-generation. The original `run_forked` let
-that panic propagate up directly, never reaching the `waitpid`
-line. The child stayed alive, blocked on a pipe read that nobody
-was answering. When the main process eventually exited, the
-child's pipe got EOF, the child-side `pipe_read_exact` silently
-returned `false`, the draw functions ignored that return and
-yielded zeros, and the child finished running its test body with
-garbage inputs as an orphan.
-
-**Fix (in `rust-version/src/lib.rs`):**
-
-1. `run_forked` now wraps `parent_serve` in `catch_unwind`,
-   unconditionally closes the parent's pipe ends and `waitpid`s
-   the child, then drops `tc` and re-raises the panic via
-   `resume_unwind`. The child is always reaped before any panic
-   propagates up to hegel's engine.
-
-2. The child-side `hegel_draw_*` functions (`int`, `i64`, `u64`,
-   `usize`, `float`, `double`, `text`, `regex`) now check
-   `pipe_read_exact`'s return value and call `child_abandoned()`
-   (= `_exit(0)`) on read failure, instead of silently returning
-   zeros from a dead pipe.
-
-**Verification:**
-- 1000 / 1000 cases across 20 runs of the minimal reproducer:
-  0 orphans, 0 out-of-range draws.
-- All 36 selftest, 19 from-hegel-rust, and 4 Scotch tests pass
-  (selftest grew by 4 `TESTS_HEALTH` regression tests covering
-  the `parent_serve` panic propagation paths; Scotch grew by 1
-  `TESTS_SHRINK` reducer demo).
-- Reproducer kept at
-  `tests/irl/scotch/test_array_inline_orphan_repro.c` as a
-  hand-runnable regression demo.
-
-### `hegel_draw_regex` fullmatch semantics
-
-`hegel_draw_regex` wraps hegeltest's `from_regex()` without
-configuring `.fullmatch()`. That means the generator produces
-strings that **contain a match** for the pattern, not strings that
-**are** a match.
-
-For permissive patterns that match the empty string (like
-`[a-z]{0,8}`), every possible string "contains a match," so the
-generator returns arbitrary bytes including control characters,
-quotes, and non-ASCII.
-
-**Fix:** expose `.fullmatch()` option in the C API. Either add a
-new function `hegel_draw_regex_fullmatch` or add a bool parameter.
-Requires FFI changes in `hegel_c.h` and `rust-version/src/lib.rs`.
-
-**Workaround until then:** don't use `hegel_draw_regex` for
-character-class constraints. Use char-by-char drawing with
-`hegel_draw_int(tc, 'a', 'z')` instead. The schema API's text
-generator already does this.
-
-Discovered during the JSON round-trip test — hegel found the bug
-itself by producing a `"` character from `[a-z]{0,8}`.
-
 ## Cleanup
 
 ### Extract or generalize `graph_gen.h` / `scotch_helpers.h`
@@ -666,61 +616,7 @@ shape of the abstraction.
 Was previously listed as a "design decision" in the README; it's
 really an open cleanup task, not a settled choice.
 
-### Relationship between the legacy `hegel_gen_*` combinator API and the schema API
-
-**Feature parity is complete.** Everything the legacy
-`hegel_gen_*` API provides is now available at the schema layer
-(`hegel_gen.h`), in typed form with automatic ownership tracking
-and span emission:
-
-| Legacy | Schema equivalent |
-|---|---|
-| `hegel_gen_int/i64/u64/float/double/bool` | `hegel_schema_i8..u64`, `_float`, `_double`, `HEGEL_BOOL` |
-| `hegel_gen_text` | `hegel_schema_text` (char-by-char, no regex gotcha) |
-| `hegel_gen_regex` | `hegel_schema_regex` / `HEGEL_REGEX` (same footgun; see below) |
-| `hegel_gen_one_of` (for scalars) | `HEGEL_ONE_OF` (via `HEGEL_SCH_ONE_OF_SCALAR`) |
-| `hegel_gen_one_of` (for structs) | `HEGEL_ONE_OF_STRUCT` |
-| `hegel_gen_sampled_from(N)` | `hegel_schema_int_range(0, N-1)` |
-| `hegel_gen_optional` (of ptr) | `HEGEL_OPTIONAL` |
-| `hegel_gen_optional` (of scalar) | `HEGEL_OPTIONAL(T, f, hegel_schema_int_range(...))` — produces a nullable `int *` |
-| `hegel_gen_map_int/i64/double` | `HEGEL_MAP_INT/I64/DOUBLE` |
-| `hegel_gen_filter_int/i64/double` | `HEGEL_FILTER_INT/I64/DOUBLE` |
-| `hegel_gen_flat_map_int/i64/double` | `HEGEL_FLAT_MAP_INT/I64/DOUBLE` |
-| `hegel_gen_draw_list_int/i64/u64/float/double` | `HEGEL_ARRAY` (more capable — nested, struct elems, etc.) |
-
-The only remaining "legacy-only" surface is the **standalone draw
-functions** (`hegel_draw_int(tc, lo, hi)` etc.) that belong to the
-primitive layer (`hegel_c.h`), not to the combinator layer. Those
-are a different abstraction level and stay regardless of what
-happens to the combinators.
-
-**Regex footgun note:** both `hegel_gen_regex` (legacy) and
-`hegel_schema_regex` (new) wrap hegeltest's `from_regex()` without
-configuring `.fullmatch()`, so for permissive patterns they produce
-strings that *contain* a match rather than *are* a match. See the
-"Known bugs" section below for the FFI-level fix.
-
-**Remaining disposition decision:** the legacy `hegel_gen_*`
-combinator API is now fully redundant. Safe to deprecate and
-eventually remove once existing tests (`from-hegel-rust`, etc.)
-that use it get migrated to the schema API. Not urgent for V0 —
-the two systems coexist without conflict. Migration is mechanical.
-
-Feature-parity proof: `tests/selftest/test_schema_functional_combinators.c`
-has 7 sub-tests covering optional-int pointer, map/filter/flat_map
-for int/i64/double, one-of-scalar (small-OR-large distributions),
-bool, and regex.
-
 ## Infrastructure
-
-### Pool Hegel server across test binaries
-
-`hegeltest` already pools the Hegel server within a single process,
-but each test binary pays the ~1s startup cost separately. The
-suite API (`hegel_suite_*`) amortizes within a binary; a
-multi-binary pooling mechanism would amortize across binaries.
-
-Probably requires a long-lived daemon or shared socket.
 
 ### Parallel test execution
 
@@ -733,31 +629,11 @@ would meaningfully cut CI time.
 See `tests/from-hegel-rust/manifest.md`. Remaining ones need
 features we don't have (`exclude_min`, NaN/inf) or are Rust-specific.
 
-### Direct CI coverage for the orphan-leak fix
-
-The four `TESTS_HEALTH` selftests added 2026-04-12 cover the
-`parent_serve` panic propagation paths (filter_too_much and
-large_base_example), which is *indirect* coverage for the orphan
-fix — a regression that breaks the `catch_unwind` would cascade
-into health-check test failures or hangs.  But there is no test
-that *directly* asserts "no orphan processes appeared during
-this run."
-
-The hand-runnable `tests/irl/scotch/test_array_inline_orphan_repro.c`
-does the orphan check via `grep -c 'ppid=1 '` on stderr after a
-`sleep 1`, but it's not wired into any Makefile target.  Future
-work: bash-wrap the repro into a Makefile target that asserts
-zero orphans, add to selftest CI.  Cheap (~30 min) and would
-catch the most subtle regressions.
-
 ## TODO
 - [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
-- [ ] `hegel_target(tc, value, label)` — property-directed testing. Not in hegeltest 0.1.18 or 0.4.3, blocked upstream.
-- [ ] Pool hegel server across test binaries — hegeltest pools within a process, but separate binaries each pay ~1s. Suite API partially addresses this.
+- [ ] `hegel_target(tc, value, label)` — unblocked, see "Next up".
 - [ ] Parallel test execution
-- [ ] Verify Hegel's database replay of failing cases across runs with fork mode
+- [ ] Test `HEGEL_DATABASE` replay in fork mode (`test_run_options` covers nofork only)
 - [ ] More Scotch IRL tests — strategy string fuzzing against real parser, mesh partitioning
 - [ ] More IRL targets beyond Scotch in `tests/irl/`
-- [ ] Real C implementation (pure C wire protocol, no Rust bridge)
-  - [ ] Compare with Rust bridge using PBT
 - [ ] Clean up `graph_gen.h` / `scotch_helpers.h` — currently in the Scotch test harness, contain general patterns (CSR builders, strategy generators) worth extracting or generalizing. See `TODO.md`.
