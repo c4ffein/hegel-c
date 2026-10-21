@@ -27,14 +27,18 @@
 ** (libhegel/tests/embedded/native/test_runner_tests.rs, added in 0.48.0;
 ** on 0.47.x the small failure is reported unshrunk).
 **
-** The engine favours small values, so a third to a half of runs find the
-** small failure first and never exercise the path; main then starts a
-** fresh run, up to MAX_ATTEMPTS (all inconclusive: < 1e-8).
+** The engine favours small values, so a third to a half of seeds find
+** the small failure first and never exercise the path; main then tries
+** the next seed, up to MAX_ATTEMPTS.  Each attempt fixes its seed
+** (HEGEL_SEED=k, HEGEL_DERANDOMIZE=false — the env wins over the
+** engine's `ci` profile, which derandomizes and would make every
+** attempt the same run), so the test is deterministic everywhere.
 **
 ** Test status: TESTS_PASS — main exits 0 iff, in the first run whose
 ** first failure was large, the reported failure is small at x = 101.
 */
 #include <stdio.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -139,6 +143,11 @@ main (void)
 
   printf ("Shrinking a failure found while shrinking another...\n");
   for (attempt = 1; attempt <= MAX_ATTEMPTS; attempt ++) {
+    char              seed[32];
+
+    snprintf (seed, sizeof (seed), "%d", attempt);
+    setenv ("HEGEL_SEED", seed, 1);
+    setenv ("HEGEL_DERANDOMIZE", "false", 1);
     unlink (last_path);
     unlink (first_path);
     if (hegel_run_test_result (test_two_failures) == 0) {
@@ -151,11 +160,11 @@ main (void)
     }
     if (first.which == LARGE)
       break;
-    printf ("  run %d: first failure already small (x=%d), path not exercised — "
-            "retrying\n", attempt, first.x);
+    printf ("  seed %d: first failure already small (x=%d), path not exercised — "
+            "next seed\n", attempt, first.x);
   }
   if (attempt > MAX_ATTEMPTS) {
-    fprintf (stderr, "INCONCLUSIVE: no run of %d found the large failure first\n",
+    fprintf (stderr, "INCONCLUSIVE: no seed of 1..%d found the large failure first\n",
              MAX_ATTEMPTS);
     return (1);
   }
