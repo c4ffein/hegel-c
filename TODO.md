@@ -35,15 +35,32 @@
   drop the deleted `hegel_gen_*` API, add `hegel_run_options` and
   `HEGEL_C_REPRODUCE`.
 - **Skill update for the 3 missed bug classes** (2026-05-25 rediscovery,
-  `NEXT_SESSION_PLEASE_JUST_START_HERE.md`): diagnostic content
+  `BUG_REDISCOVERY_CANDIDATES.md`, pins in `tests/irl/linux/pins/`): diagnostic content
   (bootconfig — SKILL.md still says not to check what errors say),
   bookkeeping-state mutators (maple_prealloc), and an explicit note on the
   concurrency limit (maple_destroy_walk, RCU race). Validate by re-running
   only those 3 experiments blind against the updated skill.
+- **Required reachability triage in `hegel-bughunt`.** Every finding gets
+  a caller survey ("can any in-tree caller trigger it?") and a "harness
+  artifact?" check (re-run against the reference semantics, not only our
+  stubs). Every July 2026 finding was real but latent; the prealloc one
+  was a stub artifact.
+- **Aim hunts at untrusted-input code** (on-disk formats, network buffers,
+  decompressors on adversarial data) rather than internal helpers — that's
+  where reachable bugs are. Say so in the skill's target-selection step.
+- **Research bets, in order:** (1) a prototype auto-harness generator,
+  scoped to self-contained code (codecs, parsers, pure helpers); (2) several
+  models as decorrelated hunters over one shared executable judge — only
+  after the benchmark is rebuilt leak-free, or it measures noise.
 - **Grow the rediscovery corpus** with the deferred filesystem picks: ext4
   do_split, minix superblock, ADFS nzones, squashfs negative offset, UDF
   lengthAllocDescs, HFS+ catalog record, lib/crypto/mpi underflow (2–6 h
   of stubs each, as pins).
+- **Real harness for `mab_calc_split`** (`4f6a6bed0bfe`, corpus candidate):
+  a buggy snapshot at the fix's parent (the fix spans several functions, so
+  no single-line revert) and a stateful property that drives node splits and
+  calls `mt_validate()` after every op. `tests/irl/linux/maple_tree` is not
+  it — that pin runs on v7.1 (already fixed) and never calls the validator.
 
 ## Binding system — deferred items (ALL CLOSED 2026-07-13)
 

@@ -13,7 +13,7 @@ overlap is a free cross-validation signal.
 | | `docs/our_corpus.json` | sashiko `benchmark.json` |
 |---|---|---|
 | Origin | Curated by us (git-log/syzbot mining) + bugs hegel-c actually found | Sashiko's ~1000 unfiltered `Fixes:`-tagged upstream bugs |
-| Size | 20 (19 curated + our own finds) | 999 → ~236 PBT-eligible after filtering |
+| Size | 21 (20 curated + our own finds) | 999 → ~236 PBT-eligible after filtering |
 | Bias | Selection bias toward *harnessable* bugs (we picked ones with a userspace path) | Unfiltered — measures what the method *actually* reaches, not what looks findable |
 | License | MIT — lives in-tree | Apache-2.0 descriptions — stay in gitignored `.corpus/` |
 | Extra metadata | `harness_dir`, `status`, `provenance`, `classes` | subsystem + description only |
@@ -22,6 +22,22 @@ Our corpus carries provenance we can't get from sashiko: which bugs we've
 already built harnesses for (`harness_dir`), which we've *found ourselves*
 (`sg_split` overshoot, `packing.c` OOB), and which are still just candidates.
 Sashiko's corpus is far larger and unbiased. Neither subsumes the other.
+
+`status` in our corpus (hunter-visible, so it never describes the bug):
+
+| Status | Meaning |
+|---|---|
+| `candidate` | Picked; no harness, or not hunted yet |
+| `rediscovered` | Found by a hunt that was blind, and the harness is red on buggy, green on fixed |
+| `harness-only` | A harness discriminates (red on buggy, green on fixed), but no hunt found the bug blind: the hint leaked, the red was an oracle or snapshot artifact, or rules were added after the hunt |
+| `missed` | Harness exists but never reaches the bug (buggy green) |
+| `found-and-submitted` / `found-novel` | hegel-c found a bug upstream didn't know about (sent / not yet sent) |
+
+`results` (ours only, never merged into hunter files) keeps each run's
+verdict: the 2026-05-25 run, the 2026-07-12 re-run (which found hints
+leaked through harness Makefile comments, so most May hits lost blind
+credit), and the 2026-10-19 pin runs (red on buggy AND green on fixed, which
+exposed several fake hits).
 
 ## The pipeline
 
@@ -47,8 +63,8 @@ tools/filter-corpus.py               # -> .corpus/{hunt_targets,judge_key}.json
 tools/merge-corpus.py                # -> .corpus/merged_*.json
 ```
 
-Current merge (sashiko pin `a434adc`): **255 unique bugs** — 19 ours-only, 235
-theirs-only, **1 in both** (`c6e8e595a079`, the idr range bug). 12 have an
+Current merge (sashiko pin `a434adc`): **256 unique bugs** — 20 ours-only, 235
+theirs-only, **1 in both** (`c6e8e595a079`, the idr range bug). 11 have an
 existing harness under `tests/irl/linux/`.
 
 ## Blind hygiene
