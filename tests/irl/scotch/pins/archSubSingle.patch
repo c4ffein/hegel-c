@@ -1,0 +1,26 @@
+Our fix for a wild write in archSubArchBuild() (arch_sub.c), against
+Scotch master b4801dbf (v7.0.17).  The sub-architecture tree is built by
+archSubArchBuild2() over treetab, which has one node per terminal of the
+ORIGINAL architecture (orgtermnbr), kept or not; its recursion stops when
+the current level has at most one vertex.  The first call passes vnumnbr,
+the number of KEPT terminals, instead.  With vnumnbr == 1 the recursion
+stops at once and returns treetab, the node of original terminal 0: right
+only if the kept terminal is 0.  Otherwise the root is an empty node
+(termnum = ANUMMAX) and archSubArchBuild3() writes termtab[ANUMMAX]
+(SEGV at arch_sub.c:345 under ASan).  With 2 or more kept terminals the
+matching coarsens to a single vertex anyway, so only vnumnbr == 1 breaks.
+Witness: test_arch_sub (props/); minimal case: SCOTCH_archSub of
+SCOTCH_archCmplt(4) keeping terminal {2}.
+Applied by scripts/pin-worktree.sh (git apply) for the pin's fixed state.
+
+--- a/src/libscotch/arch_sub.c
++++ b/src/libscotch/arch_sub.c
+@@ -475,7 +475,7 @@
+     treetab[orgtermnum].vertnum = orgtermnum;     /* Vertex number in original architecture                    */
+   }
+ 
+-  rootptr = archSubArchBuild2 (&matcdat, (Anum (*) (void *, ArchCoarsenMulti * restrict *)) orgarchptr->clasptr->matchMate, treetab, vnumnbr);
++  rootptr = archSubArchBuild2 (&matcdat, (Anum (*) (void *, ArchCoarsenMulti * restrict *)) orgarchptr->clasptr->matchMate, treetab, orgtermnbr);
+ 
+   orgarchptr->clasptr->matchExit (&matcdat);      /* Free matching structure */
+ 

@@ -200,7 +200,7 @@ const SAMPLE = {generated:"sample", statuses:["suspected","confirmed","patch-rea
   findings:[{id:"linux-sample-bug",project:"linux",where:"lib/x.c: f()",title:"sample finding (open the generated page for real data)",
     kind:"oob",found:"2026-10-23",how:"sample",confidence:"high",reach:"latent",status:"confirmed",since:"2026-10-23",
     source:"repo",found_by:"hegel-c",writeup:"docs/x.md",notes:"Run make findings-html."}],
-  sub_states:["draft","sent","changes-requested","applied","merged","abandoned","superseded"], sub_closed:["abandoned","merged","superseded"],
+  sub_states:["planned","draft","sent","changes-requested","applied","merged","abandoned","superseded"], sub_closed:["abandoned","merged","superseded"],
   submissions:[{id:"linux-sample-fix",project:"linux",title:"sample patch",kind:"patch",fixes:["linux-sample-bug"],state:"draft",
     since:"2026-10-23",versions:[{v:1,built:"2026-10-23",patches:1}]}]};
 const raw = document.getElementById("data").textContent.trim();
@@ -208,7 +208,7 @@ const D = raw.startsWith("{") ? JSON.parse(raw) : SAMPLE;
 const F = D.findings, ORDER = D.statuses, CLOSED = new Set(D.closed);
 const SUBS = D.submissions || [], SUBORDER = D.sub_states || [], SUBCLOSED = new Set(D.sub_closed || []);
 /* submission states reuse the finding palette */
-const SUBCOLOR = {draft:"patch-ready", sent:"reported", "changes-requested":"confirmed", applied:"fixed-upstream",
+const SUBCOLOR = {planned:"suspected", draft:"patch-ready", sent:"reported", "changes-requested":"confirmed", applied:"fixed-upstream",
   merged:"fixed-upstream", abandoned:"withdrawn", superseded:"withdrawn"};
 const byId = id => F.find(x => x.id === id) || SUBS.find(x => x.id === id);
 const subsOf = id => SUBS.filter(s => (s.fixes || []).includes(id));

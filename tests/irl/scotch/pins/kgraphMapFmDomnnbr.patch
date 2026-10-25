@@ -1,0 +1,36 @@
+Our fix for a heap over-read in kgraphMapFm() (kgraph_map_fm.c), against
+Scotch master b4801dbf (v7.0.17).  When the current mapping is too
+imbalanced, kgraphMapFm() re-maps with kgraphMapSt("r{sep=h{pass=10}}"),
+which can change grafptr->m.domnnbr, and reallocates comploadmax /
+comploaddlt "because domnnbr has changed after mapping" -- but with the
+local const copy of domnnbr taken on entry.  The arrays stay at the old
+size, and kgraphMapFmTablGet() then indexes them with the new domain
+numbers (heap-buffer-overflow READ at kgraph_map_fm.c:130 under ASan).
+Reload domnnbr after the re-map; the later loops (savenbr bound, final
+graph update) then use the new count too.
+Witness: test_graph_part_strat_fuzz (props/), minimal case: path 0-1-2,
+SCOTCH_graphPart into 2 parts with SCOTCH_stratGraphMapBuild
+(SCOTCH_STRATBALANCE, 2, 0.67).
+Applied by scripts/pin-worktree.sh (git apply) for the pin's fixed state.
+
+--- a/src/libscotch/kgraph_map_fm.c
++++ b/src/libscotch/kgraph_map_fm.c
+@@ -994,7 +994,7 @@
+   const Gnum * restrict const     edgetax = grafptr->s.edgetax;
+   const Gnum * restrict const     edlotax = grafptr->s.edlotax;
+   const Arch * restrict const     archptr = grafptr->m.archptr;
+-  const Gnum                      domnnbr = grafptr->m.domnnbr;
++  Gnum                            domnnbr = grafptr->m.domnnbr;
+   const ArchDom * restrict const  domntab = grafptr->m.domntab;
+   Anum * restrict const           parttax = grafptr->m.parttax;
+   Anum * restrict const           parotax = grafptr->r.m.parttax;
+@@ -1044,7 +1044,8 @@
+         return  (0);                              /* This algorithm is still useless  */
+       }
+ 
+-      if (memReallocGroup ((void *) comploadmax,  /* domnnbr has changed after mapping */
++      domnnbr = grafptr->m.domnnbr;               /* domnnbr has changed after mapping */
++      if (memReallocGroup ((void *) comploadmax,
+                            &comploadmax, (size_t) (domnnbr * sizeof (Gnum)),
+                            &comploaddlt, (size_t) (domnnbr * sizeof (Gnum)), NULL) == NULL) {
+         errorPrint ("kgraphMapFm: out of memory (3)");

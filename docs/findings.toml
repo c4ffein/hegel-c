@@ -50,8 +50,9 @@
 #   id, project, title
 #   kind        patch | report
 #   fixes       [finding ids]
-#   state       draft | sent | changes-requested | applied | merged |
-#               abandoned | superseded
+#   state       planned | draft | sent | changes-requested | applied |
+#               merged | abandoned | superseded
+#               (planned = we will send it, nothing written yet: no versions)
 #               (applied = in the maintainer's tree; merged = upstream proper)
 #   since       date the state last changed
 #   versions    [{ v, label, sent | built (date), patches, lore (Message-ID), to }]
@@ -385,6 +386,61 @@ found_by = "hegel-c"
 notes = "Fixed with our one-liner, mapDomain(&mappdat, tgtvertnum)."
 
 [[finding]]
+id = "scotch-archsub-off-by-one"
+project = "scotch"
+where = "src/libscotch/arch_sub.c: archSubArchBuild()"
+title = "SCOTCH_archSub keeping one terminal other than 0 writes termtab[ANUMMAX]: archSubArchBuild2 gets vnumnbr instead of orgtermnbr"
+kind = "oob"
+found = "2026-04"
+how = "bughunt dogfood (no details kept); re-hunted 2026-10-25 with test_arch_sub"
+confidence = "high"
+reach = "live"
+status = "patch-ready"
+since = "2026-10-25"
+pin = "tests/irl/scotch/pins/archSubSingle.conf"
+writeup = "tests/irl/scotch/pins/archSubSingle.patch"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+found_by = "hegel-c"
+notes = "The April entry said only \"off-by-one in arch_sub.c\"; whether it meant this bug is unknown. Minimal case: SCOTCH_archCmplt(2), keep {1}. Same on April's 064292127f79. Fix: one word at arch_sub.c:478."
+[[finding]]
+id = "scotch-graphgeomloadchac-cleanup"
+project = "scotch"
+where = "src/libscotch/graph_io_chac.c: graphGeomLoadChac()"
+title = "a Chaco file with more arcs than its header declares writes one Gnum past edgetax: the overflow guard is off by one and runs too late"
+kind = "oob"
+found = "2026-04"
+how = "bughunt dogfood; re-hunted 2026-10-25 with test_graph_geom_load_chac"
+confidence = "high"
+reach = "live"
+status = "patch-ready"
+since = "2026-10-25"
+pin = "tests/irl/scotch/pins/graphGeomLoadChac.conf"
+writeup = "tests/irl/scotch/pins/graphGeomLoadChac.patch"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+found_by = "hegel-c"
+notes = "Minimal file: \"1 1\\n1 1 1\\n\". With edge weights the guard also lets intLoad write edlotax[edgenbr+1]. Separate, weaker: a file with FEWER arcs than declared loads with rc 0 and fails SCOTCH_graphCheck (the loader's check is debug-only)."
+[[finding]]
+id = "scotch-graphpart-strat-f-d-segv"
+project = "scotch"
+where = "src/libscotch/kgraph_cost.c: kgraphCost() / kgraph_map_df.c: kgraphMapDf()"
+title = "single-letter strategies \"f\" and \"d\" parse fine, then SCOTCH_graphPart segfaults on the unset mapping"
+kind = "null-deref"
+found = "2026-04-30"
+how = "blind sandbox dogfood, strategy-string fuzzing; re-checked 2026-10-25 with test_graph_part_refine"
+confidence = "high"
+reach = "live"
+status = "confirmed"
+since = "2026-10-25"
+pin = "tests/irl/scotch/pins/kgraphRefineNoMapping.conf"
+writeup = "tests/irl/scotch/props/test_graph_part_refine.c"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+related = [{ to = "scotch-strat-semantic-validation", rel = "covered-by" }]
+found_by = "hegel-c"
+notes = "Refinement methods with no initial mapping: arguably a misuse, but a SIGSEGV even without ASan (kgraph_cost.c:104, kgraph_map_df.c:246). Minimal: 1 vertex, 1 part, \"f\". The pin has one state, expected red."
+[[finding]]
 id = "scotch-order-strat-select-contract"
 project = "scotch"
 where = "SCOTCH_stratGraphOrder / SCOTCH_graphOrder"
@@ -435,7 +491,45 @@ history = "docs/saved_sessions_for_history/BUILDING_THE_BUGHUNT_SANDBOX_AND_FIRS
 checked = "2026-10-25 on master b4801dbf (v7.0.17)"
 source = "repo"
 found_by = "hegel-c"
-notes = "No trace in any run of the 28 dogfood tests (ASan, both versions) nor of the claim checker."
+notes = "No trace in any run of the 28 dogfood tests (ASan, both versions) nor of the claim checker. The closest thing found: the \"k\" ordering method maps nothing and mapTerm returns -1 (scotch-strat-k-sigabrt) — ordering, not graphPart."
+[[finding]]
+id = "scotch-strat-k-sigabrt"
+project = "scotch"
+where = "src/libscotch/hgraph_order_kp.c: hgraphOrderKp()"
+title = "ordering method \"k\" with default parameters updates ordetab[-1]: its default partitioning strategy is empty, so mapTerm returns -1"
+kind = "oob"
+found = "2026-04-30"
+how = "blind sandbox dogfood; re-checked 2026-10-25 with test_graph_order_kp"
+confidence = "high"
+reach = "live"
+status = "confirmed"
+since = "2026-10-25"
+pin = "tests/irl/scotch/pins/hgraphOrderKpDefault.conf"
+writeup = "tests/irl/scotch/props/test_graph_order_kp.c"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+related = [{ to = "scotch-strat-semantic-validation", rel = "covered-by" }]
+found_by = "hegel-c"
+notes = "The April SIGABRT was ASan's abort. As a partitioning strategy \"k\" is rejected by the parser. Heap-buffer-overflow at hgraph_order_kp.c:141 (4 bytes before the memAllocGroup block); minimal: 2x2 grid. No fix of ours: the default strategy (stratdummy, hgraph_order_st.c:123) is upstream's call."
+[[finding]]
+id = "scotch-kgraphmapfm-domnnbr"
+project = "scotch"
+where = "src/libscotch/kgraph_map_fm.c: kgraphMapFm()"
+title = "after a rebalancing re-map changes the domain count, the FM arrays are reallocated with the stale cached domnnbr and read past their end"
+kind = "oob"
+found = "2026-10-25"
+how = "test_graph_part_strat_fuzz (2026-04 dogfood test, first run under ASan)"
+confidence = "high"
+reach = "live"
+status = "patch-ready"
+since = "2026-10-25"
+pin = "tests/irl/scotch/pins/kgraphMapFmDomnnbr.conf"
+writeup = "tests/irl/scotch/pins/kgraphMapFmDomnnbr.patch"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+found_by = "hegel-c"
+notes = "Heap-buffer-overflow READ in kgraphMapFmTablGet (kgraph_map_fm.c:129-130). Minimal: path 0-1-2, 2 parts, SCOTCH_stratGraphMapBuild(SCOTCH_STRATBALANCE, 2, 0.67). Silent without ASan. Same on April's 064292127f79."
+
 [[finding]]
 id = "scotch-strat-semantic-validation"
 project = "scotch"
@@ -510,3 +604,14 @@ versions = [{ v = 1, sent = "2026-04", to = "F. Pellegrini" }]
 commit = "064292127f79"
 notes = "A report, not a patch: fixed by the maintainer."
 
+
+[[submission]]
+id = "scotch-props-2026-10-report"
+project = "scotch"
+title = "three fixes and two crashes from the Scotch property suite"
+kind = "patch"
+fixes = ["scotch-archsub-off-by-one", "scotch-graphgeomloadchac-cleanup", "scotch-kgraphmapfm-domnnbr", "scotch-strat-k-sigabrt", "scotch-graphpart-strat-f-d-segv"]
+state = "planned"
+since = "2026-10-25"
+next = "Write to F. Pellegrini: the three fixes are the patches of pins archSubSingle, graphGeomLoadChac and kgraphMapFmDomnnbr; the two crashes (strategy \"k\" on graphOrder, \"f\"/\"d\" on graphPart) come with pins hgraphOrderKpDefault and kgraphRefineNoMapping. Nothing drafted yet."
+notes = "All five red on master b4801dbf (v7.0.17) and the three fixes green, checked 2026-10-25 (run 2026-10-25-scotch-pins in docs/runs.toml)."

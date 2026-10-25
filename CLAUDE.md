@@ -26,7 +26,7 @@ Most new code should use the schema API — it handles allocation, span annotati
 - `tests/selftest/` — 90 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
-- `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI) + bug pins (`pins/`)
+- `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI), a 29-test property suite (`props/`: 24 green on current master via `make test-props` / pin `current`, 5 witnesses of open bugs run by their pins) + bug pins (`pins/`; `PIN_ASAN=1` in a pin forces an ASan Scotch)
 - `tests/irl/linux/` — Linux kernel bug-hunt harnesses, one per target, each built against a pinned kernel checkout (`pins/`)
 - `docs/schema-api.md` — schema system reference
 - `docs/patterns.md` — pattern catalog (tests as documentation)

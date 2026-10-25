@@ -71,12 +71,12 @@ HOMES = {"pin": ("tests/irl/",),
 FILE_KEYS = ("pin", "writeup", "history")
 
 # ---- submissions
-SUB_STATES = ["draft", "sent", "changes-requested", "applied", "merged", "abandoned", "superseded"]
+SUB_STATES = ["planned", "draft", "sent", "changes-requested", "applied", "merged", "abandoned", "superseded"]
 SUB_CLOSED = {"merged", "abandoned", "superseded"}
 SUB_KINDS = {"patch", "report"}
 SUB_REQUIRED = ["id", "project", "title", "kind", "fixes", "state", "since", "versions"]
 SUB_OPTIONAL = ["commit", "dir", "next", "notes"]
-SUB_NEEDS_NEXT = {"draft", "changes-requested"}     # waiting on us: say what to do
+SUB_NEEDS_NEXT = {"planned", "draft", "changes-requested"}     # waiting on us: say what to do
 VERSION_KEYS = {"v", "label", "sent", "built", "patches", "lore", "to"}
 SUBMISSIONS_DIR = "submissions"
 LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -145,7 +145,7 @@ def versions_line(s: dict) -> str:
     for v in s.get("versions", []):
         when = f"sent {v['sent']}" if v.get("sent") else f"built {v.get('built', '?')}, unsent"
         parts.append(f"{version_key(v)} {when}")
-    return " · ".join(parts)
+    return " · ".join(parts) or "nothing written yet"
 
 
 def version_key(v: dict) -> str:
@@ -354,7 +354,7 @@ def lint(led: dict) -> list[str]:
             errors.append(f"{who}: {msg}")
 
         for k in SUB_REQUIRED:
-            if not s.get(k):
+            if not s.get(k) and not (k == "versions" and s.get("state") == "planned"):
                 bad(f"missing '{k}'")
         for k in s:
             if k not in SUB_REQUIRED and k not in SUB_OPTIONAL:
@@ -391,9 +391,11 @@ def lint(led: dict) -> list[str]:
             if v.get("lore") and ("@" not in v["lore"] or "<" in v["lore"]):
                 bad(f"v{v['v']}: lore must be a bare Message-ID")
         any_sent = any(v.get("sent") for v in vs if isinstance(v, dict))
+        if s.get("state") == "planned" and vs:
+            bad("state planned means nothing is written yet: no versions (use draft)")
         if s.get("state") == "draft" and any_sent:
             bad("state draft, but a version is marked sent")
-        if s.get("state") not in (None, "draft", "abandoned") and not any_sent:
+        if s.get("state") not in (None, "planned", "draft", "abandoned") and not any_sent:
             bad(f"state {s.get('state')} needs a version with a sent date")
         if s.get("state") in SUB_NEEDS_NEXT and not s.get("next"):
             bad(f"state {s['state']} is waiting on us: say what to do in 'next'")
@@ -628,7 +630,7 @@ def use_color() -> bool:
 ANSI = {
     "suspected": "38;5;179", "confirmed": "38;5;203", "patch-ready": "38;5;208",
     "reported": "38;5;75", "fixed-upstream": "38;5;114", "withdrawn": "38;5;244",
-    "draft": "38;5;208", "sent": "38;5;75", "changes-requested": "38;5;203",
+    "planned": "38;5;179", "draft": "38;5;208", "sent": "38;5;75", "changes-requested": "38;5;203",
     "applied": "38;5;114", "merged": "38;5;114", "abandoned": "38;5;244", "superseded": "38;5;244",
     "dim": "2", "bold": "1", "head": "1;4",
 }

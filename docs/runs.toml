@@ -276,3 +276,54 @@ note = "buggy was green; rule_reader_across_destroy added"
 target = "d4dba3b9c03a"
 verdict = "as-expected"
 note = "red through UBSan"
+
+[[run]]
+id = "2026-10-25-scotch-pins"
+date = "2026-10-25"
+kind = "pins"
+project = "scotch"
+summary = "all Scotch pins after the props suite landed: 17 (pin, state) pairs, 0 failing"
+hegel_c = "de9b056"
+libhegel = "0.48.0"
+notes = "Ran on de9b056 plus the then-uncommitted props suite and pins. Master is Scotch b4801dbf (v7.0.17)."
+
+[[run.result]]
+target = "tests/irl/scotch/pins/current.conf"
+verdict = "as-expected"
+note = "24 property tests green under ASan"
+
+[[run.result]]
+target = "scotch-archbuild-double-base"
+verdict = "as-expected"
+note = "upstream's first fix still red"
+
+[[run.result]]
+target = "scotch-archbuild-pairing"
+verdict = "as-expected"
+
+[[run.result]]
+target = "scotch-hgraphordercp-disconnected"
+verdict = "as-expected"
+note = "shrunk to nvert=3 nedges=1"
+
+[[run.result]]
+target = "scotch-archsub-off-by-one"
+verdict = "as-expected"
+
+[[run.result]]
+target = "scotch-graphgeomloadchac-cleanup"
+verdict = "as-expected"
+
+[[run.result]]
+target = "scotch-kgraphmapfm-domnnbr"
+verdict = "as-expected"
+
+[[run.result]]
+target = "scotch-strat-k-sigabrt"
+verdict = "as-expected"
+note = "open bug: red on master"
+
+[[run.result]]
+target = "scotch-graphpart-strat-f-d-segv"
+verdict = "as-expected"
+note = "open bug: red on master"

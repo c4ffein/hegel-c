@@ -1,0 +1,37 @@
+Our fix for a heap buffer overflow in graphGeomLoadChac() (graph_io_chac.c),
+against Scotch master b4801dbf (v7.0.17).  edgetax holds edgenbr = 2 * the
+header's edge count arcs, based at 1, so the valid indices are 1..edgenbr.
+The overflow guard tests `edgenum > edgenbr + 1`, which lets edgenum ==
+edgenbr + 1 through, and it runs after intLoad() has already read the arc
+(and its weight, into edlotax[edgenum], when the file has edge weights).
+A file listing more arcs than its header declares then writes one Gnum
+past the array.  The fix tests `edgenum > edgenbr` before reading anything.
+Witness: test_graph_geom_load_chac (props/); minimal file "1 1\n1 1 1\n".
+Applied by scripts/pin-worktree.sh (git apply) for the pin's fixed state.
+
+--- a/src/libscotch/graph_io_chac.c
++++ b/src/libscotch/graph_io_chac.c
+@@ -212,6 +212,11 @@
+ 
+       ungetc (chabuffcar, filesrcptr);            /* Else put character back to stream */
+ 
++      if (edgenum > grafptr->edgenbr) {           /* Test edge array overflow before writing */
++        errorPrint ("graphGeomLoadChac: bad input (5)");
++        graphFree  (grafptr);
++        return     (1);
++      }
+       if ((intLoad (filesrcptr, &chavertnum) != 1) ||
+           (chavertnum < 1)                         ||
+           (chavertnum > chavertnbr)                ||
+@@ -222,11 +227,6 @@
+         graphFree  (grafptr);
+         return     (1);
+       }
+-      if (edgenum > (grafptr->edgenbr + 1)) { /* Test edge array overflow */
+-        errorPrint ("graphGeomLoadChac: bad input (5)");
+-        graphFree  (grafptr);
+-        return     (1);
+-      }
+       grafptr->edgetax[edgenum ++] = chavertnum;
+     }
+ 
