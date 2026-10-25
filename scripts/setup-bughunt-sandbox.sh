@@ -82,6 +82,7 @@ printf '%s\n' "$NEW_HASHES" > "$HASH_RECORD"
 #   - README.md / TODO.md / NEXT.md (mention the bug)
 #   - docs/findings.toml, build/findings.html, submissions/ (the bugs we found
 #     and the patches we sent for them)
+#   - docs/runs.toml, docs/runs/ (which runs found which bugs, the briefs)
 #   - docs/* (internal docs)
 #   - tests/* (any of them — would leak example tests / patterns)
 #   - inspiration/* (other than scotch — would leak hegel-skill, theft, etc.)

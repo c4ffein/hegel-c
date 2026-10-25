@@ -77,7 +77,7 @@ PREBUILT ?=
 LIBHEGEL_FLAVOR    = $(if $(PREBUILT),prebuilt,source)
 LIBHEGEL_TAGGED    = $(BUILD)/libhegel-$(LIBHEGEL_VERSION)-$(LIBHEGEL_FLAVOR).so
 
-.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-reuse findings findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-reuse findings runs findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -93,7 +93,8 @@ help:
 	@echo "  findings-html                 Write build/findings.html from docs/findings.toml"
 	@echo "  findings-open                 findings-html, then open the page in your browser"
 	@echo "  findings-serve                Serve the findings page on 0.0.0.0:8080 (FINDINGS_HOST / FINDINGS_PORT)"
-	@echo "  lint-findings                 Check docs/findings.toml: fields, statuses, links to files"
+	@echo "  runs                          Targets x runs from docs/runs.toml (what each bug-finding run found), regressions flagged"
+	@echo "  lint-findings                 Check docs/findings.toml, docs/runs.toml and submissions/; run in CI"
 	@echo "  clean-cores                   Remove core dumps from repo root (core.*)"
 	@echo ""
 	@echo "Proxy targets (forwarded to sub-Makefiles):"
@@ -357,6 +358,9 @@ FINDINGS_HOST ?= 0.0.0.0
 FINDINGS_PORT ?= 8080
 findings-serve:
 	@python3 tools/findings.py serve --host $(FINDINGS_HOST) --port $(FINDINGS_PORT)
+
+runs:
+	@python3 tools/findings.py runs
 
 lint-findings:
 	@python3 tools/findings.py lint

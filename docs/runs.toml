@@ -1,0 +1,278 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein
+# Part of hegel-c — see hegel/LICENSE for terms.
+#
+# Runs: each time we pointed hegel-c (and the bughunt skill) at bugs and
+# recorded what it found. The question it answers: does a newer hegel-c,
+# libhegel, skill or model still find what an older one found?
+# docs/findings.toml says what each bug is; this file says which runs found it.
+#
+# View it:   make runs              (targets x runs table, regressions flagged)
+# Check it:  make lint-findings     (also checks this file)
+#
+# This file names bugs: blind bug-hunt sandboxes must never see it, nor
+# docs/runs/ (scripts/setup-bughunt-sandbox.sh copies an allow-list).
+#
+# [[run]] fields (required first):
+#   id        <date>-<what>, kebab-case, stable
+#   date      YYYY-MM-DD
+#   kind      blind-recall | harness | pins | hunt
+#               blind-recall  agents write harnesses from scratch for known
+#                             targets without being told the bug, then an
+#                             informed judge grades them
+#               harness       existing harnesses run on the buggy state only
+#               pins          make test-pins: buggy red AND fixed green
+#               hunt          fresh hunting, no known target (results empty;
+#                             what it turned up goes in `found`)
+#   project   linux | scotch
+#   summary   one line
+# Optional:
+#   blind     clean | leaked     (required for blind-recall: did a hint about
+#                                 the bug reach the hunters?)
+#   baseline  id of the run this one repeats
+#   hegel_c   hegel-c commit it ran on      libhegel   engine version
+#   model     model of the agents           skill      skill commit
+#   dir       docs/runs/<id>: report, briefs, anything needed to re-run it
+#   found     [finding ids] it turned up, targeted or not (withdrawn ones too:
+#             a false positive is a result)
+#   notes
+#
+# [[run.result]] — one per target:
+#   target        a Fixed-by SHA from docs/our_corpus.json, a finding id from
+#                 docs/findings.toml, or a pin file (tests/irl/<p>/pins/x.conf)
+#   verdict       blind-recall, harness:
+#                   hit | partial | miss | false-positive
+#                   (false-positive: reported a bug that isn't one, and missed)
+#                 pins:
+#                   as-expected | unexpected
+#   blind_credit  blind-recall only: the judge counts the hit as blind (no
+#                 leaked hint, no nudge). Leave out when nobody judged it.
+#   note
+#
+# A target that was a hit (or as-expected) in a run and is not in a later run
+# of the same kind is a regression: `make runs` flags it. That is data, not a
+# lint error.
+#
+# Caveats when comparing runs: one attempt per target is noisy; models read
+# public fix commits after their cutoff, so later blind hits on old fixes are
+# worth less (record `model`); a leaked hint voids blind credit.
+
+# ------------------------------------------------------------- 2026-05 ----
+
+[[run]]
+id = "2026-05-25-blind"
+date = "2026-05-25"
+kind = "blind-recall"
+project = "linux"
+summary = "10 akpm-validated lib/ bugs, fixes reverted, one fresh agent each: 7 hit / 1 partial / 2 miss"
+blind = "leaked"
+found = ["linux-sg-split-overshoot", "linux-maple-prealloc-sticky-flag", "linux-maple-prealloc-leak"]
+notes = "No judge stage, so blind credit was never assessed. The July re-run found that the harness Makefile comments described the bug for 7 of 10 targets, so the blind claim is overstated. The briefs were not kept."
+
+[[run.result]]
+target = "c6e8e595a079"
+verdict = "hit"
+note = "mild leak: fix SHA only"
+
+[[run.result]]
+target = "1fd8bc7cd889"
+verdict = "hit"
+note = "mild leak: fix SHA only"
+
+[[run.result]]
+target = "39ebc8d7f561"
+verdict = "miss"
+note = "error-content bug: the test checked that errpos/errmsg exist, not what they say"
+
+[[run.result]]
+target = "0ea120b278ad"
+verdict = "hit"
+note = "severe leak"
+
+[[run.result]]
+target = "fba46a5d83ca"
+verdict = "partial"
+note = "sibling findings only, both later withdrawn"
+
+[[run.result]]
+target = "c9ba5249ef8b"
+verdict = "hit"
+note = "severe leak"
+
+[[run.result]]
+target = "010d7d984650"
+verdict = "hit"
+note = "severe leak; UBSan"
+
+[[run.result]]
+target = "8b46fdaea819"
+verdict = "hit"
+note = "severe leak; bonus: nb_splits overshoot"
+
+[[run.result]]
+target = "ea9b77f98d94"
+verdict = "miss"
+note = "RCU race, judged out of reach single-threaded (the July run proved otherwise)"
+
+[[run.result]]
+target = "d4dba3b9c03a"
+verdict = "hit"
+note = "severe leak; UBSan"
+
+# ------------------------------------------------------------- 2026-07 ----
+
+[[run]]
+id = "2026-07-12-blind-rerun"
+date = "2026-07-12"
+kind = "blind-recall"
+project = "linux"
+summary = "same 10 targets, hunters must also write the fix, informed judge per target: 7 hit (2 with blind credit) / 3 miss"
+blind = "leaked"
+baseline = "2026-05-25-blind"
+dir = "docs/runs/2026-07-12-blind-rerun"
+found = ["linux-ida-find-first-range", "linux-xa-store-range-ulong-max", "linux-bunzip2-get-bits-overread", "linux-maple-prealloc-leak"]
+notes = "Found the Makefile-comment leak (7 severe, 3 mild); only the 3 mild-leak targets can earn blind credit. Before the run, idr and maple_tree_rediscovery snapshots still had their fixes applied and were reverted to the buggy state."
+
+[[run.result]]
+target = "c6e8e595a079"
+verdict = "miss"
+blind_credit = false
+note = "the harness never varied the IDR base; found ida_find_first_range instead"
+
+[[run.result]]
+target = "1fd8bc7cd889"
+verdict = "hit"
+blind_credit = true
+note = "cleanest result: property from the contract, source read only after localizing"
+
+[[run.result]]
+target = "0ea120b278ad"
+verdict = "hit"
+blind_credit = false
+note = "leak; only the emptiness invariant fires, the load oracle never does"
+
+[[run.result]]
+target = "fba46a5d83ca"
+verdict = "false-positive"
+blind_credit = false
+note = "missed the target; reported a leak that is our slab stub's accounting"
+
+[[run.result]]
+target = "c9ba5249ef8b"
+verdict = "miss"
+blind_credit = false
+note = "severe leak and still missed: paused only at aligned bases; found the xa_store_range ULONG_MAX hang instead"
+
+[[run.result]]
+target = "010d7d984650"
+verdict = "hit"
+blind_credit = false
+note = "leak; only UBSan catches it, the round-trip alone does not"
+
+[[run.result]]
+target = "8b46fdaea819"
+verdict = "hit"
+blind_credit = false
+note = "leak; re-confirmed the nb_splits overshoot"
+
+[[run.result]]
+target = "ea9b77f98d94"
+verdict = "hit"
+blind_credit = false
+note = "leak; hold rcu_read_lock across mtree_destroy, then assert the node is dead-marked"
+
+[[run.result]]
+target = "d4dba3b9c03a"
+verdict = "hit"
+blind_credit = false
+note = "leak; bonus: get_bits over-read on truncated input"
+
+[[run.result]]
+target = "39ebc8d7f561"
+verdict = "hit"
+blind_credit = false
+note = "the judge granted blind credit (prompt nudged toward a content property); revoked 2026-10-19: the snapshot was a v7.1 revert with an out-of-bounds read the real fix^ never has"
+
+[[run]]
+id = "2026-07-12-roundtrip-hunt"
+date = "2026-07-12"
+kind = "hunt"
+project = "linux"
+summary = "round-trip oracle sweep of lib/ (6 agents ranked targets), then a pilot on lib/packing.c"
+dir = "docs/runs/2026-07-12-roundtrip-hunt"
+found = ["linux-packing-le-oob"]
+
+[[run]]
+id = "2026-07-12-harness"
+date = "2026-07-12"
+kind = "harness"
+project = "linux"
+summary = "the two ready tier-A harnesses re-run on the buggy state"
+
+[[run.result]]
+target = "c6e8e595a079"
+verdict = "hit"
+note = "shrunk to alloc(0,1) on IDR_INIT_BASE(1): id=1 > max=0"
+
+[[run.result]]
+target = "linux-packing-le-oob"
+verdict = "hit"
+note = "ASan heap-buffer-overflow on a buffer whose size is not a multiple of 4"
+
+# ------------------------------------------------------------- 2026-10 ----
+
+[[run]]
+id = "2026-10-19-pins"
+date = "2026-10-19"
+kind = "pins"
+project = "linux"
+summary = "rediscovery harnesses converted to pins and run on buggy AND fixed: exposed fake hits"
+notes = "Only the rediscovery targets are recorded here. Several pins were repaired during the run (oracle bugs, a fake snapshot, an added rule); the verdict is the state at the end."
+
+[[run.result]]
+target = "c6e8e595a079"
+verdict = "as-expected"
+
+[[run.result]]
+target = "1fd8bc7cd889"
+verdict = "as-expected"
+
+[[run.result]]
+target = "39ebc8d7f561"
+verdict = "as-expected"
+note = "the old snapshot had an out-of-bounds read the real fix^ never has: a fake hit; now buggy red, fixed green"
+
+[[run.result]]
+target = "0ea120b278ad"
+verdict = "as-expected"
+note = "fixed was red on an oracle bug (assumed equal-value merging); oracle fixed"
+
+[[run.result]]
+target = "fba46a5d83ca"
+verdict = "unexpected"
+note = "buggy green: the test never reaches the bug; the earlier red came from a rule that violated the API"
+
+[[run.result]]
+target = "c9ba5249ef8b"
+verdict = "as-expected"
+note = "upstream's fix is still red (incomplete): linux-xas-pause-sibling"
+
+[[run.result]]
+target = "010d7d984650"
+verdict = "as-expected"
+note = "red came from a bad oracle (padding bits); oracle fixed, now red through UBSan"
+
+[[run.result]]
+target = "8b46fdaea819"
+verdict = "as-expected"
+note = "fixed green only with our overshoot patch applied"
+
+[[run.result]]
+target = "ea9b77f98d94"
+verdict = "as-expected"
+note = "buggy was green; rule_reader_across_destroy added"
+
+[[run.result]]
+target = "d4dba3b9c03a"
+verdict = "as-expected"
+note = "red through UBSan"

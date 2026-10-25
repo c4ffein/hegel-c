@@ -36,11 +36,11 @@ status in `docs/findings.toml`; the `found-*` statuses here mirror it.
 | `missed` | Harness exists but never reaches the bug (buggy green) |
 | `found-and-submitted` / `found-novel` | hegel-c found a bug upstream didn't know about (sent / not yet sent) |
 
-`results` (ours only, never merged into hunter files) keeps each run's
-verdict: the 2026-05-25 run, the 2026-07-12 re-run (which found hints
-leaked through harness Makefile comments, so most May hits lost blind
-credit), and the 2026-10-19 pin runs (red on buggy AND green on fixed, which
-exposed several fake hits).
+What each run found (the 2026-05-25 run, the 2026-07-12 re-run that found
+hints leaking through harness Makefile comments, the 2026-10-19 pin runs that
+exposed fake hits) is in `docs/runs.toml`, one verdict per target per run,
+keyed by the `Fixed-by` SHA here; `make runs` shows the table. Runs name bugs,
+so like the findings ledger they never reach a hunter.
 
 ## The pipeline
 
@@ -80,18 +80,3 @@ description. Descriptions live only in `merged_judge_key.json`, which the judge
 reads to decide whether a finding matches a known bug. Before a hunt, scan the
 chosen harness for leaked descriptions in comments / test names / Makefile
 text.
-
-## Live rediscovery results (2026-07-12)
-
-Ran the two ready tier-A harnesses to confirm the skill re-finds the bug from
-the buggy commit:
-
-| Target | Source | Buggy snapshot | Class | Result |
-|---|---|---|---|---|
-| `lib/idr` idr_alloc range | **both** | `c6e8e595a079~1` | wrong-result | ✅ re-found — shrunk to `alloc(0,1)` on `IDR_INIT_BASE(1)`, `id=1 > max=0` |
-| `lib/packing` LE OOB | ours (found) | `packing_subject.c` | oob | ✅ re-found — ASAN heap-buffer-overflow on non-mult-of-4 buffer |
-
-Both fired within the default sweep. The idr harness is the smoke test the
-candidates doc demanded ("if we miss this we have a real problem") — it passes.
-Remaining tier-A harness dirs (maple_*, xarray_pause, bch_mod8, bunzip2,
-bootconfig) are the next rediscovery batch.
