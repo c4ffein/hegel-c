@@ -1,0 +1,628 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 c4ffein
+     Part of hegel-c — see hegel/LICENSE for terms.
+
+     The findings UI.  Plain HTML/CSS/JS, no build step, no libraries.
+     tools/findings.py html fills the DATA block below with the ledger and the
+     files it links to, and writes build/findings.html.  Open this template
+     directly and it shows a small built-in sample, for working on the UI. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>hegel-c findings</title>
+<style>
+:root{
+  --bg:#f6f5f1;--panel:#fff;--ink:#1c1b19;--muted:#6b675f;--faint:#9a958b;--line:#e3e0d7;
+  --code:#f0eee7;--chip:#ebe9e2;--focus:#1d6fb8;
+  --suspected:#a26f12;--confirmed:#c2410c;--patch-ready:#b45309;--reported:#1d6fb8;
+  --fixed-upstream:#2f7d4a;--withdrawn:#8a867d;
+  --add-bg:#e6f4ea;--add-ink:#1a5c2e;--del-bg:#fbe9e7;--del-ink:#8c2a1a;--hunk:#6a5acd;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#141412;--panel:#1d1d1a;--ink:#ebeae4;--muted:#a19d93;--faint:#77736b;--line:#2e2d29;
+  --code:#25251f;--chip:#2a2a25;--focus:#6cb0ef;
+  --suspected:#e0ac4c;--confirmed:#f08a5d;--patch-ready:#f0a35d;--reported:#6cb0ef;
+  --fixed-upstream:#6fcf8f;--withdrawn:#7d7a72;
+  --add-bg:#16301f;--add-ink:#9be3b1;--del-bg:#3a1c17;--del-ink:#f3a99b;--hunk:#a99cf0}}
+:root[data-theme=dark]{
+  --bg:#141412;--panel:#1d1d1a;--ink:#ebeae4;--muted:#a19d93;--faint:#77736b;--line:#2e2d29;
+  --code:#25251f;--chip:#2a2a25;--focus:#6cb0ef;
+  --suspected:#e0ac4c;--confirmed:#f08a5d;--patch-ready:#f0a35d;--reported:#6cb0ef;
+  --fixed-upstream:#6fcf8f;--withdrawn:#7d7a72;
+  --add-bg:#16301f;--add-ink:#9be3b1;--del-bg:#3a1c17;--del-ink:#f3a99b;--hunk:#a99cf0}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+button,input,select{font:inherit;color:inherit}
+a{color:var(--reported)}
+code{font-family:var(--mono);font-size:.92em;background:var(--code);border-radius:5px;padding:1px 5px}
+.app{display:grid;grid-template-rows:auto 1fr;height:100%}
+header{padding:18px 20px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+.title{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+h1{font-size:21px;margin:0;letter-spacing:-.01em}
+.gen{color:var(--faint);font-size:13px}
+.theme{margin-left:auto;border:1px solid var(--line);background:var(--chip);border-radius:8px;
+  padding:2px 10px;cursor:pointer;font-size:13px}
+.stats{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 10px}
+.stat{border:1px solid var(--line);background:var(--bg);border-radius:9px;padding:6px 12px;cursor:pointer;
+  text-align:left;min-width:92px}
+.stat b{display:block;font-size:19px;line-height:1.15}
+.stat span{font-size:12px;color:var(--muted)}
+.stat[aria-pressed=true]{outline:2px solid var(--ink);outline-offset:-1px}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.search{flex:1 1 220px;min-width:0;border:1px solid var(--line);background:var(--bg);border-radius:8px;
+  padding:6px 10px}
+.search:focus,select:focus,button:focus-visible,.row:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+select{border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:5px 8px}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.chip{font-size:12.5px;border:1px solid var(--line);background:var(--chip);border-radius:999px;
+  padding:2px 10px;cursor:pointer}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chips .lab{font-size:12px;color:var(--faint);align-self:center;margin:0 2px 0 6px}
+.chips .lab:first-child{margin-left:0}
+.body{display:grid;grid-template-columns:minmax(300px,420px) 1fr;min-height:0}
+.list{overflow:auto;border-right:1px solid var(--line);padding:6px 0}
+.group{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:var(--faint);padding:12px 18px 4px}
+.row{display:block;width:100%;text-align:left;border:0;background:none;padding:8px 18px 9px 15px;
+  border-left:3px solid transparent;cursor:pointer}
+.row:hover{background:var(--chip)}
+.row[aria-selected=true]{background:var(--chip);border-left-color:var(--st)}
+.row .meta{display:flex;gap:7px;align-items:center;font-size:12px}
+.row .rid{font-family:var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sub{font-size:12px;color:var(--muted);margin-top:1px}
+.row .rt{font-size:14px;margin-top:1px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.row.withdrawn .rt{text-decoration:line-through;text-decoration-color:var(--faint);color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--st);flex:none}
+.by{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:0 6px}
+.go{color:var(--reported);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+table.vers{border-collapse:collapse;font-size:13.5px;margin-top:4px}
+table.vers td{padding:2px 14px 2px 0;vertical-align:top}
+.unv{font-size:11px;color:var(--suspected);border:1px dashed var(--suspected);border-radius:999px;padding:0 6px}
+.empty{color:var(--muted);padding:24px 18px}
+.detail{overflow:auto;padding:24px 28px 60px;min-width:0}
+.detail .back{display:none}
+.pill{display:inline-block;font-size:12px;font-weight:600;color:var(--st);border:1px solid var(--st);
+  border-radius:999px;padding:1px 10px}
+.tag{display:inline-block;font-size:12px;color:var(--muted);background:var(--chip);border-radius:6px;padding:1px 8px}
+.dhead{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.did{font-family:var(--mono);font-size:13px;color:var(--muted);margin-left:auto}
+.detail h2{font-size:21px;line-height:1.3;margin:10px 0 6px;letter-spacing:-.01em}
+.where{font-family:var(--mono);font-size:13.5px;background:var(--code);border-radius:6px;padding:3px 8px;
+  display:inline-block;overflow-wrap:anywhere}
+.notes{margin:14px 0 0;max-width:72ch}
+dl.facts{display:grid;grid-template-columns:max-content 1fr;gap:5px 16px;margin:18px 0 0;font-size:14px}
+dl.facts dt{color:var(--muted)}
+dl.facts dd{margin:0;overflow-wrap:anywhere}
+.file{margin-top:26px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.file>summary{cursor:pointer;padding:9px 14px;font-size:14px;display:flex;gap:10px;align-items:center;list-style:none}
+.file>summary::-webkit-details-marker{display:none}
+.file>summary::before{content:"▸";color:var(--faint)}
+.file[open]>summary::before{content:"▾"}
+.file>summary .fp{font-family:var(--mono);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file>summary .sz{margin-left:auto;color:var(--faint);font-size:12px;flex:none}
+.fbody{border-top:1px solid var(--line);padding:4px 20px 18px;max-height:70vh;overflow:auto}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.5;background:var(--code);border-radius:8px;
+  padding:10px 12px;overflow:auto;margin:10px 0}
+pre.raw{background:none;padding:10px 0;margin:0}
+.md{max-width:78ch;font-size:14.5px}
+.md h1,.md h2,.md h3,.md h4{line-height:1.3;margin:20px 0 6px}
+.md h1{font-size:19px}.md h2{font-size:17px}.md h3{font-size:15.5px}.md h4{font-size:14.5px}
+.md table{border-collapse:collapse;font-size:13px;display:block;overflow:auto}
+.md td,.md th{border:1px solid var(--line);padding:4px 8px;vertical-align:top}
+.md blockquote{margin:8px 0;padding:0 12px;border-left:3px solid var(--line);color:var(--muted)}
+.md li{margin:2px 0}
+.next{margin:16px 0 0;border:1px solid var(--patch-ready);border-left-width:4px;border-radius:8px;
+  padding:10px 14px;max-width:80ch;background:var(--panel)}
+.next b{color:var(--patch-ready);margin-right:6px}
+.vtabs{display:flex;flex-wrap:wrap;gap:6px;margin:26px 0 4px;align-items:center}
+.vtab{font-size:13px;border:1px solid var(--line);background:var(--chip);border-radius:8px;padding:3px 11px;cursor:pointer}
+.vtab[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.vtabs .lab{font-size:12px;color:var(--faint);margin-right:2px}
+.vtabs .sep{width:1px;height:20px;background:var(--line);margin:0 6px}
+.vmeta{color:var(--muted);font-size:13px;margin:6px 0 0}
+.patch{margin-top:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+.patch>summary{cursor:pointer;padding:8px 14px;display:flex;gap:10px;align-items:baseline;list-style:none;font-size:14px}
+.patch>summary::-webkit-details-marker{display:none}
+.patch>summary::before{content:"▸";color:var(--faint)}
+.patch[open]>summary::before{content:"▾"}
+.patch .pn{font-family:var(--mono);font-size:12.5px;color:var(--muted);flex:none}
+.patch .pt{flex:1;min-width:0}
+.patch .warn{font-size:11px;color:var(--confirmed);border:1px solid var(--confirmed);border-radius:999px;padding:0 6px;flex:none}
+.patch .lines{font-family:var(--mono);font-size:12px;flex:none}
+.patch .lines .a{color:var(--add-ink)}.patch .lines .d{color:var(--del-ink)}
+.pbody{border-top:1px solid var(--line);padding:6px 16px 14px}
+.phead{font-size:12.5px;color:var(--muted);margin:6px 0}
+pre.msg{background:none;padding:6px 0;margin:0;white-space:pre-wrap;font-size:13px;max-width:80ch}
+pre.stat{font-size:12px}
+.diff{font-family:var(--mono);font-size:12px;line-height:1.45;border:1px solid var(--line);border-radius:8px;
+  overflow:auto;margin:10px 0;background:var(--panel)}
+.diff div{white-space:pre;padding:0 10px;min-width:max-content}
+.diff .f{background:var(--code);font-weight:600;padding:5px 10px;border-top:1px solid var(--line)}
+.diff .f:first-child{border-top:0}
+.diff .h{color:var(--hunk)}
+.diff .a{background:var(--add-bg);color:var(--add-ink)}
+.diff .d{background:var(--del-bg);color:var(--del-ink)}
+.diff .m{color:var(--faint)}
+.diff .aa{background:var(--add-bg)}.diff .dd{background:var(--del-bg)}
+.diff .aa i,.diff .dd i,.diff .cc i{font-style:normal;opacity:.55}
+.cmp-row{font-size:13px;color:var(--muted);margin:2px 0}
+.files{font-size:13px;margin-top:14px;color:var(--muted)}
+.files a{margin-right:10px;white-space:nowrap}
+.hint{color:var(--faint);font-size:12.5px;margin-top:30px}
+kbd{font-family:var(--mono);font-size:11.5px;border:1px solid var(--line);border-bottom-width:2px;
+  border-radius:4px;padding:0 4px}
+@media (max-width:760px){
+  .body{grid-template-columns:1fr}
+  .list{border-right:0}
+  .app.showing .list{display:none}
+  .app:not(.showing) .detail{display:none}
+  .detail{padding:16px 16px 48px}
+  .detail .back{display:inline-block;margin-bottom:12px;border:1px solid var(--line);background:var(--chip);
+    border-radius:8px;padding:2px 10px;cursor:pointer}
+  header{padding:14px 16px 10px}
+  dl.facts{grid-template-columns:1fr;gap:0}
+  dl.facts dt{margin-top:8px}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header>
+    <div class="title"><h1>hegel-c findings</h1><span class="gen" id="gen"></span>
+      <button class="theme" id="theme" title="Theme">◐ auto</button></div>
+    <div class="stats" id="stats"></div>
+    <div class="tools">
+      <input class="search" id="q" type="search" placeholder="Search id, title, function, notes…  ( / )" aria-label="Search">
+      <select id="sort" aria-label="Sort">
+        <option value="status">Sort: status</option>
+        <option value="found">Sort: newest</option>
+        <option value="id">Sort: id</option>
+      </select>
+    </div>
+    <div class="chips" id="chips"></div>
+  </header>
+  <div class="body">
+    <nav class="list" id="list" aria-label="Findings and submissions"></nav>
+    <main class="detail" id="detail"></main>
+  </div>
+</div>
+
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+"use strict";
+const SAMPLE = {generated:"sample", statuses:["suspected","confirmed","patch-ready","reported","fixed-upstream","withdrawn"],
+  closed:["fixed-upstream","withdrawn"], commit_url:{linux:"https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id={}"},
+  lore_url:"https://lore.kernel.org/r/{}", files:{"docs/x.md":{kind:"md",size:40,content:"# Sample\n\nA **write-up** with `code`."}},
+  findings:[{id:"linux-sample-bug",project:"linux",where:"lib/x.c: f()",title:"sample finding (open the generated page for real data)",
+    kind:"oob",found:"2026-10-23",how:"sample",confidence:"high",reach:"latent",status:"confirmed",since:"2026-10-23",
+    source:"repo",found_by:"hegel-c",writeup:"docs/x.md",notes:"Run make findings-html."}],
+  sub_states:["draft","sent","changes-requested","applied","merged","abandoned","superseded"], sub_closed:["abandoned","merged","superseded"],
+  submissions:[{id:"linux-sample-fix",project:"linux",title:"sample patch",kind:"patch",fixes:["linux-sample-bug"],state:"draft",
+    since:"2026-10-23",versions:[{v:1,built:"2026-10-23",patches:1}]}]};
+const raw = document.getElementById("data").textContent.trim();
+const D = raw.startsWith("{") ? JSON.parse(raw) : SAMPLE;
+const F = D.findings, ORDER = D.statuses, CLOSED = new Set(D.closed);
+const SUBS = D.submissions || [], SUBORDER = D.sub_states || [], SUBCLOSED = new Set(D.sub_closed || []);
+/* submission states reuse the finding palette */
+const SUBCOLOR = {draft:"patch-ready", sent:"reported", "changes-requested":"confirmed", applied:"fixed-upstream",
+  merged:"fixed-upstream", abandoned:"withdrawn", superseded:"withdrawn"};
+const byId = id => F.find(x => x.id === id) || SUBS.find(x => x.id === id);
+const subsOf = id => SUBS.filter(s => (s.fixes || []).includes(id));
+const go = (id, text) => byId(id) ? `<a class="go" href="#id=${encodeURIComponent(id)}" data-go="${esc(id)}">${esc(text ?? id)}</a>` : esc(text ?? id);
+const vkey = v => `v${v.v}` + (v.label ? "-" + v.label : "");
+const versionsLine = s => (s.versions || []).map(v => vkey(v) + " " + (v.sent ? `sent ${v.sent}` : `built ${v.built}, unsent`)).join(" · ");
+const isTodo = s => !!s.next && !SUBCLOSED.has(s.state);
+const SF = D.sub_files || {};
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+const store = {get(k){try{return localStorage.getItem(k)}catch{return null}}, set(k,v){try{localStorage.setItem(k,v)}catch{}}};
+
+/* ---- state: filters live in the URL hash so a view can be linked ---- */
+const S = {q:"", status:new Set(), project:new Set(), kind:new Set(), source:new Set(), open:false, sort:"status", sel:null, view:null};
+function readHash(){
+  const h = new URLSearchParams(location.hash.slice(1));
+  S.q = h.get("q") || ""; S.sort = h.get("sort") || "status"; S.sel = h.get("id"); S.view = h.get("view");
+  S.open = h.get("open") === "1";
+  for (const k of ["status","project","kind","source"]) S[k] = new Set((h.get(k) || "").split(",").filter(Boolean));
+}
+function writeHash(){
+  const h = new URLSearchParams();
+  if (S.sel) h.set("id", S.sel);
+  if (S.sel && S.view) h.set("view", S.view);
+  if (S.q) h.set("q", S.q);
+  if (S.sort !== "status") h.set("sort", S.sort);
+  if (S.open) h.set("open", "1");
+  for (const k of ["status","project","kind","source"]) if (S[k].size) h.set(k, [...S[k]].join(","));
+  const s = h.toString();
+  history.replaceState(null, "", s ? "#" + s : location.pathname + location.search);
+}
+
+/* ---- filtering ---- */
+function matches(f){
+  if (S.open && CLOSED.has(f.status)) return false;
+  for (const k of ["status","project","kind","source"]) if (S[k].size && !S[k].has(f[k])) return false;
+  if (!S.q) return true;
+  const hay = [f.id,f.title,f.where,f.notes,f.how,f.kind,f.checked,f.found_by].join(" ").toLowerCase();
+  return S.q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+function matchesSub(s){                 // finding-only filters (status, kind, facts from) hide submissions
+  if (S.status.size || S.kind.size || S.source.size) return false;
+  if (S.open && SUBCLOSED.has(s.state)) return false;
+  if (S.project.size && !S.project.has(s.project)) return false;
+  if (!S.q) return true;
+  const hay = [s.id,s.title,s.notes,s.state,s.kind,(s.fixes||[]).join(" ")].join(" ").toLowerCase();
+  return S.q.toLowerCase().split(/\s+/).every(w => hay.includes(w));
+}
+function sorted(list){
+  const by = {
+    status:(a,b)=>ORDER.indexOf(a.status)-ORDER.indexOf(b.status) || b.found.localeCompare(a.found),
+    found:(a,b)=>b.found.localeCompare(a.found) || a.id.localeCompare(b.id),
+    id:(a,b)=>a.id.localeCompare(b.id)};
+  return [...list].sort(by[S.sort] || by.status);
+}
+
+/* ---- header: stats + chips ---- */
+function renderStats(){
+  const open = F.filter(f => !CLOSED.has(f.status)).length;
+  let h = `<button class="stat" data-open aria-pressed="${S.open}"><b>${open}</b><span>open of ${F.length}</span></button>`;
+  for (const s of ORDER){
+    const n = F.filter(f => f.status === s).length;
+    if (n) h += `<button class="stat" data-status="${s}" aria-pressed="${S.status.has(s)}"><b style="color:var(--${s})">${n}</b><span>${s}</span></button>`;
+  }
+  $("#stats").innerHTML = h;
+}
+function renderChips(){
+  const groups = [["project","project"],["kind","kind"],["source","facts from"]];
+  let h = "";
+  for (const [k,label] of groups){
+    const vals = [...new Set(F.map(f => f[k]))].sort();
+    h += `<span class="lab">${label}</span>` + vals.map(v =>
+      `<button class="chip" data-k="${k}" data-v="${esc(v)}" aria-pressed="${S[k].has(v)}">${esc(v)}</button>`).join("");
+  }
+  $("#chips").innerHTML = h;
+}
+
+/* ---- list ---- */
+let visible = [];
+function renderList(){
+  visible = sorted(F.filter(matches));
+  const subs = SUBS.filter(matchesSub).sort((a,b) => SUBORDER.indexOf(a.state)-SUBORDER.indexOf(b.state) || a.id.localeCompare(b.id));
+  const todo = subs.filter(isTodo), rest = subs.filter(s => !isTodo(s));
+  if (!visible.length && !subs.length){ $("#list").innerHTML = `<div class="empty">Nothing matches.</div>`; visible = []; return; }
+  const projects = [...new Set(visible.map(f => f.project))].sort();
+  let h = "";
+  const subRow = s => `<button class="row ${esc(SUBCOLOR[s.state])}" role="option" data-id="${esc(s.id)}" style="--st:var(--${esc(SUBCOLOR[s.state])})" aria-selected="${s.id===S.sel}">
+      <div class="meta"><span class="dot"></span><span class="rid">${esc(s.id)}</span><span class="by">${esc(s.state)}</span></div>
+      <div class="rt">${esc(isTodo(s) ? s.next : s.title)}</div>
+      <div class="sub">${s.fixes.length} bug${s.fixes.length===1?"":"s"} · ${esc(versionsLine(s))}</div></button>`;
+  if (todo.length){
+    h += `<div class="group">to do · ${todo.length}</div>`;
+    for (const s of todo) h += subRow(s);
+  }
+  for (const p of projects){
+    const rows = visible.filter(f => f.project === p);
+    h += `<div class="group">${esc(p)} · ${rows.length}</div>`;
+    for (const f of rows) h += `<button class="row ${esc(f.status)}" role="option" data-id="${esc(f.id)}" style="--st:var(--${esc(f.status)})" aria-selected="${f.id===S.sel}">
+      <div class="meta"><span class="dot"></span><span class="rid">${esc(f.id)}</span>${f.found_by && f.found_by!=="hegel-c"?`<span class="by">${esc(f.found_by)}</span>`:""}${f.source!=="repo"?'<span class="unv">unverified</span>':""}</div>
+      <div class="rt">${esc(f.title)}</div></button>`;
+  }
+  if (rest.length){
+    h += `<div class="group">submissions · ${rest.length}</div>`;
+    for (const s of rest) h += subRow(s);
+  }
+  visible = todo.concat(projects.flatMap(p => visible.filter(f => f.project === p)), rest);   // display order, for j/k
+  $("#list").innerHTML = h;
+}
+
+/* ---- detail ---- */
+const fill = (tpl, v) => tpl.replace("{}", encodeURIComponent(v));
+const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>`;
+function fileRef(ref){
+  const untracked = ref.endsWith(" (not in git)");
+  const p = untracked ? ref.slice(0, -13) : ref;
+  return {p, untracked, href: "../" + p};
+}
+function renderDetail(){
+  const f = F.find(x => x.id === S.sel), sub = !f && SUBS.find(x => x.id === S.sel);
+  $("#app").classList.toggle("showing", !!(f || sub));
+  if (sub) return renderSub(sub);
+  if (!f){
+    $("#detail").innerHTML = `<div class="empty">Pick a finding or a submission on the left.</div>
+      <p class="hint"><kbd>/</kbd> search · <kbd>j</kbd>/<kbd>k</kbd> next/previous · <kbd>Esc</kbd> close.
+      The address bar keeps the view, so you can link it.</p>`;
+    return;
+  }
+  const rows = [["found", `${esc(f.found)}${f.found_by ? " by " + esc(f.found_by) : ""} — ${esc(f.how)}`],
+    ["real?", `${esc(f.confidence)} confidence · ${esc(f.reach)} reach`],
+    ["kind", esc(f.kind)], ["status since", esc(f.since)]];
+  for (const r of f.related || []) rows.push([r.rel.replace(/-/g, " "), go(r.to)]);
+  const back = F.filter(x => (x.related || []).some(r => r.to === f.id));
+  if (back.length) rows.push(["linked from", back.map(x => go(x.id) + ` <span class="tag">${esc((x.related.find(r => r.to === f.id)).rel)}</span>`).join("<br>")]);
+  const subs = subsOf(f.id);
+  if (subs.length) rows.push(["submitted", subs.map(s => go(s.id) + ` <span class="tag">${esc(s.state)}</span>`).join("<br>")]);
+  const cu = D.commit_url[f.project];
+  if (f.introduced) rows.push(["introduced by", cu ? link(fill(cu, f.introduced), f.introduced) : esc(f.introduced)]);
+  if (f.fixed_by) rows.push(["fixed by", cu ? link(fill(cu, f.fixed_by), f.fixed_by) : esc(f.fixed_by)]);
+  if (f.lore?.length) rows.push(["lore", f.lore.map(m => link(fill(D.lore_url, m), m)).join("<br>")]);
+  for (const k of ["pin","writeup","history"]) if (f[k]){
+    const r = fileRef(f[k]);
+    rows.push([k, link(r.href, r.p) + (r.untracked ? ' <span class="tag">not in git</span>' : "")]);
+  }
+  if (f.checked) rows.push(["checked", esc(f.checked)]);
+  rows.push(["facts from", esc(f.source) + (f.source !== "repo" ? ' <span class="unv">unverified</span>' : "")]);
+  let h = `<button class="back" id="back">← all findings</button>
+    <div class="dhead"><span class="pill" style="--st:var(--${esc(f.status)})">${esc(f.status)}</span>
+    <span class="tag">${esc(f.project)}</span><span class="tag">${esc(f.kind)}</span>${f.found_by && f.found_by!=="hegel-c" ? `<span class="by">found by ${esc(f.found_by)}</span>` : ""}<span class="did">${esc(f.id)}</span></div>
+    <h2>${esc(f.title)}</h2><code class="where">${esc(f.where)}</code>
+    ${f.notes ? `<p class="notes">${inline(esc(f.notes))}</p>` : ""}
+    <dl class="facts">${rows.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  for (const k of ["writeup","pin"]) if (f[k]) h += fileBlock(f[k], k === "writeup" || !f.writeup);   // the write-up opens; the pin opens only when it's all there is
+  $("#detail").innerHTML = h;
+  $("#detail").scrollTop = 0;
+}
+function renderSub(s){
+  const cu = D.commit_url[s.project];
+  const vers = (s.versions || []).map(v => `<tr><td><b>${esc(vkey(v))}</b></td><td>${v.sent ? "sent " + esc(v.sent) : "built " + esc(v.built) + ' <span class="tag">not sent</span>'}</td>
+    <td>${v.patches ? esc(v.patches) + " patch" + (v.patches == 1 ? "" : "es") : ""}</td><td>${v.to ? "to " + esc(v.to) : ""}</td>
+    <td>${v.lore ? link(fill(D.lore_url, v.lore), "lore") : ""}</td></tr>`).join("");
+  const rows = [["fixes", s.fixes.map(id => { const f = F.find(x => x.id === id);
+      return go(id) + (f ? ` <span class="tag">${esc(f.status)}</span>` + (f.found_by && f.found_by !== "hegel-c" ? ` <span class="by">${esc(f.found_by)}</span>` : "") : ""); }).join("<br>")],
+    ["versions", `<table class="vers">${vers}</table>`], ["state since", esc(s.since)]];
+  if (s.commit) rows.push(["merged as", cu ? link(fill(cu, s.commit), s.commit) : esc(s.commit)]);
+  if (s.dir){ const r = fileRef(s.dir); rows.push(["folder", link(r.href, r.p) + (r.untracked ? ' <span class="tag">not in git</span>' : "")]); }
+  let h = `<button class="back" id="back">← all findings</button>
+    <div class="dhead"><span class="pill" style="--st:var(--${esc(SUBCOLOR[s.state])})">${esc(s.state)}</span>
+    <span class="tag">${esc(s.project)}</span><span class="tag">${esc(s.kind)}</span><span class="did">${esc(s.id)}</span></div>
+    <h2>${esc(s.title)}</h2>
+    ${isTodo(s) ? `<div class="next"><b>Next</b>${inline(esc(s.next))}</div>` : ""}
+    ${s.notes ? `<p class="notes">${inline(esc(s.notes))}</p>` : ""}
+    <dl class="facts">${rows.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+  const sf = SF[s.id];
+  if (sf) h += `<div id="viewer">${renderViewer(s, sf)}</div>`;
+  else if (s.dir) h += fileBlock(s.dir, false);
+  $("#detail").innerHTML = h;
+  $("#detail").scrollTop = 0;
+  if (sf) fillOpen($("#viewer"));
+}
+
+/* ---- patch viewer: one tab per version, plus "what changed" between versions ---- */
+function renderViewer(s, sf){
+  const vs = sf.versions, cs = sf.compare;
+  if (!vs.length) return "";
+  const latest = vs[vs.length - 1].key;
+  let view = S.view && (vs.some(v => v.key === S.view) || cs.some(c => c.from + ".." + c.to === S.view)) ? S.view : latest;
+  let h = `<div class="vtabs"><span class="lab">patches</span>` +
+    vs.map(v => `<button class="vtab" data-view="${esc(v.key)}" aria-pressed="${v.key === view}">${esc(v.key)}</button>`).join("");
+  if (cs.length) h += `<span class="sep"></span><span class="lab">changes</span>` +
+    cs.map(c => { const k = c.from + ".." + c.to;
+      return `<button class="vtab" data-view="${esc(k)}" aria-pressed="${k === view}">${esc(c.from)} → ${esc(c.to)}</button>`; }).join("");
+  h += `</div>`;
+  const v = vs.find(x => x.key === view);
+  if (v) return h + renderVersion(s, v);
+  return h + renderCompare(cs.find(c => c.from + ".." + c.to === view));
+}
+function lineCount(diff){
+  let a = 0, d = 0;
+  for (const l of diff.split("\n")) {
+    if (l.startsWith("+++") || l.startsWith("---")) continue;
+    if (l[0] === "+") a++; else if (l[0] === "-") d++;
+  }
+  return {a, d};
+}
+function renderVersion(s, v){
+  const real = v.patches.filter(p => p.i !== 0);
+  const unsigned = s.project === "linux" ? real.filter(p => !p.sob.length).length : 0;
+  let h = `<p class="vmeta">${link("../" + v.folder + "/", v.folder + "/")} · ${real.length} patch${real.length === 1 ? "" : "es"}${v.patches.length > real.length ? " + cover letter" : ""}${unsigned ? ` · <span class="warn" style="color:var(--confirmed)">${unsigned} without Signed-off-by</span>` : ""}</p>`;
+  v.patches.forEach((p, k) => {
+    const c = lineCount(p.diff), n = p.i == null ? "" : `${p.i}/${p.n}`;
+    h += `<details class="patch" data-patch="${k}"${p.i === 0 || v.patches.length === 1 ? " open" : ""}><summary>
+      <span class="pn">${esc(n)}</span><span class="pt">${esc(p.title)}</span>
+      ${s.project === "linux" && p.i !== 0 && !p.sob.length ? '<span class="warn">no Signed-off-by</span>' : ""}
+      ${p.diff ? `<span class="lines"><span class="a">+${c.a}</span> <span class="d">−${c.d}</span></span>` : ""}</summary>
+      <div class="pbody" data-fill="${esc(v.key)}:${k}"></div></details>`;
+  });
+  for (const [path, file] of Object.entries(v.notes)) h += fileBlockEntry(path, file, false);
+  const others = v.other.filter(o => !(o in v.notes));
+  if (others.length) h += `<p class="files">Other files: ${others.map(o => link("../" + o, o.slice(v.folder.length + 1))).join(" ")}</p>`;
+  return h;
+}
+function patchBody(p){
+  let h = `<p class="phead">${esc(p.from)}${p.date ? " · " + esc(p.date) : ""} · ${link("../" + p.path, p.file)}</p>
+    <pre class="msg">${esc(p.message)}</pre>`;
+  if (p.stat) h += `<pre class="stat">${esc(p.stat)}</pre>`;
+  if (p.diff) h += diffHtml(p.diff);
+  return h;
+}
+function diffHtml(diff){
+  const out = [];
+  for (const l of diff.replace(/\n-- \n[\s\S]*$/, "").split("\n")){
+    let c = "";
+    if (l.startsWith("diff --git ")){ out.push(`<div class="f">${esc(l.replace(/^diff --git a\/(\S+) b\/.*/, "$1"))}</div>`); continue; }
+    if (/^(index |new file mode|deleted file mode|similarity |rename )/.test(l)) c = "m";
+    else if (l.startsWith("+++") || l.startsWith("---")) c = "m";
+    else if (l.startsWith("@@")) c = "h";
+    else if (l[0] === "+") c = "a";
+    else if (l[0] === "-") c = "d";
+    else if (l[0] === "\\") c = "m";
+    out.push(`<div${c ? ` class="${c}"` : ""}>${esc(l) || " "}</div>`);
+  }
+  return `<div class="diff">${out.join("")}</div>`;
+}
+function renderCompare(c){
+  if (!c) return "";
+  let h = `<p class="vmeta">What changed from ${esc(c.from)} to ${esc(c.to)}, patch by patch (paired by title; blob hashes ignored).
+    Outer <b style="color:var(--add-ink)">+</b>/<b style="color:var(--del-ink)">−</b> = the change between versions; the faded second column is the patch's own marker.</p>`;
+  c.pairs.forEach((p, k) => {
+    let title, body;
+    if (!p.a){ title = `<span class="tag">new</span> ${esc(p.b)}`; body = `<p>Only in ${esc(c.to)}: open the ${esc(c.to)} tab to read it.</p>`; }
+    else if (!p.b){ title = `<span class="tag">dropped</span> ${esc(p.a)}`; body = `<p>Not in ${esc(c.to)}.</p>`; }
+    else {
+      title = esc(p.b) + (p.a !== p.b ? `<div class="cmp-row">was: ${esc(p.a)}</div>` : "");
+      body = p.diff ? "" : "<p>No change.</p>";
+    }
+    const n = p.diff ? lineCount(p.diff) : null;
+    h += `<details class="patch"><summary><span class="pt">${title}</span>
+      ${n ? `<span class="lines"><span class="a">+${n.a}</span> <span class="d">−${n.d}</span></span>` : ""}</summary>
+      <div class="pbody"${p.diff ? ` data-cmp="${esc(c.from + ".." + c.to)}:${k}"` : ""}>${body}</div></details>`;
+  });
+  return h;
+}
+function interdiffHtml(d){
+  const out = [];
+  for (const l of d.split("\n")){
+    if (l.startsWith("@@")){ out.push(`<div class="h">${esc(l)}</div>`); continue; }
+    const o = l[0] || " ", rest = l.slice(1), c = o === "+" ? "aa" : o === "-" ? "dd" : "cc";
+    const inner = rest[0] === "+" ? "a" : rest[0] === "-" ? "d" : "";
+    out.push(`<div class="${c}">${esc(o)}<i>${esc(rest.slice(0, 1))}</i><span${inner && c === "cc" ? ` class="${inner}"` : ""}>${esc(rest.slice(1)) || " "}</span></div>`);
+  }
+  return `<div class="diff">${out.join("")}</div>`;
+}
+function fillOpen(root){        // patch bodies are built when first opened: the page stays fast
+  for (const d of root.querySelectorAll("details.patch[open] .pbody:empty")) fillOne(d);
+}
+function fillOne(el){
+  const sf = SF[S.sel]; if (!sf) return;
+  if (el.dataset.fill){
+    const [key, k] = el.dataset.fill.split(":");
+    const v = sf.versions.find(x => x.key === key);
+    if (v) el.innerHTML = patchBody(v.patches[+k]);
+  } else if (el.dataset.cmp){
+    const i = el.dataset.cmp.lastIndexOf(":"), key = el.dataset.cmp.slice(0, i), k = +el.dataset.cmp.slice(i + 1);
+    const c = sf.compare.find(x => x.from + ".." + x.to === key);
+    if (c) el.innerHTML = interdiffHtml(c.pairs[k].diff);
+  }
+}
+function fileBlockEntry(path, file, open){
+  return fileBlock(path, open, file);
+}
+function fileBlock(ref, open, given){
+  const r = fileRef(ref), file = given || D.files[r.p];
+  if (!file || file.kind === "file") return "";
+  const size = file.size != null ? (file.size < 1024 ? file.size + " B" : (file.size/1024).toFixed(1) + " KB") : "";
+  let body;
+  if (file.kind === "md") body = `<div class="md">${md(file.content)}</div>`;
+  else if (file.kind === "text") body = `<pre class="raw">${esc(file.content)}</pre>`;
+  else if (file.kind === "dir") body = `<p>Folder${r.untracked ? ", not in git" : ""}: ${file.entries.map(e => link(r.href.replace(/\/?$/, "/") + e, e)).join(" · ") || "empty"}</p>`;
+  else body = `<p>Too big to inline (${size}): ${link(r.href, "open the file")}.</p>`;
+  return `<details class="file" ${open ? "open" : ""}><summary><span class="fp">${esc(r.p)}</span><span class="sz">${esc(size)}</span></summary><div class="fbody">${body}</div></details>`;
+}
+
+/* ---- a small, escaping Markdown renderer (headings, lists, code, tables, quotes) ---- */
+function inline(s){            // s is already HTML-escaped
+  return s.replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>")
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+}
+function md(src){
+  src = src.replace(/^<!--[\s\S]*?-->\s*/, "");          // the SPDX header comment
+  const L = src.split("\n"), out = [];
+  let i = 0;
+  while (i < L.length){
+    const l = L[i];
+    if (/^```/.test(l)){
+      const buf = []; i++;
+      while (i < L.length && !/^```/.test(L[i])) buf.push(L[i++]);
+      i++; out.push(`<pre>${esc(buf.join("\n"))}</pre>`); continue;
+    }
+    let m;
+    if ((m = /^(#{1,4})\s+(.*)/.exec(l))){ out.push(`<h${m[1].length}>${inline(esc(m[2]))}</h${m[1].length}>`); i++; continue; }
+    if (/^\s*(---|\*\*\*)\s*$/.test(l)){ out.push("<hr>"); i++; continue; }
+    if (/^\|/.test(l)){
+      const rows = [];
+      while (i < L.length && /^\|/.test(L[i])) rows.push(L[i++]);
+      const cells = r => r.replace(/^\||\|$/g, "").split("|").map(c => inline(esc(c.trim())));
+      const body = rows.filter(r => !/^\|[\s:|-]+\|?$/.test(r));
+      out.push("<table>" + body.map((r, n) => "<tr>" + cells(r).map(c => n ? `<td>${c}</td>` : `<th>${c}</th>`).join("") + "</tr>").join("") + "</table>");
+      continue;
+    }
+    if (/^>\s?/.test(l)){
+      const buf = [];
+      while (i < L.length && /^>\s?/.test(L[i])) buf.push(L[i++].replace(/^>\s?/, ""));
+      out.push(`<blockquote>${md(buf.join("\n"))}</blockquote>`); continue;
+    }
+    if ((m = /^(\s*)([-*]|\d+\.)\s+/.exec(l))){
+      const ordered = /\d/.test(m[2]), items = [];
+      while (i < L.length && /^(\s*)([-*]|\d+\.)\s+/.test(L[i])){
+        let item = L[i++].replace(/^(\s*)([-*]|\d+\.)\s+/, "");
+        while (i < L.length && /^\s{2,}\S/.test(L[i]) && !/^\s*([-*]|\d+\.)\s+/.test(L[i])) item += " " + L[i++].trim();
+        items.push(`<li>${inline(esc(item))}</li>`);
+      }
+      out.push(ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`); continue;
+    }
+    if (!l.trim()){ i++; continue; }
+    const buf = [];
+    while (i < L.length && L[i].trim() && !/^(```|#{1,4}\s|\||>|\s*([-*]|\d+\.)\s)/.test(L[i])) buf.push(L[i++]);
+    out.push(`<p>${inline(esc(buf.join(" ")))}</p>`);
+  }
+  return out.join("\n");
+}
+
+/* ---- wiring ---- */
+function render(){ renderStats(); renderChips(); renderList(); renderDetail(); writeHash(); }
+function select(id){ if (id !== S.sel) S.view = null; S.sel = id; renderList(); renderDetail(); writeHash();
+  document.querySelector(`.row[data-id="${CSS.escape(id || "")}"]`)?.scrollIntoView({block:"nearest"}); }
+$("#stats").addEventListener("click", e => {
+  const b = e.target.closest(".stat"); if (!b) return;
+  if (b.hasAttribute("data-open")) S.open = !S.open;
+  else { const s = b.dataset.status; S.status.has(s) ? S.status.delete(s) : S.status.add(s); }
+  render();
+});
+$("#chips").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b) return;
+  const set = S[b.dataset.k], v = b.dataset.v;
+  set.has(v) ? set.delete(v) : set.add(v); render();
+});
+$("#list").addEventListener("click", e => { const r = e.target.closest(".row"); if (r) select(r.dataset.id); });
+$("#detail").addEventListener("toggle", e => {
+  const d = e.target;
+  if (d.matches?.("details.patch") && d.open){ const b = d.querySelector(".pbody"); if (b && !b.innerHTML.trim()) fillOne(b); }
+}, true);
+$("#detail").addEventListener("click", e => {
+  if (e.target.id === "back") return select(null);
+  const t = e.target.closest(".vtab");
+  if (t){
+    S.view = t.dataset.view; writeHash();
+    const s = SUBS.find(x => x.id === S.sel);
+    $("#viewer").innerHTML = renderViewer(s, SF[s.id]); fillOpen($("#viewer"));
+    return;
+  }
+  const a = e.target.closest("[data-go]");
+  if (a){ e.preventDefault(); select(a.dataset.go); }
+});
+$("#q").addEventListener("input", e => { S.q = e.target.value; renderList(); writeHash(); });
+$("#sort").addEventListener("change", e => { S.sort = e.target.value; renderList(); writeHash(); });
+document.addEventListener("keydown", e => {
+  const typing = !!e.target.matches?.("input,select");          // the target can be the document
+  if (e.key === "/" && !typing){ e.preventDefault(); $("#q").focus(); return; }
+  if (e.key === "Escape"){ if (typing) e.target.blur(); else select(null); return; }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "j" || e.key === "k"){
+    if (!visible.length) return;
+    const i = visible.findIndex(f => f.id === S.sel);
+    const n = e.key === "j" ? Math.min(i + 1, visible.length - 1) : Math.max(i - 1, 0);
+    select(visible[i < 0 ? 0 : n].id);
+  }
+});
+const THEMES = ["auto","light","dark"];
+function applyTheme(t){
+  if (t === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", t);
+  $("#theme").textContent = (t === "auto" ? "◐ " : t === "light" ? "☀ " : "☾ ") + t;
+}
+$("#theme").addEventListener("click", () => {
+  const t = THEMES[(THEMES.indexOf(store.get("findings-theme") || "auto") + 1) % 3];
+  store.set("findings-theme", t); applyTheme(t);
+});
+applyTheme(store.get("findings-theme") || "auto");
+window.addEventListener("hashchange", () => { readHash(); $("#q").value = S.q; $("#sort").value = S.sort; render(); });
+$("#gen").textContent = `${F.length} findings · ${SUBS.length} submissions (${SUBS.filter(isTodo).length} to do) · generated ${D.generated} from docs/findings.toml`;
+readHash(); $("#q").value = S.q; $("#sort").value = S.sort; render();
+</script>
+</body>
+</html>

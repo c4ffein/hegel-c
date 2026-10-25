@@ -80,6 +80,8 @@ printf '%s\n' "$NEW_HASHES" > "$HASH_RECORD"
 #
 # The agent does NOT get:
 #   - README.md / TODO.md / NEXT.md (mention the bug)
+#   - docs/findings.toml, build/findings.html, submissions/ (the bugs we found
+#     and the patches we sent for them)
 #   - docs/* (internal docs)
 #   - tests/* (any of them — would leak example tests / patterns)
 #   - inspiration/* (other than scotch — would leak hegel-skill, theft, etc.)

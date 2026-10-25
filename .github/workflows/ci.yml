@@ -60,6 +60,21 @@ jobs:
           path: build/libhegel-*-source.so
           if-no-files-found: error
 
+  # The findings ledger and the submissions it indexes (docs/findings.toml,
+  # submissions/): fields, statuses, every version folder against its entry,
+  # no folder left out.  Python 3.11+ standard library only; no engine needed.
+  ledger:
+    name: Findings ledger + submissions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Lint the ledger
+        run: make lint-findings
+
+      - name: Build the findings page
+        run: python3 tools/findings.py html -o build/findings.html
+
   selftest:
     name: Selftest suite
     needs: engine

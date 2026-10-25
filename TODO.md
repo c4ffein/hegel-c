@@ -56,6 +56,90 @@
   do_split, minix superblock, ADFS nzones, squashfs negative offset, UDF
   lengthAllocDescs, HFS+ catalog record, lib/crypto/mpi underflow (2–6 h
   of stubs each, as pins).
+- **Patch pipeline: a guardrailed path from finding to mailing list — human
+  review is the point.** The goal is better patches, not more of them: the
+  pipeline raises the quality bar and NEVER sends anything itself. It refuses
+  to produce a series without (1) a red/green pin (buggy red, fixed green),
+  (2) a human `Signed-off-by` (an AI never adds one, per the kernel's
+  coding-assistants rules) and (3) `Assisted-by:` disclosure. It runs the
+  checks we did by hand — lore search for prior reports, `checkpatch.pl
+  --strict`, `get_maintainer.pl` (needs `scripts/`, which our sparse checkouts
+  lack), `Fixes:` sha exists — builds the cover letter from the ledger
+  entries, and writes `.eml` files for the human to read and send (`sm
+  send-patches` or `b4`/`git send-email`). Says all of this up front. Build on
+  `b4` rather than beside it; keep the submission entries in
+  `docs/findings.toml` in step.
+- **Sashiko integration in that pipeline.** Run a Sashiko review of our own
+  series *before* sending (akpm pointed us at Sashiko's review of sg_split v1
+  and v2: it found the zero-nents OOB and bug 4 — both pre-existing — that our
+  testing hadn't), fetch Sashiko's review of what we sent
+  (`sashiko.dev/api/patchset?id=<msgid>`), and turn its concerns into
+  properties: a Sashiko finding we can't make a pin go red on is either wrong
+  or a gap in our generators (bug 4 was the latter: zeros excluded by
+  construction). Sashiko is pinned under `inspiration/kernel-review/`
+  (`docs/sashiko-gap-analysis.md`); the pipeline should fetch it on demand at
+  that pin rather than as a submodule. Gate = every Sashiko finding triaged
+  (fixed / refuted with a reason / named out of scope), not "zero findings".
+- **Gates keyed to the patch content.** Each gate result (pin red/green,
+  property runs with seed and case count, Sashiko, checkpatch) records the hash
+  of the patch it checked; amending a patch turns its greens stale. Every
+  red-only check carries one must-pass anchor (the July ladder printed six
+  green "OK (red)" on builds that never compiled).
+- **Green gates aren't enough: measure whether the properties are adequate.**
+  The real failure mode: the model writes some properties, they pass, it calls
+  the patch done, and a missing property hides the next bug. Mutation testing
+  of the patched function is the mechanical signal. Measured 2026-10-23 on
+  sg_split with a 60-line script (relational / `&&`↔`||` / ±1 mutants):
+  v3 against its v3-era contract test → 8 of 24 mutants survive, one of them
+  `skip > sglen` → `skip >= sglen`, the exact line of bug 5, which a
+  cold-context session only found later by hand. v4a against today's full
+  suite → 1 of 25 survives (an off-by-one writing past `out[]`), which
+  points at the setup gap: property runs aren't built with ASan. Gate: every
+  surviving mutant is killed by a new property, or marked equivalent with a
+  reason, or names a setup gap (sanitizers) that gets fixed. Survivors are
+  the to-do list of missing properties, so they go to a fresh, cold-context
+  session that never saw the patch's tests, not back to the author. Other
+  sources of properties to fold in: a differential property against the
+  unpatched function (outside the bug's precondition, old == new: the patch
+  changes only what it claims), a property-family checklist per function
+  (contract boundaries, output well-formedness, conservation, error path
+  leaves outputs untouched; bug 4 and bug 5 were each a missing family), and
+  each claim in the commit message mapped to the property that backs it.
+- **Private ledger overlay: undisclosed bugs and drafts, public once sent.**
+  This repo is public, and `submissions/` and `docs/findings.toml` disclose
+  every bug they name. Wanted: a second ledger for what isn't reported yet,
+  with the same tools, that moves entries to the public one when they go out.
+  Shape (2026-10-25 discussion): a *private git repo checked out at a
+  gitignored path* (`private/`, or `$HEGEL_FINDINGS_PRIVATE`), holding its own
+  `findings.toml` and `submissions/<id>/`. Not a submodule: a submodule records
+  its URL, name and every bump in the public history (that leaks that
+  undisclosed work exists, and when it moved) and public CI can't clone it.
+  Pieces: `findings.py` overlays the private ledger when present (one id
+  namespace, lint across both, a public entry may not point at a private id);
+  the page badges private entries and its title says "includes private";
+  `findings.py promote <id>` moves an entry and its folder to the public side
+  (the commit is the disclosure); `serve` warns louder when private entries are
+  loaded and bound to 0.0.0.0; blind bug-hunt sandboxes get neither ledger.
+  Open: finding ids leaking through `related` links or notes; whether pins for
+  undisclosed bugs (`tests/irl/*/pins/*.conf`) go private too (they name the
+  bug as much as the ledger does).
+- **Make the sg_split v3-agent evidence rerunnable.** The tests behind
+  `submissions/linux-sg-split-series/v3-agent/REPORT.md` are archived in its
+  `evidence/` as they ran in a throwaway sandbox (comments say `work/v3x/`).
+  Wire them into `tests/irl/linux/sg_split/` as a target that applies a
+  version folder's patches to the pin worktree and runs the extended suite,
+  the fake-page / i386 properties (needs an i386 sysroot: fetch the Debian
+  debs like `build32.sh` says) and the mutation run. Then any version folder
+  can be re-checked after a container loss.
+- **`make check-findings`: re-run each finding's pin against upstream** (mainline +
+  linux-next for Linux, master for Scotch) and report what changed ("no longer
+  reproduces upstream: probably fixed, go look"). Needs a shared, refreshed
+  checkout at upstream's latest commit (the ~15 s per new kernel commit adds up),
+  and pins for the findings that have none (maple rewalk NULL deref, most Scotch
+  entries). Today's checks of `docs/findings.toml` were by hand (2026-10-22).
+- **Re-verify the Scotch entries marked `memory` / `transcript`** in
+  `docs/findings.toml` against current Scotch (line numbers moved since April),
+  and give the real ones pins.
 - **Real harness for `mab_calc_split`** (`4f6a6bed0bfe`, corpus candidate):
   a buggy snapshot at the fix's parent (the fix spans several functions, so
   no single-line revert) and a stateful property that drives node splits and

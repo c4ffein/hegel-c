@@ -1,0 +1,512 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein
+# Part of hegel-c — see hegel/LICENSE for terms.
+#
+# Bugs hegel-c found itself, in any project, and where each one stands.
+# Rediscoveries of already-fixed bugs live in docs/our_corpus.json instead.
+# Bugs others found (Sashiko, by hand) are here when a submission of ours
+# fixes them; found_by says who found each one.
+#
+# View it:   make findings          (terminal)
+#            make findings-html     (build/findings.html)
+# Check it:  make lint-findings     (fields, statuses, links to files)
+#
+# This file names bugs: blind bug-hunt sandboxes must never see it
+# (scripts/setup-bughunt-sandbox.sh copies an allow-list; keep it off).
+#
+# Fields (required first):
+#   id          project-short-name, stable, kebab-case
+#   project     linux | scotch
+#   where       file: function
+#   title       one line: what goes wrong
+#   kind        wrong-result | oob | overflow | null-deref | hang | leak |
+#               uaf | crash | contract | api
+#   found       YYYY-MM-DD (or YYYY-MM when only the month is known)
+#   how         how it surfaced
+#   confidence  high | medium | low           (that the bug is real)
+#   reach       live | latent | unknown       (can a real caller hit it?)
+#   status      suspected | confirmed | patch-ready | reported |
+#               fixed-upstream | withdrawn
+#   since       date the status last changed
+#   source      repo | transcript | memory    (where this entry's facts come
+#               from: tracked files, a saved session, or Claude's memory —
+#               the last two are unverified until someone re-checks)
+# Optional:
+#   fixed_by    upstream commit that fixed it
+#   introduced  upstream commit that introduced it
+#   lore        mailing-list Message-IDs (linux), shown as lore links
+#   pin         tests/irl/<project>/pins/<pin>.conf that reproduces it
+#   writeup     path to the analysis: docs/findings/<id>.md, or a file in
+#               submissions/ or tests/irl/ (lint rejects anywhere else)
+#   history     a saved session it comes from (docs/saved_sessions_for_history/)
+#   checked     last time someone confirmed it's still upstream, and where
+#   found_by    hegel-c | by-hand | sashiko | upstream   (default hegel-c)
+#   related     [{ to = "<finding id>", rel = "introduced-by" | "masked-by" |
+#               "same-root-cause" | "covered-by" }]
+#   notes       anything else
+#
+# [[submission]] — a patch series or bug report we sent (or drafted) upstream.
+# One submission can fix several findings; one finding can have several.
+#   id, project, title
+#   kind        patch | report
+#   fixes       [finding ids]
+#   state       draft | sent | changes-requested | applied | merged |
+#               abandoned | superseded
+#               (applied = in the maintainer's tree; merged = upstream proper)
+#   since       date the state last changed
+#   versions    [{ v, label, sent | built (date), patches, lore (Message-ID), to }]
+#               label tells apart two candidates with the same number (v3 ours
+#               and v3 agent); a version's folder is dir/v<N>[-<label>]
+#   next        what we do next (required while draft or changes-requested;
+#               the page lists these first, under "to do")
+#   commit      upstream commit that merged it (state merged)
+#   dir         submissions/<id>: one folder per version holding the patches
+#               exactly as sent / to be sent, plus notes (cover letters, send
+#               steps, reports); see submissions/README.md
+#               An unsent version's folder may stay out of git until it goes
+#               out: lint skips it when absent, and links into it (dir,
+#               writeup) say so with a trailing " (not in git)".
+#   notes
+# lint keeps both sides in step: a finding fixed by a merged submission must
+# be fixed-upstream, one fixed only by a draft must be patch-ready. It also
+# checks every version folder against its entry (patch count, [PATCH vN i/n]
+# numbering, a cover letter for Linux series, Signed-off-by on sent Linux
+# patches) and that every folder under submissions/ is in this file.
+
+# ---------------------------------------------------------------- linux ----
+
+[[finding]]
+id = "linux-sg-split-overshoot"
+project = "linux"
+where = "lib/scatterlist.c: sg_calculate_split()"
+title = "nb_splits is decremented twice per pass but the loop stops only at exactly 0, so the last split swallows the next input entry"
+kind = "wrong-result"
+found = "2026-05-25"
+how = "blind rediscovery hunt, by accident (while hunting 8b46fdaea819)"
+confidence = "high"
+reach = "latent"
+status = "reported"
+since = "2026-06-10"
+pin = "tests/irl/linux/pins/sg_split.conf"
+writeup = "docs/findings/linux-sg-split-overshoot.md"
+checked = "2026-10-22: present in v7.3 and linux-next"
+source = "repo"
+found_by = "hegel-c"
+notes = "Patch 1/5 of the series (see linux-sg-split-series). Prior art: Egorenkov 2021, never merged; our fix (nb_splits <= 0) passes the edge-aligned case his breaks. No in-tree caller triggers it."
+
+[[finding]]
+id = "linux-sg-split-length-clobber"
+project = "linux"
+where = "lib/scatterlist.c: sg_split_phys()"
+title = "on arches without NEED_SG_DMA_LENGTH, the mapped pass overwrites ->length"
+kind = "wrong-result"
+found = "2026-06"
+how = "by hand, not by a property: noticed while fixing a wrong argument in our own KUnit test for v2"
+confidence = "high"
+reach = "latent"
+status = "reported"
+since = "2026-06-10"
+writeup = "submissions/linux-sg-split-series/v2"
+source = "memory"
+found_by = "by-hand"
+notes = "Data loss on arches without NEED_SG_DMA_LENGTH. Fixed by patch 2/5 of our v2 series (5 patches, 3 bugs: 1/5 overshoot, 2/5 this, 4/5 zero-nents; 3/5 and 5/5 are tests)."
+
+[[finding]]
+id = "linux-sg-split-zero-nents"
+project = "linux"
+where = "lib/scatterlist.c: sg_split_phys() / sg_split_mapped()"
+title = "zero mapped entries reads out of bounds"
+kind = "oob"
+found = "2026-06"
+how = "NOT ours: found by the Sashiko AI review that akpm linked in reply to v1; we confirmed it (ASan) and fixed it"
+confidence = "high"
+reach = "latent"
+status = "reported"
+since = "2026-06-10"
+writeup = "submissions/linux-sg-split-series/v2"
+source = "memory"
+found_by = "sashiko"
+notes = "Listed because our series carries the fix (4/5 guard, 5/5 regression test); the find is Sashiko's. Drop this entry if the ledger should hold only hegel-c's own finds."
+
+[[finding]]
+id = "linux-sg-split-zero-size-silent"
+project = "linux"
+where = "lib/scatterlist.c: sg_calculate_split()"
+title = "a zero size reached exactly when the input runs out returns success and silently drops every later size"
+kind = "wrong-result"
+found = "2026-07-05"
+how = "Sashiko's review of v2 (a pre-existing High finding); then found independently by a new hegel-c contract property, shrunk to in=[1], skip=0, sizes={1,0,1}"
+confidence = "high"
+reach = "latent"
+status = "patch-ready"
+since = "2026-07-06"
+source = "memory"
+found_by = "sashiko"
+related = [{ to = "linux-sg-split-zero-nents", rel = "masked-by" }]
+notes = "Before the zero-nents guard every input that hits it also crashed, so the wrong rc=0 was hidden; v2's guard alone would have made it silent. Our v3 rejects zero sizes with -EINVAL, which fixes both; the v3-agent variant rejects only past-the-end requests and gives a zero-size split at the end one empty entry (decision D1). Generator lesson: the old property excluded zeros and over-requests by construction, and a uniform draw found nothing in 500 cases."
+
+[[finding]]
+id = "linux-sg-split-zero-first-entry"
+project = "linux"
+where = "lib/sg_split.c: sg_calculate_split()"
+title = "a split that starts exactly on an input entry boundary, or at an empty entry, begins with a zero-length entry"
+kind = "contract"
+found = "2026-10-23"
+how = "blind respin: an agent's property suite (no zero-length first entry in a non-empty split), shrunk to in=[1][0][1], skip=0, sizes={2}"
+confidence = "high"
+reach = "latent"
+status = "patch-ready"
+since = "2026-10-24"
+writeup = "submissions/linux-sg-split-series/v3-agent/REPORT.md (not in git)"
+source = "repo"
+found_by = "hegel-c"
+notes = "Mapped, the first sg_dma_len() is 0, where a DMA consumer may stop (scatterlist.h allows it). Fixed by 4/6 of the v3-agent variant only; decision D3 in its DECISIONS.md (can be dropped or sent separately)."
+
+[[finding]]
+id = "linux-sg-split-unchecked-args"
+project = "linux"
+where = "lib/sg_split.c: sg_split()"
+title = "nb_splits == 0 reads and writes a zero-size array, nb_splits < 0 fails as -ENOMEM, and a negative skip returns bytes before the input on 64-bit"
+kind = "oob"
+found = "2026-10-23"
+how = "blind respin: an agent's argument property (P-ARGS); the 64-bit/32-bit split confirmed by the i386 differential (in=[1], skip=-1, sizes={0})"
+confidence = "high"
+reach = "latent"
+status = "patch-ready"
+since = "2026-10-24"
+writeup = "submissions/linux-sg-split-series/v3-agent/REPORT.md (not in git)"
+source = "repo"
+found_by = "hegel-c"
+notes = "On 32-bit the off_t/unsigned int comparison already makes a negative skip -EINVAL (Sashiko flagged the v3-agent message for saying otherwise; fixed). Fixed by 5/6 of the v3-agent variant only."
+
+[[finding]]
+id = "linux-xas-pause-sibling"
+project = "linux"
+where = "lib/xarray.c: xas_pause()"
+title = "a walk that starts on a sibling slot of a multi-index entry skips the next entry after a pause"
+kind = "wrong-result"
+found = "2026-10-19"
+how = "pin conversion: upstream's fix c9ba5249 stayed red on our test"
+confidence = "high"
+reach = "unknown"
+status = "patch-ready"
+since = "2026-10-21"
+introduced = "b803b42823d0"
+pin = "tests/irl/linux/pins/xarray_pause.conf"
+writeup = "submissions/linux-xas-pause-fix/v1/SEND.md (not in git)"
+checked = "2026-10-22: present in v7.3 and linux-next; patch applies to linux-next"
+source = "repo"
+found_by = "hegel-c"
+notes = "c9ba5249 fixed part of it. Same mechanism as f0f80e85841d (xas_find, Kaniewski, in akpm's tree 2026-10-20): cite it and Cc the author. Patch has no Signed-off-by yet (yours)."
+
+[[finding]]
+id = "linux-maple-rewalk-null"
+project = "linux"
+where = "lib/maple_tree.c: mas_next_slot() -> mas_rewalk_if_dead()"
+title = "an RCU reader resuming on a tree a writer emptied dereferences NULL"
+kind = "null-deref"
+found = "2026-10-19"
+how = "pin conversion of maple_destroy_walk (UBSan)"
+confidence = "high"
+reach = "unknown"
+status = "confirmed"
+since = "2026-10-19"
+writeup = "tests/irl/linux/pins/maple_destroy_walk.conf"
+checked = "2026-10-19: present in v7.1"
+source = "repo"
+found_by = "hegel-c"
+notes = "Repro in the pin's comment: RCU tree {1,3}, reader mas_find(0)=1, writer mtree_store_range(0, ULONG_MAX, NULL), reader mas_find -> NULL deref. No pin of its own yet; not triaged for reachability."
+
+[[finding]]
+id = "linux-packing-le-oob"
+project = "linux"
+where = "lib/packing.c: calculate_box_addr()"
+title = "QUIRK_LITTLE_ENDIAN without QUIRK_LSW32_IS_FIRST and a buffer length not a multiple of 4 underflows and writes out of bounds"
+kind = "oob"
+found = "2026-07-12"
+how = "round-trip property (pack then unpack), ASan"
+confidence = "high"
+reach = "latent"
+status = "patch-ready"
+since = "2026-07-12"
+pin = "tests/irl/linux/pins/packing_roundtrip.conf"
+writeup = "docs/findings/linux-packing-le-oob.md"
+source = "repo"
+found_by = "hegel-c"
+notes = "Documented contract allows such lengths; the only LE caller (ice) always sets LSW32 too. Fix removes the OOB and keeps round-trips, but the len%4==3 layout needs the maintainer (Vladimir Oltean) to confirm."
+
+[[finding]]
+id = "linux-ida-find-first-range"
+project = "linux"
+where = "lib/idr.c: ida_find_first_range()"
+title = "returns -ENOENT instead of the next ID when that ID is in a later bitmap block"
+kind = "wrong-result"
+found = "2026-07-12"
+how = "blind re-run, by accident (while hunting c6e8e595a079)"
+confidence = "high"
+reach = "latent"
+status = "confirmed"
+since = "2026-07-12"
+writeup = "docs/findings/linux-ida-find-first-range.md"
+checked = "2026-10-22: present in v7.3 and linux-next"
+source = "repo"
+found_by = "hegel-c"
+notes = "Only caller (l2cap) passes min == max, which can't trigger it."
+
+[[finding]]
+id = "linux-xa-store-range-ulong-max"
+project = "linux"
+where = "lib/xarray.c: xa_store_range()"
+title = "last == ULONG_MAX makes first wrap to 0 and the loop never ends"
+kind = "hang"
+found = "2026-07-12"
+how = "blind re-run, by accident (while hunting xas_pause)"
+confidence = "high"
+reach = "latent"
+status = "confirmed"
+since = "2026-07-12"
+writeup = "docs/findings/linux-xa-store-range-ulong-max.md"
+checked = "2026-10-22: present in v7.3 and linux-next"
+source = "repo"
+found_by = "hegel-c"
+notes = "No caller passes ULONG_MAX. One-line fix (stop when first wraps to 0): the cleanest of the July three to send."
+
+[[finding]]
+id = "linux-bunzip2-get-bits-overread"
+project = "linux"
+where = "lib/decompress_bunzip2.c: get_bits()"
+title = "after EOF, inbufCount is -1 so the next call skips the io_error guard and reads past the buffer"
+kind = "oob"
+found = "2026-07-12"
+how = "blind re-run, by accident (truncated stream, ASan)"
+confidence = "high"
+reach = "latent"
+status = "confirmed"
+since = "2026-07-12"
+writeup = "docs/findings/linux-bunzip2-get-bits-overread.md"
+checked = "2026-10-22: present in v7.3 and linux-next (its run-length fixes there are unrelated)"
+source = "repo"
+found_by = "hegel-c"
+notes = "The kernel decompresses trusted data (its own images), which limits impact."
+
+[[finding]]
+id = "linux-maple-prealloc-sticky-flag"
+project = "linux"
+where = "lib/maple_tree.c: mas_preallocate() / mas_set() / mas_store()"
+title = "PREALLOC flag survives mas_set, then mas_store silently does nothing"
+kind = "wrong-result"
+found = "2026-05-25"
+how = "blind rediscovery hunt, by accident (while hunting fba46a5d83ca)"
+confidence = "low"
+reach = "unknown"
+status = "withdrawn"
+since = "2026-10-19"
+pin = "tests/irl/linux/pins/maple_prealloc.conf"
+source = "repo"
+found_by = "hegel-c"
+notes = "Not a bug: a preallocation is tied to the position it was made for, so preallocate / mas_set / store violates the API. The test rule that did it was removed at pin conversion."
+
+[[finding]]
+id = "linux-maple-prealloc-leak"
+project = "linux"
+where = "lib/maple_tree.c: mas_store() prealloc fast path"
+title = "fast path skips mas_destroy, leaking the preallocation"
+kind = "leak"
+found = "2026-05-25"
+how = "blind rediscovery hunt, by accident (LSan)"
+confidence = "low"
+reach = "unknown"
+status = "withdrawn"
+since = "2026-07-12"
+source = "repo"
+related = [{ to = "linux-maple-prealloc-sticky-flag", rel = "same-root-cause" }]
+found_by = "hegel-c"
+notes = "Not a bug: our userspace slab stub counts frees differently from the kernel. The July judge caught it (run 2026-07-12-blind-rerun in docs/runs.toml) — the reason for the 'harness artifact?' check in TODO.md."
+
+# --------------------------------------------------------------- scotch ----
+
+[[finding]]
+id = "scotch-hgraphordercp-disconnected"
+project = "scotch"
+where = "src/libscotch/hgraph_order_cp.c: hgraphOrderCp()"
+title = "on disconnected subgraphs (SCOTCH_STRATDISCONNECTED), part of the permutation is left unfilled and read uninitialized"
+kind = "wrong-result"
+found = "2026-04"
+how = "strategy-flag fuzzing of graph ordering"
+confidence = "high"
+reach = "live"
+status = "fixed-upstream"
+since = "2026-04-15"
+fixed_by = "064292127f79"
+pin = "tests/irl/scotch/pins/hgraphOrderCp.conf"
+writeup = "tests/irl/scotch/test_graph_order_shrink.c"
+source = "repo"
+found_by = "hegel-c"
+notes = "Our report; fixed by F. Pellegrini. Needs HEGEL_C_FORK=clean to shrink deterministically (uninitialized heap)."
+
+[[finding]]
+id = "scotch-archbuild-double-base"
+project = "scotch"
+where = "src/libscotch/arch_build.c: archDecoArchBuild()"
+title = "mapDomain(&mappdat, tgtvertnum - baseval) subtracts the base twice: base-1 graphs read parttax[-1] and the wrong vertex's domain"
+kind = "oob"
+found = "2026-07"
+how = "SCOTCH_archBuild (deco 0) property tests"
+confidence = "high"
+reach = "live"
+status = "fixed-upstream"
+since = "2026-07-04"
+fixed_by = "887501370d8b"
+pin = "tests/irl/scotch/pins/archBuildBase.conf"
+writeup = "submissions/scotch-archbuild-pairing-fix/v1/analysis.md (not in git)"
+source = "repo"
+found_by = "hegel-c"
+notes = "Upstream's own fix, which introduced scotch-archbuild-pairing. The pin pairs the buggy state with our narrower patch."
+
+[[finding]]
+id = "scotch-archbuild-pairing"
+project = "scotch"
+where = "src/libscotch/arch_build.c: archDecoArchBuild()"
+title = "terminals are paired with domain i instead of their own domain (domains are numbered in split order), at any base"
+kind = "wrong-result"
+found = "2026-07-04"
+how = "re-running the archBuild tests on upstream's fix"
+confidence = "high"
+reach = "live"
+status = "fixed-upstream"
+since = "2026-08-18"
+introduced = "887501370d8b"
+fixed_by = "911ebdfb681b"
+pin = "tests/irl/scotch/pins/archBuildPairing.conf"
+writeup = "submissions/scotch-archbuild-pairing-fix/v1/analysis.md (not in git)"
+source = "repo"
+related = [{ to = "scotch-archbuild-double-base", rel = "introduced-by" }]
+found_by = "hegel-c"
+notes = "Fixed with our one-liner, mapDomain(&mappdat, tgtvertnum)."
+
+[[finding]]
+id = "scotch-order-strat-select-contract"
+project = "scotch"
+where = "SCOTCH_stratGraphOrder / SCOTCH_graphOrder"
+title = "the selection operator \"(g|g)\" parses as an ordering strategy but the runtime rejects it"
+kind = "contract"
+found = "2026-04-30"
+how = "blind sandbox dogfood, strategy-string fuzzing"
+confidence = "high"
+reach = "live"
+status = "withdrawn"
+since = "2026-10-25"
+history = "docs/saved_sessions_for_history/BUILDING_THE_BUGHUNT_SANDBOX_AND_FIRST_SCOTCH_DOGFOOD.md"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+related = [{ to = "scotch-strat-semantic-validation", rel = "covered-by" }]
+found_by = "hegel-c"
+notes = "Intended: hgraphOrderSt() prints \"selection operator not available for graph ordering strategies\" and returns 1 (hgraph_order_st.c:302). At most a case for the parser-side validation proposal."
+[[finding]]
+id = "scotch-ordercompute-check-o"
+project = "scotch"
+where = "SCOTCH_graphOrderCompute / SCOTCH_graphOrderCheck"
+title = "with strategy \"o\", graphOrderCompute returns success but graphOrderCheck rejects the result"
+kind = "wrong-result"
+found = "2026-04-30"
+how = "blind sandbox dogfood (calling the sibling *Check after Compute)"
+confidence = "low"
+reach = "unknown"
+status = "withdrawn"
+since = "2026-10-25"
+history = "docs/saved_sessions_for_history/BUILDING_THE_BUGHUNT_SANDBOX_AND_FIRST_SCOTCH_DOGFOOD.md"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+found_by = "hegel-c"
+notes = "Not reproduced: 1000 cases (n <= 30, every topology) on master b4801dbf and on April's 064292127f79. \"o\" stays in props/test_graph_order_compute.c and test_graph_order_strat_string.c."
+[[finding]]
+id = "scotch-graphpart-parttab-minus1"
+project = "scotch"
+where = "SCOTCH_graphPart"
+title = "parttab comes back filled with -1"
+kind = "wrong-result"
+found = "2026-04-30"
+how = "blind sandbox dogfood"
+confidence = "low"
+reach = "unknown"
+status = "withdrawn"
+since = "2026-10-25"
+history = "docs/saved_sessions_for_history/BUILDING_THE_BUGHUNT_SANDBOX_AND_FIRST_SCOTCH_DOGFOOD.md"
+checked = "2026-10-25 on master b4801dbf (v7.0.17)"
+source = "repo"
+found_by = "hegel-c"
+notes = "No trace in any run of the 28 dogfood tests (ASan, both versions) nor of the claim checker."
+[[finding]]
+id = "scotch-strat-semantic-validation"
+project = "scotch"
+where = "strategy parser (StratMethodTab)"
+title = "the parser accepts strategies the runtime can't run; proposal: a semantic validation pass"
+kind = "api"
+found = "2026-04"
+how = "pattern across the strategy findings above"
+confidence = "medium"
+reach = "live"
+status = "confirmed"
+since = "2026-04-30"
+source = "memory"
+found_by = "by-hand"
+notes = "API improvement, not a bug: in the 2026-04-30 letter's second group, in three sizes (small / medium / large)."
+
+# ----------------------------------------------------------- submissions ----
+
+[[submission]]
+id = "linux-sg-split-series"
+project = "linux"
+title = "lib: scatterlist: fix sg_split() partial-coverage geometry, latent corruption bugs, and add KUnit tests"
+kind = "patch"
+fixes = ["linux-sg-split-overshoot", "linux-sg-split-length-clobber", "linux-sg-split-zero-nents", "linux-sg-split-zero-size-silent", "linux-sg-split-zero-first-entry", "linux-sg-split-unchecked-args"]
+state = "changes-requested"
+since = "2026-07-05"
+versions = [
+  { v = 1, sent = "2026-05-31", patches = 2, lore = "178027099087.72481.1976843064458686851@gmail.com", to = "akpm" },
+  { v = 2, sent = "2026-06-10", patches = 5, lore = "178113124323.90620.6403136846887207198@gmail.com", to = "akpm" },
+  { v = 3, label = "ours", built = "2026-07-06", patches = 5 },
+  { v = 3, label = "agent", built = "2026-10-24", patches = 6 },
+]
+dir = "submissions/linux-sg-split-series"
+next = "Pick a v3: ours (5 patches; zero sizes -> -EINVAL) or agent (6 patches; adds 4/6 zero first entry and 5/6 argument checks) — decision D1 in v3-agent/REPORT.md. Then run KUnit in a real kernel (UML, x86_64 + KASAN), fill in the v2 Message-ID and the Testing paragraph, sign, and send in reply to akpm's 2026-07-05 mail."
+notes = "akpm, 2026-07-05: 'please incorporate any feedback, check the Sashiko feedback, refresh, retest and resend'. Two v3 candidates. ours: zero sizes -> -EINVAL, fixing zero-nents and zero-size-silent together; checkpatch-clean, steps in v3-ours/V3_SEND.md. agent: written by a blind agent with no access to ours, then tested further (mutation-adequate, 32-bit differential) and fixed for Sashiko's 2 Low findings; see v3-agent/REPORT.md. Not sent as of 2026-10-25."
+
+[[submission]]
+id = "linux-xas-pause-fix"
+project = "linux"
+title = "xarray: fix xas_pause() skipping entries from a sibling slot"
+kind = "patch"
+fixes = ["linux-xas-pause-sibling"]
+state = "draft"
+since = "2026-10-21"
+versions = [{ v = 1, built = "2026-10-21", patches = 1 }]
+dir = "submissions/linux-xas-pause-fix (not in git)"
+next = "Search lore for an existing fix, add a sentence citing f0f80e85841d and a Cc to its author, sign, send (v1/SEND.md)."
+notes = "Needs your Signed-off-by, a lore search, a sentence citing f0f80e85841d, and a Cc to its author (SEND.md)."
+
+[[submission]]
+id = "scotch-archbuild-pairing-fix"
+project = "scotch"
+title = "archDecoArchBuild(): pair terminal vertices with their own domain"
+kind = "patch"
+fixes = ["scotch-archbuild-pairing"]
+state = "merged"
+since = "2026-08-18"
+versions = [{ v = 1, sent = "2026-07-04", patches = 2, to = "F. Pellegrini (email)" }]
+commit = "911ebdfb681b"
+dir = "submissions/scotch-archbuild-pairing-fix (not in git)"
+notes = "Merged as our one-line fix, mapDomain(&mappdat, tgtvertnum)."
+
+[[submission]]
+id = "scotch-hgraphordercp-report"
+project = "scotch"
+title = "hgraphOrderCp() on disconnected subgraphs leaves the permutation partly unfilled"
+kind = "report"
+fixes = ["scotch-hgraphordercp-disconnected"]
+state = "merged"
+since = "2026-04-15"
+versions = [{ v = 1, sent = "2026-04", to = "F. Pellegrini" }]
+commit = "064292127f79"
+notes = "A report, not a patch: fixed by the maintainer."
+

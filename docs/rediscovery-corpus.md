@@ -23,6 +23,9 @@ already built harnesses for (`harness_dir`), which we've *found ourselves*
 (`sg_split` overshoot, `packing.c` OOB), and which are still just candidates.
 Sashiko's corpus is far larger and unbiased. Neither subsumes the other.
 
+Bugs hegel-c found itself (not rediscoveries) are tracked with their upstream
+status in `docs/findings.toml`; the `found-*` statuses here mirror it.
+
 `status` in our corpus (hunter-visible, so it never describes the bug):
 
 | Status | Meaning |

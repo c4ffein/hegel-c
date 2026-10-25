@@ -48,3 +48,24 @@ SPDX-License-Identifier = "GPL-2.0-only"
 path = "tools/rediscovery-workflow.js"
 SPDX-FileCopyrightText = "2026 c4ffein"
 SPDX-License-Identifier = "MIT"
+
+# Submissions (submissions/<id>/v<N>/): patches and mails against a project
+# keep its license; notes and our own test code are MIT (headers or the
+# Markdown rule above).
+[[annotations]]
+path = ["submissions/linux-*/**/*.patch", "submissions/linux-*/**/*.eml", "submissions/linux-*/**/range-diff-*.txt"]
+precedence = "override"
+SPDX-FileCopyrightText = ["The Linux kernel authors", "2026 c4ffein (modifications)"]
+SPDX-License-Identifier = "GPL-2.0-only"
+
+[[annotations]]
+path = "submissions/scotch-*/**/*.patch"
+precedence = "override"
+SPDX-FileCopyrightText = ["IPB, Universite de Bordeaux, INRIA & CNRS", "2026 c4ffein (modifications)"]
+SPDX-License-Identifier = "CECILL-C"
+
+[[annotations]]
+path = ["submissions/**/evidence/**", "submissions/scotch-*/**/*.txt"]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 c4ffein"
+SPDX-License-Identifier = "MIT"
