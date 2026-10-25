@@ -1,0 +1,69 @@
+From a0ee31d46cae2570414650636ceaafeeacc1d123 Mon Sep 17 00:00:00 2001
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Sun, 31 May 2026 20:38:13 +0000
+Subject: [PATCH 0/2] lib: scatterlist: fix sg_split() partial-coverage geometry + add KUnit tests
+
+sg_calculate_split() can decrement its nb_splits counter once too often
+and miss the loop-termination check, corrupting the last output split's
+geometry. This series fixes that and adds a KUnit suite.
+
+Patch 1 is a one-line fix: the termination check tests `!nb_splits`, but
+on partial coverage that ends mid-entry of a non-last input entry the
+counter overshoots to -1, so the loop runs one iteration too many and
+folds a trailing input entry into the last split (it ends up covering
+more bytes than the caller requested). Widening the check to
+`nb_splits <= 0` catches the overshoot.
+
+Patch 2 adds a KUnit suite (16 cases) over the (input shape, skip, split
+sizes) matrix: full / edge-aligned / mid-entry partial coverage, skip
+variants, and multi-split runs. The mid-entry cases fail without patch 1
+and pass with it.
+
+Prior art / attribution. I hit this independently via property-based
+testing and only afterwards found that Alexander Egorenkov had reported
+it in 2021 [1], with an identical root-cause analysis. The independent
+rediscovery and the matching diagnosis are good evidence this is a real
+defect rather than a misreading of the partial-coverage contract. That
+2021 posting went only to linux-kernel@vger, received no review, and was
+never applied -- this file has no MAINTAINERS entry, which is likely why,
+so I'm addressing the lib/ maintainer directly this time.
+
+Egorenkov's proposed fix moved the termination check rather than widening
+it, which fixes the mid-entry case but regresses edge-aligned partial
+coverage (a split ending exactly on an input-entry boundary with further
+entries trailing) -- a case the current code handles correctly. Test
+sg_split_t10_edge_first_two_trailing in patch 2 fails his fix and passes
+the one here, which is the concrete reason for choosing `nb_splits <= 0`
+over the reorder. He is kept as Reported-by; the diagnosis is his.
+
+Impact. No in-tree caller triggers this today. Four of the five callers
+(SEC, pxa_camera, spi-omap2-mcspi, and sa2ul via its DMA-mapped re-split)
+request full coverage; the one caller that requests partial coverage
+(DTHEv2 AEAD) bounds its consumer by cryptlen, masking the wrong
+geometry. The fix matters for callers that legitimately request partial
+coverage, which sg_split() has documented as supported since it was added
+("the union of spans of all resulting scatter lists is a subrange of the
+span of the original scatter list").
+
+Testing. Verified against the 16-case KUnit suite: 9 pass / 7 fail on
+mainline, 16/16 with patch 1 applied. The seven failures are exactly the
+mid-entry partial-coverage cases. The same 16 cases were first developed
+and run as a standalone userspace harness against an extracted copy of
+lib/sg_split.c, with identical results.
+
+[1] https://lore.kernel.org/all/20210418143425.22944-1-egorenar-dev@posteo.net/
+
+Charles Pellegrini (2):
+  lib: scatterlist: fix sg_calculate_split() nb_splits overshoot on
+    partial coverage
+  lib: scatterlist: add KUnit tests for sg_split()
+
+ lib/Kconfig               |  13 ++
+ lib/Makefile              |   1 +
+ lib/sg_split.c            |   2 +-
+ lib/test_sg_split_kunit.c | 371 ++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 386 insertions(+), 1 deletion(-)
+ create mode 100644 lib/test_sg_split_kunit.c
+
+--
+2.47.3

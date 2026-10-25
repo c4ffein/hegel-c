@@ -1,0 +1,101 @@
+From b0787c7b7aae44f78ec2ad12825ec430842aeb64 Mon Sep 17 00:00:00 2001
+In-Reply-To: <178027099087.72481.1976843064458686851@gmail.com>
+References: <178027099087.72481.1976843064458686851@gmail.com>
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Wed, 10 Jun 2026 13:32:32 +0000
+Subject: [PATCH v2 0/5] lib: scatterlist: fix sg_split() partial-coverage geometry, two latent corruption bugs, and add KUnit tests
+
+v1 was a 2-patch series (the overshoot fix + a KUnit suite). Andrew's
+review asked whether this was seen in real life -- it was not; it came
+from property-based testing, not a field report -- and pointed at an
+automated review (Sashiko) that flagged a pre-existing OOB and a bug in
+the test. Chasing those turned up a third, separate latent bug. v2
+addresses all of it.
+
+sg_split() is EXPORT_SYMBOL'd, so its contract is "any caller, any
+split_sizes[]", not just the six in-tree call sites. None of the three
+bugs below is triggered by an in-tree caller today -- all are latent. So
+even without a real-world trigger, I think they're worth fixing.
+
+The three bugs (all Fixes: f8bcbe62acd0):
+
+1. sg_calculate_split() nb_splits overshoot (the v1 fix, unchanged).
+   Partial coverage ending mid-entry of a non-last input entry overshoots
+   the counter to -1, misses the !nb_splits termination check, and folds a
+   trailing entry into the last split.
+
+2. sg_split_phys() ->length clobber. On !NEED_SG_DMA_LENGTH arches
+   sg_dma_len() aliases ->length, so the DMA-scrub line zeroes the CPU
+   length it has just computed; only the last entry is restored, so the
+   non-last entries of a multi-entry split keep length 0 -> silent short
+   data. Found while correcting the test argument below.
+
+3. zero-nents ZERO_SIZE_PTR OOB. A trailing zero-size split that receives
+   no input entry leaves out_sg == ZERO_SIZE_PTR; the out_sg[-1].length
+   write is then out-of-bounds (KASAN splat). Flagged by the automated
+   review; confirmed with KASAN and a userspace ASAN harness.
+
+Plus a test-argument fix folded into the suite: v1 passed in_mapped_nents
+= n_in for an unmapped list, where it must be 0. On NEED arches that drove
+the mapped pass to read a zeroed dma_length and return -EINVAL, so the
+suite would fail there (it passed on UML only because UML aliases dma_len
+onto ->length). Correcting it is what exposed bug 2.
+
+Patch layout (bisect-safe):
+
+  1/5  overshoot fix              -- unchanged from v1
+  2/5  ->length clobber fix       -- bug 2; lands before the test that
+                                     exposes it
+  3/5  KUnit suite                -- corrected in_mapped_nents; each case
+                                     run unmapped AND identity-mapped;
+                                     DMA-address + end-marker assertions;
+                                     NEED-gated divergent-geometry cases
+  4/5  zero-nents OOB guard       -- bug 3
+  5/5  zero-nents regression test -- guards 4/5
+
+Patches 4 and 5 are an isolable tail: if you'd rather treat a malformed
+zero-size split as the caller's problem, they drop cleanly without
+touching 1-3. On that bug I went tolerate-and-skip rather than rejecting
+with -EINVAL, reasoning it's the droppable tail of the request -- trivial
+to respin to -EINVAL if you prefer the stricter contract.
+
+Testing. The suite runs each case both unmapped and identity-mapped
+(dma_len == length, contiguous IOVA) on all arches, plus NEED-gated
+divergent CPU/DMA geometry (coalescing) cases exercised on x86_64 with
+KASAN. Results: UML (!NEED) 17 passed / 3 skipped; x86_64 + KASAN 20/20.
+With bug 2 reverted, six unmapped multi-entry cases fail while their
+mapped variants pass, so the suite catches it. A real dma_map_sg / IOMMU
+rig is still deferred; the mapped coverage here is synthetic (identity
+mapping + injected coalescing).
+
+v1: https://lore.kernel.org/all/178027099087.72481.1976843064458686851@gmail.com/
+
+Changes since v1:
+ - corrected the KUnit in_mapped_nents argument (0 for unmapped lists)
+ - new: sg_split_phys() ->length clobber fix (bug 2)
+ - new: zero-nents OOB guard + its regression test (bug 3)
+ - tests now run unmapped AND identity-mapped, with DMA-address and
+   end-marker assertions and NEED-gated divergent-geometry cases
+ - test file moved to lib/tests/sg_split_kunit.c (modern location);
+   config moved to lib/Kconfig.debug, Makefile line to lib/tests/Makefile
+
+Charles Pellegrini (5):
+  lib: scatterlist: fix sg_calculate_split() nb_splits overshoot on
+    partial coverage
+  lib: scatterlist: fix sg_split_phys() ->length clobber on
+    !NEED_SG_DMA_LENGTH
+  lib: scatterlist: add KUnit tests for sg_split()
+  lib: scatterlist: guard sg_split_phys()/sg_split_mapped() against
+    zero-nents splits
+  lib: scatterlist: add zero-nents regression test for sg_split()
+
+ lib/Kconfig.debug          |  14 +
+ lib/sg_split.c             |  15 +-
+ lib/tests/Makefile         |   1 +
+ lib/tests/sg_split_kunit.c | 526 +++++++++++++++++++++++++++++++++++++
+ 4 files changed, 552 insertions(+), 4 deletions(-)
+ create mode 100644 lib/tests/sg_split_kunit.c
+
+-- 
+2.47.3
+

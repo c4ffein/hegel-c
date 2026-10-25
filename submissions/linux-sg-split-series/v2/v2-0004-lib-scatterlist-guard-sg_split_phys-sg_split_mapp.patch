@@ -1,0 +1,74 @@
+From 84ece42d3b39920940849bea0c85ec19b7b7c40d Mon Sep 17 00:00:00 2001
+In-Reply-To: <178027099087.72481.1976843064458686851@gmail.com>
+References: <178027099087.72481.1976843064458686851@gmail.com>
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Wed, 10 Jun 2026 13:31:19 +0000
+Subject: [PATCH v2 4/5] lib: scatterlist: guard
+ sg_split_phys()/sg_split_mapped() against zero-nents splits
+
+If a caller passes a split_sizes[] array whose trailing entry is 0 and
+the preceding splits exactly consume the input scatterlist,
+sg_calculate_split() returns success with the trailing split's nents
+left at 0. sg_split() then allocates that split's output with
+
+    kmalloc_objs(struct scatterlist, 0, gfp_mask)
+
+which returns ZERO_SIZE_PTR. Both copiers finish each split with a fixup of
+the last written output entry -- sg_split_phys() does
+
+    out_sg[-1].length = split->length_last_sg;
+    sg_mark_end(out_sg - 1);
+
+and sg_split_mapped() does
+
+    sg_dma_len(--out_sg) = split->length_last_sg;
+
+For a zero-nents split out_sg has not advanced, so that fixup dereferences
+ZERO_SIZE_PTR: an out-of-bounds write. KASAN reports it as a slab
+out-of-bounds write; a userspace ASAN harness reproduces it as a heap
+overflow.
+
+Skip empty splits at the top of the per-split loop in both copiers:
+
+    if (!split->nents)
+        continue;
+
+No in-tree caller passes such a split_sizes[] array, so this is latent; it
+was surfaced by an automated review of the v1 posting. The fix tolerates
+and skips the degenerate split rather than rejecting it with -EINVAL in
+sg_calculate_split(); if a stricter contract is preferred, the rejecting
+variant is a trivial respin.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Link: https://lore.kernel.org/all/20260601175549.b4a10c07dd9e3b867f66da0c@linux-foundation.org/
+Assisted-by: Claude:claude-opus-4-8 hegel-c
+Signed-off-by: Charles Pellegrini <c4ffein.work@gmail.com>
+---
+ lib/sg_split.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index ab574dd26b03..e90a1bfbdb56 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -81,6 +81,8 @@ static void sg_split_phys(struct sg_splitter *splitters, const int nb_splits)
+ 	struct sg_splitter *split;
+ 
+ 	for (i = 0, split = splitters; i < nb_splits; i++, split++) {
++		if (!split->nents)
++			continue;
+ 		in_sg = split->in_sg0;
+ 		out_sg = split->out_sg;
+ 		for (j = 0; j < split->nents; j++, out_sg++) {
+@@ -108,6 +110,8 @@ static void sg_split_mapped(struct sg_splitter *splitters, const int nb_splits)
+ 	struct sg_splitter *split;
+ 
+ 	for (i = 0, split = splitters; i < nb_splits; i++, split++) {
++		if (!split->nents)
++			continue;
+ 		in_sg = split->in_sg0;
+ 		out_sg = split->out_sg;
+ 		for (j = 0; j < split->nents; j++, out_sg++) {
+-- 
+2.47.3
+

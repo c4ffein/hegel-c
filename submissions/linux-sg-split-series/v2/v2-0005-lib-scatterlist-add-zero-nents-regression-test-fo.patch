@@ -1,0 +1,66 @@
+From b0787c7b7aae44f78ec2ad12825ec430842aeb64 Mon Sep 17 00:00:00 2001
+In-Reply-To: <178027099087.72481.1976843064458686851@gmail.com>
+References: <178027099087.72481.1976843064458686851@gmail.com>
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Wed, 10 Jun 2026 13:31:20 +0000
+Subject: [PATCH v2 5/5] lib: scatterlist: add zero-nents regression test for
+ sg_split()
+
+Add sg_split_t8b_trailing_zero_no_input_left: a split_sizes[] array whose
+first split consumes the entire input, so the trailing zero-size split
+receives no input entry (nents == 0). Without the guard in the previous
+patch, the last-entry fixup in sg_split_phys()/sg_split_mapped() writes
+through a ZERO_SIZE_PTR; with it, the empty split is skipped.
+
+Run under KASAN to catch a regression as a clean out-of-bounds report,
+e.g.:
+
+    tools/testing/kunit/kunit.py run sg_split \
+        --arch=x86_64 --kconfig_add=CONFIG_KASAN=y
+
+Without KASAN the write lands at a wild address and faults, so the case
+still fails -- KASAN just turns it into a precise report rather than an
+oops.
+
+Assisted-by: Claude:claude-opus-4-8 hegel-c
+Signed-off-by: Charles Pellegrini <c4ffein.work@gmail.com>
+---
+ lib/tests/sg_split_kunit.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/lib/tests/sg_split_kunit.c b/lib/tests/sg_split_kunit.c
+index 82eef313944d..6d4ba0f2d5bd 100644
+--- a/lib/tests/sg_split_kunit.c
++++ b/lib/tests/sg_split_kunit.c
+@@ -311,6 +311,20 @@ static void sg_split_t8_sizes_trailing_zero(struct kunit *test)
+ 	sg_split_run(test, in, 2, 0, sizes, 2);
+ }
+ 
++static void sg_split_t8b_trailing_zero_no_input_left(struct kunit *test)
++{
++	/* First split consumes the entire input; the trailing zero-size split
++	 * gets no input entry (nents == 0).  sg_split_phys()/sg_split_mapped()
++	 * must not write out_sg[-1] for that empty split (out_sg would be
++	 * ZERO_SIZE_PTR).  Distinct from T8, where a trailing input entry
++	 * leaves the zero split with nents > 0.
++	 */
++	const struct sg_split_in_spec in[] = { { 0, 0, 10 } };
++	const size_t sizes[] = { 10, 0 };
++
++	sg_split_run(test, in, 1, 0, sizes, 2);
++}
++
+ /* ========================================================================
+  * Group D — boundary-position matrix (3 x 10-byte entries).
+  */
+@@ -487,6 +501,7 @@ static struct kunit_case sg_split_test_cases[] = {
+ 	KUNIT_CASE(sg_split_t6_dthev2_aead_shape),
+ 	KUNIT_CASE(sg_split_t7_skip_plus_partial_midentry),
+ 	KUNIT_CASE(sg_split_t8_sizes_trailing_zero),
++	KUNIT_CASE(sg_split_t8b_trailing_zero_no_input_left),
+ 	KUNIT_CASE(sg_split_t9_mid_first_two_trailing),
+ 	KUNIT_CASE(sg_split_t10_edge_first_two_trailing),
+ 	KUNIT_CASE(sg_split_t11_mid_middle_one_trailing),
+-- 
+2.47.3
+
