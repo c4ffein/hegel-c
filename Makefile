@@ -111,6 +111,7 @@ help:
 	@echo "  make scotch-test-local        Run Scotch tests with inspiration/targets/scotch (built from source)"
 	@echo "  make scotch-test-deb          Run Scotch tests with system libscotch-dev (CI)"
 	@echo "  make scotch-test-pins         Run each Scotch bug pin (tests/irl/scotch/pins/) buggy + fixed"
+	@echo "  make scotch-test-props        Run the Scotch property suite (tests/irl/scotch/props/)"
 	@echo "  make mpi-test                 Run MPI tests (requires mpicc/mpiexec)"
 	@echo "  make bench-bench              Run fork-vs-nofork benchmarks (see docs/benchmarking.md)"
 	@echo "  make docs-check               Verify transcluded snippets in docs/*.md match source"

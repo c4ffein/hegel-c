@@ -70,7 +70,7 @@ if [ "$1" = "--list" ]; then
       if [ -n "${PIN_FIX_SHA:-}" ]; then what="fix=$(printf %.12s "$PIN_FIX_SHA")"
       elif [ -n "${PIN_FIX_PATCH:-}" ]; then what="patch=$PIN_FIX_PATCH"
       else what="ref=$(printf %.12s "${PIN_REF:-?}")"; fi
-      printf '  %-24s %-28s tests=%s\n' "$(basename "$conf" .conf)" "$what" "${PIN_TESTS:-}" )
+      printf '  %-24s %-28s tests=%s\n' "$(basename "$conf" .conf)" "$what" "$(echo ${PIN_TESTS:-})" )
   done
   exit 0
 fi

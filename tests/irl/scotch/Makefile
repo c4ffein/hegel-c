@@ -65,8 +65,18 @@ TESTS_PAIRING = test_arch_build_pairing_classic test_arch_build_pairing
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_SHRINK) $(TESTS_MPI)
 
+# Property suite (props/): one property per Scotch API area, from the
+# 2026-04 blind bug-hunt dogfood plus the witnesses of later finds.  Each
+# props/test_x.c builds as ./test_x.  Not in test-local / test-deb: ~25 s per
+# test, and older Scotch (Debian's) fails the ordering ones on the
+# hgraphOrderCp bug.  `make test-props` runs the ones expected GREEN on
+# current master: PIN_TESTS of pins/current.conf.  The others witness open
+# bugs and are run by their pins (`make test-pin PIN=...`).
+TESTS_PROPS       = $(basename $(notdir $(wildcard props/test_*.c)))
+TESTS_PROPS_GREEN = $(shell . ./pins/current.conf; echo $$PIN_TESTS)
+
 .PHONY: FORCE help all clean test test-local test-deb _run-tests hegel-c-lib check-license \
-	test-pin test-pins fetch-pins
+	test-pin test-pins fetch-pins test-props _run-props
 
 help:
 	@echo "tests/irl/scotch Makefile"
@@ -76,6 +86,9 @@ help:
 	@echo "  all               Build all test binaries (requires SCOTCH_INC / SCOTCH_LIB)"
 	@echo "  test-local        Build and test with inspiration/scotch (built from source)"
 	@echo "  test-deb          Build and test with system libscotch-dev"
+	@echo "  test-props [ASAN=1]"
+	@echo "                    Property suite (props/) against inspiration/targets/scotch,"
+	@echo "                    the tests expected green (red ones run via their pins)"
 	@echo "  test-pin PIN=x [STATE=buggy|fixed|upstream] [ASAN=1]"
 	@echo "                    Build Scotch at bug pin x (pins/x.conf) in a worktree and"
 	@echo "                    run its tests: buggy must fail + shrink small, fixed must pass,"
@@ -119,6 +132,9 @@ test_graph_order_shrink: test_graph_order_shrink.c $(HEGEL_C_LIB)/libhegel_c.a
 # Reproduces a fork-mode orphan bug; see the header of the .c file.
 test_array_inline_orphan_repro: test_array_inline_orphan_repro.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
+
+$(TESTS_PROPS): %: props/%.c props/graph_gen.h props/scotch_helpers.h $(HEGEL_C_LIB)/libhegel_c.a
+	$(CC) $(CFLAGS) -Iprops -o $@ $< $(LDFLAGS)
 
 test_dgraph_part: test_dgraph_part.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(MPICC) $(CFLAGS) -o $@ $< $(LDFLAGS_MPI)
@@ -173,13 +189,15 @@ test-pin: hegel-c-lib
 	state="$(STATE)"; \
 	[ -n "$$state" ] || state=$$($(WORKTREE) $(PIN) --states | head -1 | cut -d' ' -f1); \
 	expect=$$($(WORKTREE) $(PIN) --states | awk -v s="$$state" '$$1 == s { print $$2 }'); \
-	dir=$$($(WORKTREE) $(PIN) --state $$state $(if $(filter 1,$(ASAN)),--asan)); \
-	echo ""; echo "==== Pin $(PIN) [$$state$(if $(filter 1,$(ASAN)),+asan), expect $$expect] ===="; \
+	asan="$(ASAN)"; [ "$${PIN_ASAN:-}" != 1 ] || asan=1; \
+	dir=$$($(WORKTREE) $(PIN) --state $$state $$( [ "$$asan" != 1 ] || echo --asan)); \
+	echo ""; echo "==== Pin $(PIN) [$$state$$( [ "$$asan" != 1 ] || echo +asan), expect $$expect] ===="; \
 	rm -f $$PIN_TESTS; \
 	$(MAKE) --no-print-directory $$PIN_TESTS SCOTCH_INC="-I$$dir/include" SCOTCH_LIB="-L$$dir/lib" \
-		ASAN=$(ASAN) >/dev/null; \
+		ASAN=$$asan >/dev/null; \
 	bins=""; for t in $$PIN_TESTS; do bins="$$bins $(CURDIR)/$$t"; done; \
-	PIN_MAX_NVERT=$${PIN_MAX_NVERT:-} PIN_RUN_ENV="$(HEGEL_SHRINK_ENV) $${PIN_ENV:-}" \
+	PIN_MAX_NVERT=$${PIN_MAX_NVERT:-} \
+		PIN_RUN_ENV="$(HEGEL_SHRINK_ENV) ASAN_OPTIONS=detect_leaks=0 $${PIN_ENV:-}" \
 		HEGEL_TEST_ULIMIT=$(HEGEL_TEST_ULIMIT) $(PINRUN) $$expect $$bins
 
 test-pins:
@@ -194,6 +212,15 @@ fetch-pins:
 	@for p in $(PINS); do for s in $$($(WORKTREE) $$p --states | cut -d' ' -f1); do \
 		$(WORKTREE) $$p --state $$s >/dev/null || exit 1; \
 	done; done; echo "all pins fetched and built"
+
+test-props: hegel-c-lib
+	@rm -f $(TESTS_PROPS_GREEN)
+	@$(MAKE) --no-print-directory $(TESTS_PROPS_GREEN) SCOTCH_INC="-I$(SCOTCH_LOCAL)/include" \
+		SCOTCH_LIB="-L$(SCOTCH_LOCAL)/lib" ASAN=$(ASAN) >/dev/null
+	@echo ""; echo "==== Scotch property suite (props/, expect green) ===="
+	@bins=""; for t in $(TESTS_PROPS_GREEN); do bins="$$bins $(CURDIR)/$$t"; done; \
+		PIN_RUN_ENV="ASAN_OPTIONS=detect_leaks=0" HEGEL_TEST_ULIMIT=$(HEGEL_TEST_ULIMIT) \
+		$(PINRUN) green $$bins
 
 test:
 	@echo "ERROR: use 'make test-local' or 'make test-deb'" >&2; exit 1
@@ -275,7 +302,7 @@ _run-tests: all check-license
 
 check-license:
 	@missing=0; \
-	for f in *.c Makefile; do \
+	for f in *.c props/*.c props/*.h Makefile; do \
 		if ! head -3 "$$f" | grep -q "SPDX-License-Identifier[:] MIT"; then \
 			echo "  MISSING: $$f"; \
 			missing=$$((missing + 1)); \
@@ -288,4 +315,4 @@ check-license:
 	echo "All files have SPDX headers."
 
 clean:
-	rm -f $(ALL_TESTS) $(TESTS_PAIRING)
+	rm -f $(ALL_TESTS) $(TESTS_PAIRING) $(TESTS_PROPS)
