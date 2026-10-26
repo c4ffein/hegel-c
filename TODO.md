@@ -68,12 +68,22 @@
 - **Refresh the local C skill reference** (`.claude/skills/hegel/references/c/`):
   drop the deleted `hegel_gen_*` API, add `hegel_run_options` and
   `HEGEL_C_REPRODUCE`.
-- **Skill update for the 3 missed bug classes** (2026-05-25 rediscovery,
-  targets in `docs/corpus.toml`, pins in `tests/irl/linux/pins/`): diagnostic content
-  (bootconfig — SKILL.md still says not to check what errors say),
-  bookkeeping-state mutators (maple_prealloc), and an explicit note on the
-  concurrency limit (maple_destroy_walk, RCU race). Validate by re-running
-  only those 3 experiments blind against the updated skill.
+- **Skill update for the missed bug classes** (2026-05-25 rediscovery,
+  targets in `docs/corpus.toml`, pins in `tests/irl/linux/pins/`). Done
+  2026-10-26 in `.claude/skills/hegel/SKILL.md`, not yet validated:
+  - diagnostic content (bootconfig `39ebc8d7f561`): the skill no longer says
+    not to check what errors say; "Diagnostic content" property added.
+  - reader across teardown (maple_destroy_walk `ea9b77f98d94`, RCU race):
+    not a concurrency limit after all, the July run hit it single-threaded by
+    holding `rcu_read_lock` across `mtree_destroy`; added as a bug pattern.
+  - maple_prealloc (`fba46a5d83ca`): no lesson yet. Its harness is green on
+    buggy (never reaches the bug), so "draw bookkeeping-state mutators" is a
+    guess; fix the harness first, then see what the miss teaches.
+  The skill text stays generic (no kernel examples): hunters read it, so
+  naming a target there would void its blind re-run.
+  Validate: re-run bootconfig and maple_destroy_walk blind (fresh agents,
+  harnesses scrubbed of hints) against the updated skill, record in
+  `docs/runs.toml`.
 - **Required reachability triage in `hegel-bughunt`.** Every finding gets
   a caller survey ("can any in-tree caller trigger it?") and a "harness
   artifact?" check (re-run against the reference semantics, not only our

@@ -89,7 +89,7 @@ Property-based tests aren't always the right tool. Prefer unit tests when:
 
 - **The test checks exact output.** `assert render(doc) == "<html>..."` depends on a specific output format — there's no general property to check.
 - **Complex setup dominates.** Tests requiring database state, network mocks, or elaborate fixtures are hard to parameterize.
-- **The test checks specific error messages.** Exact error string checks are a unit test concern. PBTs are better for testing that errors are *raised*, not what they *say*.
+- **The test checks exact error wording.** Matching a fixed error string is a unit-test concern. But what a diagnostic *points at* is a property: see "Diagnostic content" below.
 - **No property is apparent.** If you can't find a meaningful property after reading the code, don't force it. A good unit test beats a contrived PBT.
 
 ## Property Catalogue
@@ -177,6 +177,7 @@ result = my_numeric_op(a, b)  # should not overflow/panic
 | **Consistency** | related APIs in the same library agree | `string_width(s) == sum(char_width(c) for c in s)` |
 | **Large input sizes** | exercise deep structure paths that small inputs miss | draw size separately, force 50-200+ elements for trees/tries |
 | **Feature flag testing** | non-default features are often less tested | enable SIMD, nightly, or experimental features and run tests |
+| **Diagnostic content** | an error names what actually caused it: the position, node, key or field it reports holds the offending input | build input with one known defect at a drawn place, assert the reported location is that place (checking only that an error was raised misses an error that blames the wrong thing) |
 
 ### Bug Patterns by Category
 
@@ -191,6 +192,7 @@ result = my_numeric_op(a, b)  # should not overflow/panic
 | **Unicode line breaks** | `\u{85}` (NEL), `\u{2028}` (LS), `\u{2029}` (PS) treated inconsistently as line breaks |
 | **SIMD divergence** | SIMD code path produces different results than the scalar fallback |
 | **Deep structure bugs** | Traversal that only fails when data structure has multiple internal levels (50-200+ elements) |
+| **Reader across teardown** | A reader that holds a reference (RCU read lock, iterator, borrowed node) while a writer frees or replaces the structure. No threads needed: in one sequence, take the reader, run the destructive op, then check what the reader still sees and whether the structure told it the data is gone |
 
 ### Choosing Properties
 
