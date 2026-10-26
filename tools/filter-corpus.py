@@ -8,7 +8,7 @@ Sashiko (inspiration/kernel-review/sashiko, pinned — see Makefile SASHIKO_PIN)
 ships benchmarks/benchmark.json: ~1000 unfiltered Fixes:-tagged upstream bugs,
 each {Commit, Fixed-by, subsystem, problem_description}.  That is ground truth
 for blind-rediscovery runs — bigger and less biased than hand-curated
-shortlists (it contained BUG_REDISCOVERY_CANDIDATES.md's #1 idr bug verbatim).
+shortlists (it contained our #1 hand-picked target, the idr bug, verbatim).
 
 This tool selects the slice a userspace hegel-c harness can plausibly reach
 and splits the output for blind hygiene (the 2026-07-12 re-run showed hint

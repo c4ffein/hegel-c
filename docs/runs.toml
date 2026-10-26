@@ -38,7 +38,7 @@
 #   notes
 #
 # [[run.result]] — one per target:
-#   target        a Fixed-by SHA from docs/our_corpus.json, a finding id from
+#   target        a fixed_by SHA from docs/corpus.toml, a finding id from
 #                 docs/findings.toml, or a pin file (tests/irl/<p>/pins/x.conf)
 #   verdict       blind-recall, harness:
 #                   hit | partial | miss | false-positive

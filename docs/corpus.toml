@@ -1,0 +1,504 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein
+# Part of hegel-c — see hegel/LICENSE for terms.
+#
+# Rediscovery targets: bugs our hunting should be able to find again.
+# Upstream-fixed bugs are keyed by their fix commit; bugs hegel-c found itself
+# point at their entry in docs/findings.toml. docs/runs.toml records what each
+# run found, per target; docs/rediscovery-corpus.md explains how targets are
+# picked and how this file merges with sashiko's corpus.
+#
+# View it:   make runs              (targets x runs)
+# Check it:  make lint-findings     (also checks this file)
+#
+# This file describes bugs: blind bug-hunt sandboxes must never see it.
+# tools/merge-corpus.py hands hunters only fixed_by, subsystem, tier,
+# harness_dir and status; every other field is judge-only.
+#
+# [[target]] fields (required first):
+#   fixed_by    upstream fix commit (12+ hex)       } exactly one of the two
+#   finding     id in docs/findings.toml (our find)  }
+#   title       one line
+#   subsystem   e.g. lib/maple_tree
+#   classes     [leak | uaf | double-free | oob | overflow | off-by-one |
+#                uninit | null-deref | hang | wrong-result | error-path]
+#   provenance  curated | found
+#   tier        A | B | C    (harnessing effort: A lib-like, C needs real shims)
+#   status      candidate      picked, no harness or not hunted yet
+#               rediscovered   a blind hunt found it, and the harness is red
+#                              on buggy, green on fixed
+#               harness-only   a harness discriminates, but no hunt found it
+#                              blind (hint leaked, artifact, rules added later)
+#               missed         a harness exists but never reaches the bug
+#               found-novel / found-and-submitted
+#                              our own find, not yet reported / reported
+#                              (mirrors the finding's status)
+# Optional:
+#   fixed       YYYY-MM-DD of the fix          author   who fixed it
+#   source      where we found it (git log, a syzbot URL)
+#   harness_dir tests/irl/<project>/<dir>      pin   its pin file
+#   effort      ready | small | medium | large (to build a harness, at pick time)
+#   mechanism   what goes wrong (for findings: see docs/findings.toml)
+#   harness     how a harness can reach it
+#   property    what a test should check
+#   why         why it's a good target
+#   notes
+
+# ------------------------------------------------------- round 1 (2026-05) ----
+
+[[target]]
+fixed_by = "c6e8e595a079"
+title = "idr_alloc() returns an ID outside the requested range"
+subsystem = "lib/idr"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "rediscovered"
+fixed = "2025-11-28"
+author = "Matthew Wilcox"
+source = "git log"
+harness_dir = "tests/irl/linux/idr_rediscovery"
+pin = "tests/irl/linux/pins/idr_rediscovery.conf"
+effort = "ready"
+mechanism = """When an IDR is initialised with a non-zero base and the caller \
+requests an [lo, hi] range that lies entirely below the base, idr_get_free() \
+computes max - base as a huge unsigned value and returns an ID outside the \
+range. Repro: idr_alloc(0, 1) on an IDR_INIT_BASE(idr, 1) instance should \
+return -ENOSPC, and returned an out-of-range ID."""
+property = "every returned id satisfies lo <= id < hi"
+why = """A trivial repro shape in code the harness already compiles: the smoke \
+test of the whole method. If we miss this, something is wrong."""
+notes = "Also in sashiko's corpus (the one overlap)."
+
+[[target]]
+fixed_by = "1fd8bc7cd889"
+title = "mas_alloc_cyclic() second call does not reset the maple state"
+subsystem = "lib/maple_tree"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "rediscovered"
+fixed = "2024-12-14"
+author = "Yang Erkun"
+source = "git log"
+harness_dir = "tests/irl/linux/maple_tree_rediscovery"
+pin = "tests/irl/linux/pins/maple_tree_rediscovery.conf"
+effort = "ready"
+mechanism = """mas_alloc_cyclic() calls mas_empty_area() twice (the preferred \
+range, then the full range). The first call may leave the state EBUSY; \
+without a mas_reset() the second returns false although a slot is free. \
+Repro: fill a cyclic allocator near-full, free a low index, allocate: should \
+succeed, failed with EBUSY. User-visible as tmpfs simple_offset_add() \
+reporting "Device or resource busy" with thousands of free slots."""
+harness = "a stateful sequence of alloc / free(id) / check_empty(range)"
+property = "allocation succeeds whenever the range has a free slot"
+why = """Sequence shrinking on a real stateful target: the minimal sequence \
+should land on near-full + free-low + alloc."""
+
+[[target]]
+fixed_by = "94824ac9a8aa"
+title = "ext4 do_split() off-by-one in the directory hash split"
+subsystem = "fs/ext4"
+classes = ["off-by-one"]
+provenance = "curated"
+tier = "C"
+status = "candidate"
+fixed = "2025-04-04"
+author = "Artem Sadovnikov"
+source = "git log (found by syzkaller)"
+effort = "medium"
+mechanism = """When splitting a directory hash block, the loop \
+for (i = count-1; i >= 0; i--) can run down to -1 and the code after it \
+computes a bad split index, leading to an out-of-bounds write in \
+ext4_insert_dentry() (a 251-byte memcpy past the dx block). Reachable via \
+symlink() into a directory whose hash distribution takes the early exit."""
+harness = """do_split() is a pure function over an in-memory dx_map: extract it \
+with a dx-entry array mock and a per-entry size array; no mount needed \
+(~5-7 h)."""
+property = "the split index stays in [0, count]"
+why = "A classic off-by-one PBT should nail, in a high-value filesystem."
+
+[[target]]
+fixed_by = "39ebc8d7f561"
+title = "xbc_verify_tree() names the wrong node in its unclosed-brace error"
+subsystem = "lib/bootconfig"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2026-03-12"
+author = "Josh Law"
+source = "git log"
+harness_dir = "tests/irl/linux/bootconfig_rediscovery"
+pin = "tests/irl/linux/pins/bootconfig_rediscovery.conf"
+effort = "small"
+mechanism = """xbc_verify_tree() reports an unclosed brace using \
+open_brace[brace_index], but __xbc_open_brace() post-increments, so the index \
+is one past the last pushed entry: the error message names a stale node. The \
+bug is in what the diagnostic says, not in what the parser accepts."""
+harness = """bootconfig is a self-contained text parser: compile lib/bootconfig.c \
+into a stub harness and drive xbc_init() with generated KEY=VALUE text with \
+{ } nesting (the grammar generator is the work)."""
+property = "an error message always names the node that is actually unclosed"
+why = """A text-grammar target, and a diagnostic-content bug: a property that \
+only checks that an error exists misses it (the May run did)."""
+notes = "First of a three-patch series: 39ebc8d7f561, 1120a36bb1e9, 560f763baa0f."
+
+[[target]]
+fixed_by = "560f763baa0f"
+title = "xbc_node_compose_key_after() mishandles the snprintf truncation check"
+subsystem = "lib/bootconfig"
+classes = ["overflow"]
+provenance = "curated"
+tier = "A"
+status = "candidate"
+fixed = "2026-03-12"
+author = "Josh Law"
+source = "git log"
+effort = "small"
+mechanism = "The snprintf truncation check is wrong, producing a wrong key length."
+harness = "the same harness as 39ebc8d7f561 would cover it"
+notes = "Same series as 39ebc8d7f561: one harness, several rediscoveries."
+
+[[target]]
+fixed_by = "8c2f1288250a"
+title = "mpi_read_raw_from_sgl() integer underflow on leading zeros"
+subsystem = "lib/crypto/mpi"
+classes = ["overflow", "uninit"]
+provenance = "curated"
+tier = "A"
+status = "candidate"
+fixed = "2026-04-12"
+author = "Lukas Wunner"
+source = "git log"
+effort = "small"
+mechanism = """mpi_read_raw_from_sgl(nbytes, sgl) counts leading zero bytes \
+walking the scatterlist, then computes nbytes - lzeros unsigned. When the \
+scatterlist is longer than nbytes and its first nbytes + 1 bytes are zero, \
+lzeros exceeds nbytes and the subtraction underflows into a huge size. \
+Reachable via KEYCTL_PKEY_ENCRYPT with out_len > in_len and an all-zero \
+input: a soft-lockup DoS."""
+harness = "a minimal scatterlist mock (the scatterlist harness has stubs), ~5-7 h"
+property = "returns a valid MPI or an error, never an oversized allocation"
+
+[[target]]
+fixed_by = "8c97a6ddc956"
+title = "minix statfs shift-out-of-bounds from an unchecked superblock field"
+subsystem = "fs/minix"
+classes = ["overflow"]
+provenance = "curated"
+tier = "C"
+status = "candidate"
+fixed = "2025-12-08"
+author = "Jori Koolstra"
+source = "syzbot https://syzkaller.appspot.com/bug?extid=5ad0824204c7bf9b67f2"
+effort = "medium"
+mechanism = """statfs computes block counts with shifts by values read straight \
+from the superblock; a large s_log_zone_size triggers UBSAN \
+shift-out-of-bounds. The fix range-checks it in minix_check_superblock()."""
+harness = """minix_check_superblock() on a generated struct, or just the shift \
+formula; minix headers compile with light stubs (~6-10 h for the mount path)."""
+property = "no UBSAN report on any superblock the check accepts"
+why = "The smallest kernel filesystem: a template for other superblock validators."
+
+[[target]]
+fixed_by = "dd9d3e16c2d5"
+title = "adfs_validate_bblk() accepts nzones = 0"
+subsystem = "fs/adfs"
+classes = ["oob"]
+provenance = "curated"
+tier = "C"
+status = "candidate"
+fixed = "2026-03-21"
+author = "Bae Yeonju"
+source = "syzbot (named in the commit)"
+effort = "medium"
+mechanism = """adfs_validate_bblk() doesn't reject nzones == 0. \
+adfs_read_map() then gets ZERO_SIZE_PTR from kmalloc_array(0, ...), and \
+adfs_map_layout() writes dm[-1], before the allocated buffer."""
+harness = "wire adfs_validate_bblk() to a generated boot-block buffer (~4-6 h)"
+property = "a disc record the validator accepts has nzones > 0"
+why = "Checks whether wide-range integer draws hit a 0-not-allowed oversight."
+
+[[target]]
+fixed_by = "fdb24a820a58"
+title = "squashfs read_metadata uses a negative offset as an index"
+subsystem = "fs/squashfs"
+classes = ["oob"]
+provenance = "curated"
+tier = "C"
+status = "candidate"
+fixed = "2026-02-17"
+author = "Phillip Lougher"
+source = "syzbot https://syzkaller.appspot.com/bug?extid=a9747fe1c35a5b115d3f"
+effort = "medium"
+mechanism = """A corrupted index lookup table yields a negative metadata block \
+offset, which squashfs_read_metadata() passes to squashfs_copy_data() as an \
+array index: an out-of-bounds read. The fix rejects offset < 0 or \
+>= SQUASHFS_METADATA_SIZE."""
+harness = """extract squashfs_read_metadata() with a stubbed \
+squashfs_cache_get() (~8-12 h, the cache mocks are the work)"""
+property = "every accepted offset reads in bounds"
+why = "A signed/unsigned bug: found only if the generator draws negative values."
+
+[[target]]
+fixed_by = "3bd5e45c2ce3"
+title = "UDF lengthAllocDescs out-of-bounds read during extent truncation"
+subsystem = "fs/udf"
+classes = ["oob"]
+provenance = "curated"
+tier = "C"
+status = "candidate"
+fixed = "2025-09-22"
+author = "Larshin Sergey"
+source = "syzbot https://syzkaller.appspot.com/bug?extid=8743fca924afed42f93e"
+effort = "medium"
+mechanism = """In an Allocation Extent Descriptor, the on-disk lengthAllocDescs \
+is added to sizeof(allocExtDesc); when the sum exceeds the block size, \
+udf_update_tag() runs crc_itu_t() over out-of-bounds memory. Triggered on \
+close when extents are truncated (udf_release_file -> extent_trunc)."""
+harness = "the descriptor-validation path only (~10-15 h: a deep header tree)"
+property = "an accepted descriptor fits its block: lengthAllocDescs + header <= block size"
+why = "A length-prefixed buffer overflow."
+
+[[target]]
+fixed_by = "b6b592275aef"
+title = "HFS+ uninitialized read via an undersized catalog record"
+subsystem = "fs/hfsplus"
+classes = ["uninit"]
+provenance = "curated"
+tier = "C"
+status = "candidate"
+fixed = "2026-03-07"
+author = "Deepanshu Kartikey"
+source = "syzbot https://syzkaller.appspot.com/bug?extid=d80abb5b890d39261e72"
+effort = "medium"
+mechanism = """hfs_brec_read() checks entrylength <= buffer size but not that \
+it covers the record type. A catalog record with rec_len 520 and \
+entrylength 26 leaves 494 bytes of an hfsplus_cat_thread uninitialised; the \
+uninitialised nodeName then indexes case_fold in hfsplus_strcasecmp() (KMSAN)."""
+harness = "a tagged record (folder / file / thread) with a decoupled length (~12-18 h)"
+property = "after a successful read, the destination is fully initialised"
+why = "A tagged union whose tag doesn't match its payload size."
+
+# ------------------------------------------------------- round 2 (2026-05) ----
+
+[[target]]
+fixed_by = "4f6a6bed0bfe"
+title = "mab_calc_split() can leave a deficient right node"
+subsystem = "lib/maple_tree"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "candidate"
+fixed = "2024-11-13"
+author = "Wei Yang"
+source = "git log"
+effort = "ready"
+mechanism = """mab_calc_split()'s minimum-span loop was passed min = 0 for all \
+leaves, never enforced what it claimed, and could leave the right side of a \
+split with fewer than mt_min_slots slots: a deficient node, which later \
+operations see as a tree-shape violation. The fix removes the loop."""
+harness = """snapshot lib/maple_tree.c at 4f6a6bed0bfe~1 (the fix spans several \
+functions: no single-line revert) and drive node splits with a stateful \
+sequence of insert_range / store / erase"""
+property = "mt_validate() passes after every operation"
+notes = "A first harness was dropped as false on 2026-10-21; see TODO.md."
+
+[[target]]
+fixed_by = "0ea120b278ad"
+title = "mas_store_root() NULL store on an empty tree breaks NULL coalescing"
+subsystem = "lib/maple_tree"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2024-10-31"
+author = "Wei Yang"
+source = "git log"
+harness_dir = "tests/irl/linux/maple_store_root"
+pin = "tests/irl/linux/pins/maple_store_root.conf"
+effort = "ready"
+mechanism = """Storing NULL over a range including index 0 of an empty tree \
+creates a single-entry node holding NULL; further NULL stores leave \
+consecutive NULL slots, against the invariant that adjacent NULLs are \
+coalesced. The tree is corrupt, and readers later get wrong values."""
+property = "the tree's structural invariants hold (an emptiness check, not just load == model)"
+why = "Pure invariant corruption, no crash: a value oracle alone misses it."
+notes = "One day before the selection window (2024-11-01); kept as a ready target."
+
+[[target]]
+fixed_by = "fba46a5d83ca"
+title = "mas_preallocate() keeps MA_STATE_PREALLOC across a second, larger preallocation"
+subsystem = "lib/maple_tree"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "missed"
+fixed = "2025-06-16"
+author = "Liam R. Howlett"
+source = "git log"
+harness_dir = "tests/irl/linux/maple_prealloc"
+pin = "tests/irl/linux/pins/maple_prealloc.conf"
+effort = "small"
+mechanism = """mas_preallocate() sets MA_STATE_PREALLOC ("already allocated, \
+don't allocate again"). Preallocating the same state twice, the second time \
+for a request needing more nodes, short-circuits the second allocation; the \
+store then WARN_ONs and dereferences NULL. The fix clears the flag during the \
+second preallocation."""
+property = "a store after two preallocations doesn't WARN or crash"
+why = "A stateful flag bug: what pure generators miss and state machines are for."
+
+[[target]]
+fixed_by = "c9ba5249ef8b"
+title = "xas_pause() skips indices when pausing inside a multi-index entry"
+subsystem = "lib/xarray"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2024-12-13"
+author = "Kemeng Shi"
+source = "git log"
+harness_dir = "tests/irl/linux/xarray_pause"
+pin = "tests/irl/linux/pins/xarray_pause.conf"
+effort = "small"
+mechanism = """After xas_load() lands on a multi-index entry, the index may point \
+mid-entry with bits below node->shift set. xas_pause() advances by \
+1 << node->shift without masking them, so it skips past the end of the entry \
+and misses the next one (17 + 16 = 33 skips 32). cachestat() returns wrong \
+values."""
+property = "iterating with pauses visits every index of the entry and the next entry"
+why = "Needs a pause mid-entry; pausing only at aligned bases never triggers it."
+notes = "Upstream's fix is itself incomplete: finding linux-xas-pause-sibling."
+
+[[target]]
+fixed_by = "010d7d984650"
+title = "build_mod8_tables() signed-shift undefined behavior"
+subsystem = "lib/bch"
+classes = ["overflow"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2026-03-18"
+author = "Josh Law"
+source = "git log"
+harness_dir = "tests/irl/linux/bch_mod8"
+pin = "tests/irl/linux/pins/bch_mod8.conf"
+effort = "ready"
+mechanism = """data = i << (8*b) with int i reaching 128 and b = 3 overflows \
+signed int (128 << 24): undefined behavior, silent under \
+-fno-strict-overflow, flagged by -fsanitize=undefined. Called from bch_init()."""
+harness = "bch_init(m, t, 0) with m in [5, 15], t in [1, 64]: a two-integer generator"
+property = "no UBSAN report"
+why = """Only a sanitizer sees it (a round-trip passes), and the harness builds \
+with UBSan already: the smallest possible scaffolding."""
+
+[[target]]
+fixed_by = "8b46fdaea819"
+title = "sg_split_phys() resets the offset of every split entry"
+subsystem = "lib/sg_split"
+classes = ["wrong-result"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2025-03-19"
+author = "T Pratham"
+source = "git log"
+harness_dir = "tests/irl/linux/sg_split"
+pin = "tests/irl/linux/pins/sg_split.conf"
+effort = "small"
+mechanism = """split_sg_phys() sets out_sg->offset = 0 for every entry after a \
+split; only the first entry's offset should change. Consumers then read the \
+wrong physical addresses."""
+property = "output bytes equal the matching input bytes (a byte-level oracle)"
+why = "A pure equational property, no kernel state."
+notes = """Hunting it turned up our own find in the same file \
+(linux-sg-split-overshoot), its own target below."""
+
+[[target]]
+fixed_by = "df831e977394"
+title = "group_cpus_evenly() dereferences ZERO_SIZE_PTR when numgrps = 0"
+subsystem = "lib/group_cpus"
+classes = ["null-deref"]
+provenance = "curated"
+tier = "A"
+status = "candidate"
+fixed = "2025-06-19"
+author = "Yu Kuai"
+source = "git log"
+effort = "small"
+mechanism = """kcalloc(numgrps, ...) returns ZERO_SIZE_PTR for numgrps == 0 and \
+the result is dereferenced. Repro: echo 0 > poll_queues on a null_blk device. \
+The fix returns NULL early."""
+harness = """compile lib/group_cpus.c with the radix-tree harness's cpumask shim \
+or a small kcalloc / cpumask stub (~3-4 h)"""
+property = "group_cpus_evenly(n) doesn't crash for any n"
+why = "A boundary bug (n = 0) a full-range draw should hit at once."
+notes = "tests/irl/repro-driver/t01_group_cpus has a draft harness (untracked)."
+
+[[target]]
+fixed_by = "ea9b77f98d94"
+title = "mt_destroy_walk() frees a root leaf without marking it dead"
+subsystem = "lib/maple_tree"
+classes = ["uaf"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2025-06-24"
+author = "Wei Yang"
+source = "git log"
+harness_dir = "tests/irl/linux/maple_destroy_walk"
+pin = "tests/irl/linux/pins/maple_destroy_walk.conf"
+effort = "ready"
+mechanism = """mt_destroy_walk() should mark every node dead before freeing it. \
+When the whole tree is one root leaf, the descend step is skipped and the \
+leaf is freed unmarked; RCU readers then see a freed node that isn't marked \
+dead. The fix marks it before goto free_leaf."""
+property = "a node is marked dead before call_rcu frees it"
+why = """A race whose symptom needs threads, but whose invariant doesn't: hold \
+rcu_read_lock across the destroy and check the mark."""
+
+[[target]]
+fixed_by = "d4dba3b9c03a"
+title = "decompress_bunzip2 get_bits() 32-bit shift undefined behavior"
+subsystem = "lib/decompress_bunzip2"
+classes = ["overflow"]
+provenance = "curated"
+tier = "A"
+status = "harness-only"
+fixed = "2026-03-08"
+author = "Josh Law"
+source = "git log"
+harness_dir = "tests/irl/linux/bunzip2"
+pin = "tests/irl/linux/pins/bunzip2.conf"
+effort = "small"
+mechanism = """get_bits() computes (1 << bd->inbufBitCount) - 1 with \
+inbufBitCount reaching 32: undefined behavior. Reachable on malformed bzip2 \
+input during early-boot decompression. The fix widens to 1ULL."""
+property = "no UBSAN report on any input bytes"
+why = "Throw bytes at a parser and watch the sanitizer."
+
+# ----------------------------------------------------------- our own finds ----
+
+[[target]]
+finding = "linux-sg-split-overshoot"
+title = "sg_calculate_split() nb_splits overshoot on partial coverage"
+subsystem = "lib/sg_split"
+classes = ["wrong-result"]
+provenance = "found"
+tier = "A"
+status = "found-and-submitted"
+harness_dir = "tests/irl/linux/sg_split"
+pin = "tests/irl/linux/pins/sg_split.conf"
+
+[[target]]
+finding = "linux-packing-le-oob"
+title = "pack() / unpack() heap OOB with LITTLE_ENDIAN and a buffer not a multiple of 4"
+subsystem = "lib/packing"
+classes = ["oob"]
+provenance = "found"
+tier = "A"
+status = "found-novel"
+harness_dir = "tests/irl/linux/packing_roundtrip"
+pin = "tests/irl/linux/pins/packing_roundtrip.conf"

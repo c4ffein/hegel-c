@@ -3,7 +3,7 @@
 # Part of hegel-c — see hegel/LICENSE for terms.
 #
 # Bugs hegel-c found itself, in any project, and where each one stands.
-# Rediscoveries of already-fixed bugs live in docs/our_corpus.json instead.
+# Rediscovery targets (bugs upstream already fixed) live in docs/corpus.toml.
 # Bugs others found (Sashiko, by hand) are here when a submission of ours
 # fixes them; found_by says who found each one.
 #

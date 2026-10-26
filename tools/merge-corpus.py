@@ -5,9 +5,9 @@
 """Union our curated/found bug corpus with sashiko's filtered corpus.
 
 Two sources, one merged rediscovery worklist:
-  ours    docs/our_corpus.json         — hegel-c curated candidates + our own
-                                          finds (idr, sg_split, packing, ...).
-                                          MIT; safe to keep in-tree.
+  ours    docs/corpus.toml             — hegel-c's rediscovery targets: curated
+                                          upstream fixes + our own finds (idr,
+                                          sg_split, packing, ...). MIT; in-tree.
   theirs  .corpus/judge_key.json        — sashiko's PBT-eligible slice, produced
                                           by tools/filter-corpus.py. Apache-2.0
                                           descriptions; stays in gitignored .corpus/.
@@ -22,12 +22,16 @@ Emits the same blind split as filter-corpus.py:
                              NO description. Hunter-visible.
   merged_judge_key.json    — full entries. Judge-only.
 
-Usage: tools/merge-corpus.py [--ours docs/our_corpus.json]
+Our targets are converted to sashiko's shape: fixed_by -> Fixed-by, mechanism
+(or title) -> problem_description; a target that is one of our findings has no
+fix SHA and is keyed by its finding id.
+
+Usage: tools/merge-corpus.py [--ours docs/corpus.toml]
                              [--theirs .corpus/judge_key.json] [-o .corpus/]
 Keep merged_judge_key.json out of the MIT tree — it embeds Apache-2.0 text.
 """
 
-import argparse, json, sys
+import argparse, json, sys, tomllib
 from pathlib import Path
 
 
@@ -35,14 +39,24 @@ def norm(sha):
   return sha.lower()[:12] if sha else None
 
 
+def as_sashiko(t):
+  """One docs/corpus.toml target in the shape of a sashiko benchmark entry."""
+  e = {k: t[k] for k in ("subsystem", "classes", "provenance", "tier", "harness_dir",
+                         "status", "finding") if k in t}
+  e["Fixed-by"] = t.get("fixed_by")
+  e["problem_description"] = " ".join(t.get("mechanism", t["title"]).split())
+  return e
+
+
 def main():
   ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-  ap.add_argument("--ours", default="docs/our_corpus.json")
+  ap.add_argument("--ours", default="docs/corpus.toml")
   ap.add_argument("--theirs", default=".corpus/judge_key.json")
   ap.add_argument("-o", "--outdir", default=".corpus")
   args = ap.parse_args()
 
-  ours = json.load(open(args.ours))
+  with open(args.ours, "rb") as f:
+    ours = [as_sashiko(t) for t in tomllib.load(f).get("target", [])]
   theirs = json.load(open(args.theirs)) if Path(args.theirs).exists() else []
   if not theirs:
     print(f"note: {args.theirs} missing — run tools/filter-corpus.py first "
@@ -52,7 +66,7 @@ def main():
   order = []
 
   def add(e, source):
-    key = norm(e.get("Fixed-by")) or f"_nofix_{e.get('subsystem')}_{len(order)}"
+    key = norm(e.get("Fixed-by")) or e.get("finding") or f"_nofix_{e.get('subsystem')}_{len(order)}"
     if key in merged:
       prev = merged[key]
       prev["source"] = "both"

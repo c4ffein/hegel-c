@@ -5,7 +5,8 @@
 """View and check docs/findings.toml: the bugs we found, and what we sent upstream.
 
 Also docs/runs.toml: each run that pointed hegel-c at bugs, with a verdict per
-target, so a newer hegel-c / skill / model can be checked against an older one.
+target, so a newer hegel-c / skill / model can be checked against an older one;
+and docs/corpus.toml, the rediscovery targets those runs are scored on.
 
 Submissions keep their patches and notes in git, one folder per version:
 submissions/<id>/v<N>[-<label>]/.  lint checks each folder against the ledger
@@ -45,7 +46,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 LEDGER = ROOT / "docs" / "findings.toml"
 RUNS = ROOT / "docs" / "runs.toml"
-CORPUS = ROOT / "docs" / "our_corpus.json"
+CORPUS = ROOT / "docs" / "corpus.toml"
 
 # ---- findings
 STATUSES = ["suspected", "confirmed", "patch-ready", "reported", "fixed-upstream", "withdrawn"]
@@ -81,6 +82,20 @@ VERSION_KEYS = {"v", "label", "sent", "built", "patches", "lore", "to"}
 SUBMISSIONS_DIR = "submissions"
 LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 PATCH_TAG_RE = re.compile(r"\[(?:RFC )?PATCH(?: v(\d+))?(?: (\d+)/(\d+))?\]")
+
+# ---- corpus (docs/corpus.toml)
+TGT_REQUIRED = ["title", "subsystem", "classes", "provenance", "tier", "status"]
+TGT_OPTIONAL = ["fixed_by", "finding", "fixed", "author", "source", "harness_dir", "pin",
+                "effort", "mechanism", "harness", "property", "why", "notes"]
+TGT_CLASSES = {"leak", "uaf", "double-free", "oob", "overflow", "off-by-one", "uninit",
+               "null-deref", "hang", "wrong-result", "error-path"}
+TGT_STATUSES = {"candidate", "rediscovered", "harness-only", "missed", "found-novel",
+                "found-and-submitted"}
+TGT_EFFORT = {"ready", "small", "medium", "large"}
+TGT_TIERS = {"A", "B", "C"}
+# A found-* target mirrors its finding: reported or not.
+FOUND_MIRROR = {"found-novel": {"suspected", "confirmed", "patch-ready"},
+                "found-and-submitted": {"reported", "fixed-upstream"}}
 
 # ---- runs (docs/runs.toml)
 RUN_KINDS = {"blind-recall", "harness", "pins", "hunt"}
@@ -412,16 +427,85 @@ def lint(led: dict) -> list[str]:
                         check_version(bad, s, v, ROOT / p / version_key(v))
     check_folders(errors, led)
     errors += lint_runs(led, tracked)
+    errors += lint_corpus(led, tracked)
     return errors
 
 
-def corpus_shas() -> dict[str, dict]:
-    """docs/our_corpus.json entries by 12-hex Fixed-by."""
+def load_corpus() -> list[dict]:
     try:
-        entries = json.loads(CORPUS.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return {e["Fixed-by"][:12]: e for e in entries if e.get("Fixed-by")}
+        with open(CORPUS, "rb") as f:
+            return tomllib.load(f).get("target", [])
+    except OSError:
+        return []
+
+
+def corpus_shas() -> dict[str, dict]:
+    """docs/corpus.toml targets by 12-hex fix SHA."""
+    return {t["fixed_by"][:12]: t for t in load_corpus() if t.get("fixed_by")}
+
+
+def lint_corpus(led: dict, tracked: set[str] | None) -> list[str]:
+    errors: list[str] = []
+    finds = {f.get("id"): f for f in led["findings"]}
+    seen: set[str] = set()
+    for i, t in enumerate(load_corpus()):
+        key = t.get("fixed_by") or t.get("finding") or f"#{i + 1}"
+
+        def bad(msg: str, key=key) -> None:
+            errors.append(f"corpus.toml: {key}: {msg}")
+
+        for k in TGT_REQUIRED:
+            if not t.get(k):
+                bad(f"missing {k}")
+        for k in t:
+            if k not in TGT_REQUIRED + TGT_OPTIONAL:
+                bad(f"unknown field {k}")
+        if bool(t.get("fixed_by")) == bool(t.get("finding")):
+            bad("needs exactly one of fixed_by and finding")
+        if t.get("fixed_by") and not re.match(r"^[0-9a-f]{12,40}$", t["fixed_by"]):
+            bad("fixed_by must be 12 to 40 hex digits")
+        k12 = (t.get("fixed_by") or "")[:12] or t.get("finding")
+        if k12 in seen:
+            bad("listed twice")
+        seen.add(k12)
+        for k, allowed in (("tier", TGT_TIERS), ("status", TGT_STATUSES),
+                           ("effort", TGT_EFFORT), ("provenance", {"curated", "found"})):
+            if t.get(k) and t[k] not in allowed:
+                bad(f"{k} must be one of {', '.join(sorted(allowed))}")
+        for c in t.get("classes", []):
+            if c not in TGT_CLASSES:
+                bad(f"class {c} not in {', '.join(sorted(TGT_CLASSES))}")
+        if t.get("fixed") and not re.match(r"^\d{4}-\d{2}-\d{2}$", t["fixed"]):
+            bad("fixed must be YYYY-MM-DD")
+        f = finds.get(t.get("finding")) if t.get("finding") else None
+        if t.get("finding"):
+            if not f:
+                bad("finding is not in docs/findings.toml")
+            if t.get("provenance") != "found":
+                bad("a finding's target has provenance found")
+            if t.get("status") not in FOUND_MIRROR:
+                bad("a finding's target has status found-novel or found-and-submitted")
+            elif f and f.get("status") not in FOUND_MIRROR[t["status"]]:
+                bad(f"status {t['status']} doesn't match the finding's {f.get('status')}")
+        elif t.get("status") in FOUND_MIRROR:
+            bad(f"status {t['status']} is for our own finds (finding = ...)")
+        if t.get("status") in ("rediscovered", "harness-only", "missed") and not t.get("harness_dir"):
+            bad(f"status {t['status']} needs a harness_dir")
+        for k in ("harness_dir", "pin"):
+            p = t.get(k)
+            if not p:
+                continue
+            if not (ROOT / p).exists():
+                bad(f"{k} {p} does not exist")
+            elif tracked is not None and not is_tracked(p, tracked):
+                bad(f"{k} {p} is not in git")
+        pin = t.get("pin")
+        if pin and (ROOT / pin).is_file() and t.get("fixed_by"):
+            if t["fixed_by"][:12] not in (ROOT / pin).read_text(encoding="utf-8"):
+                bad(f"pin {pin} doesn't name fix {t['fixed_by']}")
+        if t.get("harness_dir") and not pin:
+            bad("a target with a harness_dir names its pin")
+    return errors
 
 
 def run_verdicts(kind: str) -> list[str]:
@@ -499,7 +583,7 @@ def lint_runs(led: dict, tracked: set[str] | None) -> list[str]:
                     bad(f"result {t}: not a pin file")
             elif SHA_RE.match(t):
                 if t[:12] not in shas:
-                    bad(f"result {t}: no Fixed-by {t} in docs/our_corpus.json")
+                    bad(f"result {t}: no target with fixed_by {t} in docs/corpus.toml")
             elif t not in fids:
                 bad(f"result {t}: not a corpus SHA, a finding id or a pin file")
             if kind and res.get("verdict") not in run_verdicts(kind):
@@ -980,12 +1064,14 @@ def cmd_serve(led: dict, args) -> int:
 def cmd_lint(led: dict, args) -> int:
     errors = lint(led)
     for e in errors:
-        print(e if e.startswith("runs.toml:") else f"findings.toml: {e}", file=sys.stderr)
+        print(e if e.startswith(("runs.toml:", "corpus.toml:")) else f"findings.toml: {e}",
+              file=sys.stderr)
     if errors:
         print(f"{len(errors)} problem(s)", file=sys.stderr)
         return 1
     print(f"findings.toml: {len(led['findings'])} findings, {len(led['submissions'])} "
-          f"submissions, ok; runs.toml: {len(led['runs'])} runs, ok")
+          f"submissions, ok; runs.toml: {len(led['runs'])} runs, ok; corpus.toml: "
+          f"{len(load_corpus())} targets, ok")
     return 0
 
 

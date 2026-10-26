@@ -74,7 +74,8 @@ two methods compose, they don't compete.
 5. **Their benchmark corpus is now our rediscovery ground truth.**
    `benchmarks/benchmark.json` (999 unfiltered `Fixes:`-tagged bugs with
    buggy/fix SHAs) subsumes hand-curated shortlists — it contained
-   `BUG_REDISCOVERY_CANDIDATES.md`'s #1 idr bug verbatim (`c6e8e595a079`).
+   our hand-picked #1 target, the idr bug, verbatim (`c6e8e595a079`, now in
+   `docs/corpus.toml`).
    `tools/filter-corpus.py` extracts the PBT-eligible slice (~236 of 999 are
    dynamic-class; ~53 in harnessable subsystems) and splits output for blind
    hygiene: `hunt_targets.json` (SHAs + subsystem only, hunter-visible) vs.

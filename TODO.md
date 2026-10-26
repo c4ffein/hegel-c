@@ -6,10 +6,44 @@
 
 ## Next up (2026-10-21)
 
-- **Gen-layer bake-off.** Two candidate designs for the generator layer
-  above `hegel_c.h` (options B and C in `docs/gen_layer_options_2026_10_05.md`,
-  compared in `docs/gen_layer_comparison_2026_10_05.md`): port the same
-  handful of real harnesses to each and pick on the result.
+- **Gen-layer bake-off: B vs C.** Still undecided. The rebase kept today's
+  schema layer (`hegel_gen.h`, LET/USE included) and only moved its internals
+  to libhegel (`HEGEL_SELF` on the recursion protocol); option C was never
+  built. Plan: write the same real harnesses (Scotch CSR, an xarray target, a
+  big third-party struct that evolves, one value shipped to a remote target)
+  in C's style next to today's, then pick.
+  - *The question underneath:* is hegel-c "describe your C types, get
+    everything free" (B) or "Hypothesis's engine with C ergonomics" (C)? The
+    bughunt workload argues C; a library for strangers and the embedded
+    ship-the-schema idea argue B.
+  - *B, conservative port:* `HEGEL_STRUCT` stays. LET/USE goes, because the
+    collection protocol makes lengths an output of the engine (pre-drawing
+    `n` forfeits deletion shrinking): counts are back-filled with
+    `HEGEL_LEN_OF(items)`, bounds come from `HEGEL_INT_BELOW(name)`, and
+    `HEGEL_FIELD(T, name, entry)` checks offsetof and member size, which also
+    catches two same-size fields swapped. 31 schema kinds → 15; most
+    selftests unchanged. Loses: parallel arrays sharing one drawn length
+    (`xs, ys, n`) become inexpressible; a reference typo becomes a runtime
+    abort.
+  - *C, fill functions:* a generator is `void gen_foo (hegel_ctx *g, Foo
+    *out)`; dependent fields are code reading fields already written (CSR
+    endpoints are just `H_INT (g, 0, nvert - 1)` plus `h_list_reject` for
+    duplicates). Arena owns all drawn memory, so no free code; lengths come
+    out of the call (`out->items = h_arr_int (g, &out->n, 0, 10, 0, 100)`);
+    `H_COMPOSITE (g)` labels each function's span; `H_GEN` sugar for the
+    trivial case. ~1,100 LOC vs ~2,600 for B. Loses: a forgotten field is
+    silently zero, a forgotten `H_COMPOSITE` silently flattens shrink
+    structure, and when a third-party struct grows a field nothing fails the
+    build (today the sizeof assert does).
+  - *Where each wins:* CSR, jagged 2D and unions favor C (dependencies are
+    locals, a union is an `if`); recursive trees favor B (the protocol stays
+    hidden); struct drift favors B (the build-time alarm is the reason the
+    declarative family exists). Only B keeps the schema as data, which is
+    what tooling or shipping the schema to a board would need.
+  - Two other options were drafted on 2026-10-05 and set aside: A, a thin
+    veneer (C without its discipline), and D, handles/facets V2 (one draw,
+    named facets projected into slots; biggest migration, one silent
+    footgun: a missing `HEGEL_OUTER` turns into per-element draws).
 - **`hegel_target(tc, score, label)`.** No longer blocked: libhegel 0.48
   exports `hegel_target` and the TARGET phase hill-climbs toward the
   scores. One new op in the wire protocol + a selftest where random
@@ -35,7 +69,7 @@
   drop the deleted `hegel_gen_*` API, add `hegel_run_options` and
   `HEGEL_C_REPRODUCE`.
 - **Skill update for the 3 missed bug classes** (2026-05-25 rediscovery,
-  `BUG_REDISCOVERY_CANDIDATES.md`, pins in `tests/irl/linux/pins/`): diagnostic content
+  targets in `docs/corpus.toml`, pins in `tests/irl/linux/pins/`): diagnostic content
   (bootconfig — SKILL.md still says not to check what errors say),
   bookkeeping-state mutators (maple_prealloc), and an explicit note on the
   concurrency limit (maple_destroy_walk, RCU race). Validate by re-running
