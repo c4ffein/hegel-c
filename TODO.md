@@ -614,6 +614,31 @@ and regex draws are full-match.)
 
 ## API polish
 
+### Friction backlog from real tests (2026-05-01 burst)
+
+Five subagents wrote tests against diverse kernel targets (BQL, kfifo,
+bitmap, maple tree, ts_kmp) to collect API friction, not bugs. Votes =
+how many of them hit it independently. `hegel_draw_bytes` (2 votes) shipped
+then; the rest is open. Gen-layer items from that list are gone with the
+old gen layer.
+
+- **`HEGEL_ASSERT_EQ` / `_NE` / `_LT` / `_LE` / `_GT` / `_GE`** (+ `_PTR`,
+  `_BYTES(a, b, n)`) — 2 votes: ~70% of invariant code was format strings.
+  Print both sides automatically (`_Generic` for the integer types).
+- **Weighted rules:** `hegel_state_machine_add_rule_weighted(sm, name, fn, w)`
+  — 2 votes: tests registered one rule under several names to bias the
+  pick, which pollutes traces.
+- **Invariant context:** let an invariant know which rule just ran (name,
+  index) for its message — 2 votes.
+- **Doc: dynamic bounds** — 2 votes: `hegel_draw_int(tc, 0, state->n - 1)`
+  works directly; testers reached for draw + clamp + assume first.
+- 1 vote each: pick the k-th present item (`hegel_draw_index_of`);
+  `hegel_draw_one_of(tc, n)` as a self-documenting int + switch; K-of-N
+  subsets; byte draws from a non-contiguous alphabet; a precondition shared
+  by several rules; per-test case count in suites (`hegel_suite_add_n`); a
+  `_ctype` table and `scnprintf` stub for the radix-tree harness (parsers
+  fail to link without them).
+
 ### Rename / clarify `HEGEL_SELF`
 
 `HEGEL_SELF(T, f)` silently expands to a binding that places

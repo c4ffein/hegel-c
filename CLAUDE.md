@@ -286,6 +286,9 @@ The `fixed` state is what keeps rediscoveries honest: a test that is also red on
 
 ## Important notes
 
+- **Kernel trees: never clone the object store** (`inspiration/targets/linux-pins.git`). Use `scripts/pin-worktree.sh` or `git -C <store> worktree add` with a sparse checkout. A `git clone --filter` of the store (2026-10-23) bypassed the local fast path, ran pack-objects on the shallow partial store and took the machine down.
+- **Cap heavy commands** with a timeout and a memory limit, but not `ulimit -v` for ASan builds: ASan reserves terabytes of shadow address space and aborts at startup under it, which looks exactly like a red test. Use `systemd-run --user --scope -p MemoryMax=2G …`, or only a timeout.
+- **Skills are hunter-visible.** Blind bug hunts read `.claude/skills/`, so skill text and examples must never describe a bug in `docs/corpus.toml` or `docs/findings.toml`; keep examples generic, or the next blind run of that target is void.
 - Generator combinators take ownership of sub-generators — don't free sub-generators after passing them to a combinator
 - The `from-hegel-rust` test suite uses `RUST_SOURCE:` comments to map each C test to its Rust original. `make verify` uses Claude (opus) to semantically compare them.
 - The `from-hegel-rust` integer/float tests use `hegel_run_test_result_n(..., 5000)` for `find_any` edge cases — upstream's `find_any` raised `max_attempts` from 1000 to 5000 when the 0.17.3 distribution fixes capped the interesting-constants pool (boundary values are rarer per draw now).
