@@ -1,0 +1,83 @@
+To: francois.pellegrini@labri.fr
+From: c4ffein <c4ffein.work@gmail.com>
+Subject: archDecoArchBuild(): terminal pairing still wrong after e6c094fc — analysis, fix and check test
+
+Bonjour François,
+
+This message was written by Claude, an AI model by Anthropic (Fable 5),
+at the request of c4ffein, who ran the analysis session, reviewed the
+results, and is sending it from his address. He is the human contact
+for anything that follows; the complete working transcript is attached
+as conversation.txt so you can see exactly how the conclusions were
+reached. The technical claims below were all verified by building and
+running the attached test against three states of your tree.
+
+The subject is the archDecoArchBuild() base-value problem addressed by
+commit e6c094fc ("use proper domain for distance computations when
+building `deco 0` subgraph", 2026-07-04). I believe the new lookup
+fixes the out-of-bounds read but replaces it with a subtler mispairing,
+and I would like to propose an alternative one-line fix, with a
+regression test for the check suite. Two patches are attached
+(formatted against v7.0.12 + e6c094fc).
+
+The problem with `&mappdat.domntab[termdomnum]` is that it assumes
+domain index i in domntab is the terminal domain of vertex i. The job
+loop hands out domain indices in split-creation order, driven by the
+LIFO job list — not in vertex order. Minimal counterexample, at base 0:
+a 4-vertex path 0-1-2-3 with edge loads {169, 199, 169}, which force the
+bipartition sequence {0,1}|{2,3}, then {0}|{1}, then {2}|{3}:
+
+  - dom1 = {2,3} (first split), dom2 = {1} (job {0,1} is popped first),
+    dom3 = {3}; so the vertex -> domain map is 0->0, 1->2, 2->1, 3->3;
+  - pairing vertex i with domain i swaps vertices 1 and 2: the sibling
+    leaves 4 and 5 of the decomposition tree end up labeled {0, 2} —
+    two vertices that the first bipartition deliberately separated.
+
+The resulting architecture is internally self-consistent (each label
+appears once, weights and leaf distances match the labels), which is why
+no existing check catches it — but its tree no longer reflects the
+topology of the input graph, so every mapping computed onto it optimizes
+against a scrambled hierarchy. Note this happens at base 0 too, where
+the pre-e6c094fc code was correct.
+
+The fix I would suggest is to keep the per-vertex lookup and only drop
+the spurious rebasing, since mappdat.parttax is already a based array
+(rebased at arch_build.c:186, written with based indices at lines 259
+and 267, like every other mapDomain() call site in libscotch):
+
+  termverttab[termdomnum].num = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum));
+
+Patch 0001 does exactly that. Patch 0002 adds a check-suite test
+(test_scotch_arch_build) that builds deco 0 architectures from weighted
+path graphs whose edge loads force the bipartition (all loads within a
+factor of two, so single-edge cuts stay cheapest and parts contiguous;
+median edge of every interval strictly largest, hence cut first). It
+then verifies, from the saved "deco 1" data, that sibling singleton
+leaves carry adjacent path vertices, that leaf labels form a bijection,
+and that the architecture is invariant under the graph base value
+(bases 0, 1 and 100000 — the commented-out m4x4_b100000 line in
+src/check/Makefile suggests you already ran into the original lookup
+bug, and that check should be enableable again after the fix). Results
+on c4ffein's machine (v7.0.12, gcc/OpenMPI, IDXSIZE64):
+
+  - v7.0.12 as released:  FAIL — "root domain does not hold all
+    terminals (2 != 3, base 1)" (the base-1 out-of-bounds lookup);
+  - v7.0.12 + e6c094fc:   FAIL — "sibling leaves 4 and 5 hold
+    non-adjacent vertices 0 and 2 (base 0)";
+  - v7.0.12 + patch 0001: pass.
+
+A more detailed writeup is attached (analysis.md), including a couple of
+side observations: the distance BFS in archDecoArchBuild() is not
+shortest-path on edge-loaded graphs (FIFO queue with weighted
+accumulation), and the return value of archDecoArchBuild2() is ignored.
+
+Merci pour Scotch,
+
+Claude (Fable 5, Anthropic) — analysis and drafting
+c4ffein <c4ffein.work@gmail.com> — verification, review and contact
+
+Attachments:
+  0001-Bugfix-pair-terminal-vertices-with-their-own-domain-.patch
+  0002-Add-semantic-check-for-deco-0-architecture-building.patch
+  analysis.md
+  conversation.txt

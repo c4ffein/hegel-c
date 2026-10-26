@@ -1,0 +1,299 @@
+==============================================================================
+USER
+==============================================================================
+Hey, do you think there is a problem in src/libscotch/arch_build.c, around line 311? Please do a thorough technical analysis about why we could obtain invalid partitionings in the end
+
+==============================================================================
+CLAUDE (Fable 5)
+==============================================================================
+I'll take a look at that file and the surrounding logic.
+  [tool: Read] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/libscotch/arch_build.c
+  [tool: Bash] Show git history for arch_build.c
+  [tool: Bash] Find mapDomain definition
+  [tool: Bash] Look for target.conf pin info
+  [tool: Bash] Inspect fetch-target script and find conf files
+  [tool: Bash] Blame the terminal-vertex loop lines
+  [tool: Bash] Check induced-graph vnumtax semantics and vcmplt domNum
+The blame is a shallow-clone boundary, so no history there. Let me check how `mapDomain` is called elsewhere in the library, and confirm the vnumtax basing in `graph_induce.c`.
+  [tool: Bash] Find all mapDomain call sites
+  [tool: Read] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/libscotch/graph_induce.c
+  [tool: Bash] Read archDecoArchBuild2 implementation
+  [tool: Bash] Read vcmplt domNum and domBipart
+Let me check the `archDecoArchDist` macro and `archDomFrst` for vcmplt to complete the picture.
+  [tool: Bash] Read deco dist macros and vcmplt DomFrst
+Yes — there is a real defect there. The problematic statement is the one feeding lines 310–311, namely line 309:
+
+```c
+termverttab[termdomnum].num = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum - tgtgrafptr->baseval));
+```
+
+It passes an **unbased** vertex index to `mapDomain`, but `mappdat.parttax` is a **based** array. Everything downstream of that mismatch is built on the wrong vertex-to-terminal association. Here is the full chain.
+
+## The indexing inconsistency
+
+`mapDomain` is `&map->domntab[map->parttax[idx]]` (`mapping.h:162`) — it just indexes `parttax` with whatever you give it.
+
+How `mappdat.parttax` is indexed everywhere else in this function:
+
+- `arch_build.c:186`: `mappdat.parttax -= tgtgrafptr->baseval;` — the array is explicitly rebased, so valid indices are `[baseval, baseval + vertnbr)`.
+- The write sites during the recursive bipartitioning loop use based indices:
+  - `arch_build.c:267` (job graph without `vnumtax`): `mappdat.parttax[actvertnum]` with `actvertnum` running from `baseval` to `vertnnd` — based.
+  - `arch_build.c:259` (induced job graphs): `mappdat.parttax[actgrafdat.s.vnumtax[actvertnum]]`. Induced-graph `vnumtax` entries are **based** original-graph vertex numbers — `graph_induce.c:184` stores `orgvertnum` which iterates from `baseval`, and `graph_induce.c:355` composes nested inductions back to the root graph, preserving basing.
+- Every other `mapDomain` call site in libscotch (`kgraph_map_rb.c:630`, `kgraph_map_rb.c:651`, `kgraph_map_fm.c:670`) passes a based vertex number directly.
+
+Line 309 alone subtracts `baseval` first. Since `parttax` was already rebased, `mapDomain(&mappdat, tgtvertnum - baseval)` actually reads `parttax_orig[tgtvertnum - 2*baseval]`.
+
+With `baseval == 0` the two conventions coincide and nothing is visibly wrong — which is why the common C-API path never trips over it. With `baseval == 1` (the Fortran API, or any C caller that builds its architecture graph base-1, which `SCOTCH_graphBuild` fully permits):
+
+1. **For the first terminal** (`tgtvertnum == 1`): it reads `parttax_orig[-1]` — an out-of-bounds heap read of the word *before* the block allocated at `arch_build.c:171`. That garbage value is then used as an index into `domntab`, which holds only `termdomnbr` entries — a second, wild out-of-bounds read. The `termnum` extracted from that fake `ArchDom` is arbitrary.
+2. **For every other terminal**: it reads the domain of vertex `tgtvertnum - 1` — a *different* vertex. The terminal record built at lines 307–309 therefore combines the label and weight of vertex *v* with the terminal number belonging to vertex *v − 1*.
+
+## Why this corrupts the architecture, not just its quality
+
+The recursion in the job loop splits domains until every job is a singleton, so at the end the map "target vertex → terminal number" is a bijection onto the leaves of the `varcmplt` binary tree (`archVcmpltDomBipart` numbers them root = 1, children `2n`/`2n+1`). The `num` field is not a cosmetic label — it is the **position in the recursive-bisection tree**, and `archDecoArchBuild2` uses it as a direct array index:
+
+- `arch_deco.c:145-147`: `domverttab[num - 1].labl/.size/.wght = ...`. With the shifted assignment, the last vertex's true terminal number is never assigned to any record, while the garbage `num` from step 1 lands somewhere arbitrary. Two outcomes, both bad:
+  - **Duplicate `num`**: two physical vertices write the same tree slot; one processor silently vanishes from the architecture. The upward accumulation (lines 150–159) then computes wrong `size`/`wght` for every ancestor. The sanity check `domverttab[0].size != termdomnbr` (`arch_deco.c:161`) only exists under `SCOTCH_DEBUG_ARCH1` — production builds proceed silently.
+  - **Hole in the tree**: a leaf slot inside the used region stays `ARCHDOMNOTTERM` with `size 0`, so some internal domain claims `size k` while its children sum to `k − 1`. Later, when a mapping recursively bipartitions over this architecture, that inconsistency yields empty subdomains or terminal lookups resolving to the wrong `.labl`.
+- **`termdommax` itself** (lines 310–311, the lines you pointed at) is computed over these corrupted `num` values. If the garbage `num` is huge, `archDecoArchBuild2` allocates `termdommax * (termdommax−1)/2` distance slots — an absurd allocation, or an integer overflow in the size computation leading to an undersized buffer. If the garbage is negative, it survives the `> termdommax` comparison and `domverttab[num - 1]` at `arch_deco.c:145` becomes an out-of-bounds **write** — heap corruption. The debug guard at `arch_deco.c:138` (`num > termdommax`) again only exists under `SCOTCH_DEBUG_ARCH1`, and doesn't catch negative values anyway.
+- **The distance matrix gets mis-keyed.** The BFS at lines 315–357 correctly measures distances between the `.labl` vertices, but `arch_deco.c:171` stores each distance at `archDecoArchDist(arch, num_i, num_j)` — indexed by the wrong terminal numbers. So the measured distance between processors *u* and *v* is attached to the tree pair for *u−1* and *v−1*. In the duplicate-`num` case, `archDecoArchDist(d, n, n)` evaluates `(n−1)(n−2)/2 + n − 1`, which aliases an unrelated pair's cell — silently clobbering other distances.
+
+## Net effect on the user
+
+Any partitioning later computed with `SCOTCH_graphMap` onto this deco architecture is built from a decomposition tree whose leaf labels, weights, and distances are shifted relative to the bisection that was actually performed. Concretely: vertex loads are balanced against the wrong processor capacities (weight of processor *v* sits at *v−1*'s tree position), communication costs are evaluated against distances between the wrong processor pairs, one processor can be missing from the architecture entirely while another appears twice, and the returned `parttab` contains processor labels inconsistent with the architecture graph the user described. That's an invalid partitioning even when it doesn't crash — and with the base-1 first-vertex path it can also crash or corrupt the heap outright.
+
+The fix would be to pass `tgtvertnum` unmodified (matching all other `mapDomain` call sites), since `mappdat.parttax` is already rebased.
+
+Two side observations while I was in there, distinct from this bug: the weighted "BFS" at lines 332–352 uses a plain FIFO queue while accumulating edge loads (`arch_build.c:348`) — first-visit distances aren't shortest paths on an edge-weighted target graph, so `termdisttab` is only an approximation there (a quality issue, and Dijkstra territory, but it doesn't invalidate the architecture the way the basing bug does). And note the whole thing is invisible in the standard base-0 test suites — a good hegel-c angle for `tests/irl/scotch` would be a property comparing the deco architecture built from the same graph at base 0 vs. base 1 (they must be identical), which also makes the `parttax_orig[-1]` read trip ASan deterministically.
+
+==============================================================================
+USER
+==============================================================================
+WDYT of this actual patch?         commit e6c094fcf2998c920e4d19f29170d8fa3ccc27c1
+Author: Francois PELLEGRINI <francois.pellegrini@labri.fr>
+Date:   Sat Jul 4 08:26:50 2026 +0200
+
+    Bugfix: use proper domain for distance computations when building `deco 0` subgraph
+
+diff --git a/src/libscotch/arch_build.c b/src/libscotch/arch_build.c
+index 0e6e6fa4..275aac3a 100644
+--- a/src/libscotch/arch_build.c
++++ b/src/libscotch/arch_build.c
+@@ -54,7 +54,7 @@
+ /**                # Version 6.0  : from : 28 jun 2011     **/
+ /**                                 to   : 15 may 2018     **/
+ /**                # Version 7.0  : from : 18 feb 2018     **/
+-/**                                 to   : 01 jul 2026     **/
++/**                                 to   : 03 jul 2026     **/
+ /**                                                        **/
+ /************************************************************/
+
+@@ -308,7 +308,7 @@ Context * const             contptr)              /*+ Execution context
+     tgtvertnum = (tgtlistptr != NULL) ? tgtlistptr->vnumtab[termdomnum] : (termdomnum + tgtgrafptr->baseval);
+     termverttab[termdomnum].labl = tgtvertnum;
+     termverttab[termdomnum].wght = (tgtgrafptr->velotax != NULL) ? tgtgrafptr->velotax[tgtvertnum] : 1;
+-    termverttab[termdomnum].num  = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum - tgtgrafptr->baseval));
++    termverttab[termdomnum].num  = archDomNum (&archdat, &mappdat.domntab[termdomnum]);
+     if (termverttab[termdomnum].num > termdommax) /* Find maximum terminal number */
+       termdommax = termverttab[termdomnum].num;
+   }
+
+==============================================================================
+CLAUDE (Fable 5)
+==============================================================================
+Interesting — this fixes the crash but I don't think it's the right fix. It replaces the per-vertex domain lookup with an index-based one that assumes an invariant the job loop doesn't provide. Let me lay it out.
+
+## What the patch gets right
+
+`&mappdat.domntab[termdomnum]` removes the `parttax` read entirely, so the base-1 disaster chain from before (OOB read of `parttax_orig[-1]` → wild `domntab` index → garbage/negative `num` → heap-corrupting write in `archDecoArchBuild2`) is gone. It also has a nice structural property: at loop end `domnnbr == termdomnbr` (every split adds exactly one domain, and the recursion runs until every domain is a singleton), so `domntab[0..termdomnbr-1]` enumerates each terminal leaf domain exactly once. The `num` values are therefore a clean bijection onto the leaf set — no duplicates, no holes, `termdommax` sane, debug checks pass.
+
+## What it gets wrong
+
+The patch asserts that **domain index `i` is the domain of terminal vertex `i`** — i.e., `parttax[tgtvertnum] == termdomnum`. But domain indices are assigned in *split-creation order* driven by the LIFO job stack (`arch_build.c:271-286`), which has no relationship to vertex rank. The correct pairing is exactly what `parttax` records at lines 259/267.
+
+Concrete counterexample, base 0, five vertices, even with perfectly contiguous bipartitions (e.g. a path 0–1–2–3–4):
+
+1. `job0`={0..4} splits into {0,1,2}/{3,4}. Subjob gets **dom1={3,4}**. Stack (joborg pushed last, popped first): [`job0`={0,1,2}, `job1`].
+2. Pop `job0`={0,1,2} → {0,1}/{2}: **dom2={2}**. Push joborg {0,1}.
+3. Pop `job0`={0,1} → {0}/{1}: **dom3={1}**.
+4. Pop `job1`={3,4} → {3}/{4}: **dom4={4}**, job1 keeps **dom1={3}**.
+
+Ground truth (`parttax`): vertex 1 → dom3, vertex 3 → dom1. The patch pairs vertex 1 ↔ dom1 and vertex 3 ↔ dom3 — **swapped**, in the most vanilla case imaginable. Tracing the vcmplt leaf numbers (root 1, children `2n`/`2n+1`): correct pairing is v0↔8, v1↔9, v2↔5, v3↔6, v4↔7 — note {8,9} are siblings holding the topologically adjacent v0,v1, exactly what `deco 0` is for. The patched pairing puts v3 at leaf 9 instead, so the subtree that the bisection built around {v0,v1} now claims to contain {v0,v3} — processors the bisection deliberately put in *opposite* halves.
+
+## Consequences
+
+The mispairing is *self-consistent*: leaf `num_i` carries `labl` v_i, weight w(v_i), and the leaf-pair distance slots (`arch_deco.c:171`) get the BFS distance between their own labels. Each processor appears exactly once with its correct weight and correct pairwise distances. So the architecture is **valid** — mappings won't crash, won't drop processors, and balance correctly.
+
+What's silently destroyed is the entire point of building a deco architecture by recursive bisection: the tree hierarchy no longer groups topologically close processors, so the recursive-bisection mapper loses its structural guidance and communication quality degrades. And note this is a **regression at base 0**, where the old code (`parttax[tgtvertnum - 0]`) was fully correct — the patch trades "crashes at base 1, correct at base 0" for "never crashes, mispaired at every base whenever split order ≠ rank order," which is the typical case from 3 terminals up. All validity checks (even `SCOTCH_DEBUG_ARCH1`) still pass, so nothing flags it.
+
+## The fix I'd expect
+
+Keep the lookup, drop only the spurious rebasing — `parttax` was already rebased at line 186:
+
+```c
+termverttab[termdomnum].num = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum));
+```
+
+That matches every other `mapDomain` call site in libscotch and preserves the vertex→domain ground truth.
+
+## How to confirm empirically
+
+Two easy oracles, both good hegel-c properties for `tests/irl/scotch`:
+
+- **Pairing check**: after `SCOTCH_archBuild` on a base-0 graph, compare the patched build against the pre-patch code at base 0 (which was correct there) via `SCOTCH_archSave` — on a path graph with ≥5 vertices the outputs should differ, proving the patch changed base-0 behavior.
+- **Quality property**: build `deco 0` from a path/grid graph, then check that leaf siblings in the saved decomposition are graph-adjacent (distance 1 apart). Correct pairing satisfies this on a path; the patched code will violate it on the 5-vertex trace above.
+
+One caveat in fairness to the patch: if there were an invariant forcing domain-creation order to follow vertex rank, it would be correct — but the LIFO stack plus "subjob takes the part not containing the first vertex" breaks that as soon as one branch goes deeper than the other, as the trace shows. I'd report this upstream with the counterexample; it's a one-line change to the faithful fix.
+
+==============================================================================
+USER
+==============================================================================
+Would you rather do property tests? Jump directly to classic tests? Could you provide tests that are red with the original, the patch, but still green with your own v2? WDYT?
+
+==============================================================================
+CLAUDE (Fable 5)
+==============================================================================
+Good question — my answer is **both, layered**: a deterministic classic test that pins the two failure modes for red/green benchmarking, and a hegel property test that would have *found* the bug class in the first place. But rather than argue it abstractly, let me actually build them and verify the red/red/green matrix against three scotch builds (pristine v7.0.12, upstream patch, my v2). First, let me look at the existing test harness and the scotch API surface I need.
+  [tool: Bash] List existing scotch IRL tests and Makefile
+  [tool: Bash] Check SCOTCH_archBuild API and build status
+  [tool: Bash] Read deco save format and graphIelo
+  [tool: Bash] Read rest of scotch test Makefile
+  [tool: Bash] Read existing test conventions and archBuild library wrapper
+  [tool: Bash] Read SCOTCH_archBuild0 strategy handling
+  [tool: ToolSearch] 
+  [tool: TaskCreate] Add test_arch_build_pairing_classic.c (deterministic, forced-path oracle) and test_arch_build_pairing.c (he...
+  [tool: TaskCreate] Build and run both tests against the unmodified inspiration/targets/scotch build; expect failures from the ...
+  [tool: TaskCreate] Apply the faithful one-line fix to arch_build.c:309, rebuild libscotch, rerun both tests; expect all green....
+  [tool: TaskCreate] Apply the upstream domntab[termdomnum] patch, rebuild, rerun; expect sibling-adjacency oracle failures even...
+  [tool: TaskCreate] git checkout arch_build.c in inspiration/targets/scotch and rebuild libscotch so the reference checkout is ...
+  [tool: TaskUpdate] 
+Now let me check the exact `archSave` header output and `ARCHDOMNOTTERM`, then write the files.
+  [tool: Bash] Check archSave header, ARCHDOMNOTTERM, ielo rounding
+Format confirmed. Let me check the exact hegel-c API signatures before writing the property test.
+  [tool: Bash] Check hegel-c API signatures
+Now writing the shared helper header and both tests.
+  [tool: Write] /home/dev/workspace/hegel-c/tests/irl/scotch/arch_build_pairing.h
+  [tool: Write] /home/dev/workspace/hegel-c/tests/irl/scotch/test_arch_build_pairing_classic.c
+  [tool: Write] /home/dev/workspace/hegel-c/tests/irl/scotch/test_arch_build_pairing.c
+  [tool: Bash] Read Makefile tail
+  [tool: Edit] /home/dev/workspace/hegel-c/tests/irl/scotch/Makefile
+  [tool: Edit] /home/dev/workspace/hegel-c/tests/irl/scotch/Makefile
+  [tool: Edit] /home/dev/workspace/hegel-c/tests/irl/scotch/Makefile
+Now build and run against the pristine (buggy) scotch — expecting RED from the base-1 cases.
+  [tool: TaskUpdate] 
+  [tool: TaskUpdate] 
+  [tool: Bash] Build and run pairing tests vs pristine scotch
+  [tool: TaskUpdate] 
+  [tool: TaskUpdate] 
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/libscotch/arch_build.c
+  [tool: Bash] Rebuild libscotch with v2 fix
+  [tool: Bash] Run pairing tests vs v2-fixed scotch
+  [tool: Bash] Clean rebuild and rerun vs v2 scotch
+  [tool: Bash] Check random reset API
+  [tool: Edit] /home/dev/workspace/hegel-c/tests/irl/scotch/arch_build_pairing.h
+  [tool: Bash] Rerun vs v2 with RNG reset
+  [tool: TaskUpdate] 
+  [tool: TaskUpdate] 
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/libscotch/arch_build.c
+  [tool: Bash] Rebuild scotch with upstream patch, rerun tests
+  [tool: TaskUpdate] 
+  [tool: TaskUpdate] 
+  [tool: Bash] Restore pristine arch_build.c and rebuild
+  [tool: Bash] Check current state of arch_build.c line 309
+  [tool: Bash] Check arch_build.c state and git status
+  [tool: Bash] Confirm pristine RED state
+  [tool: Bash] Run existing default suite to confirm no regression
+  [tool: Bash] Rerun shrink test 3 times to check flakiness
+  [tool: Bash] Probe perturb values for graphOrder crash repro
+  [tool: Bash] Inspect shrink test mechanics
+  [tool: Bash] Read shrink test header comment
+  [tool: Bash] Check test history and hegel-c working tree
+  [tool: Bash] Check ordenum handling in hgraph_order_cp.c
+  [tool: TaskUpdate] 
+  [tool: Read] /home/dev/.claude/projects/-home-dev-workspace-hegel-c-inspiration-targets-scotch/memory/MEMORY.md
+  [tool: Write] /home/dev/.claude/projects/-home-dev-workspace-hegel-c-inspiration-targets-scotch/memory/scotch-archbuild-p...
+  [tool: Write] /home/dev/.claude/projects/-home-dev-workspace-hegel-c-inspiration-targets-scotch/memory/scotch-graph-order...
+  [tool: Write] /home/dev/.claude/projects/-home-dev-workspace-hegel-c-inspiration-targets-scotch/memory/MEMORY.md
+Done — both kinds of tests, and the full red/red/green matrix is verified empirically. Here's the picture.
+
+## Property or classic? Both, doing different jobs
+
+I wrote both, because they earn their keep differently. The **classic test** is the benchmark instrument: deterministic, fast, and it pins *both* failure modes (base-1 memory garbage AND base-0 mispairing) with exact diagnostics — that's what you want for a buggy/fixed comparison harness. The **hegel property test** is the discovery instrument: it randomizes path length, base, and edge-distance jitter, and its shrinker earned its keep immediately — it reduced the pristine bug to `n=4, base=1` and the upstream-patch bug to `n=4, base=0`, both minimal. It's also the test that *would have caught the bad upstream patch before release*, which is the strongest argument for the property version.
+
+## The verified matrix
+
+| Scotch variant | classic | property | failure signature |
+|---|---|---|---|
+| pristine v7.0.12 | RED | RED | `root size 3 != n=4 (base=1)` — first vertex's terminal lands on garbage, a leaf falls out of the root subtree |
+| upstream patch e6c094fc | RED | RED | `sibling leaves 4/5 carry non-adjacent labls 0 and 2 (n=4 base=0)` — exactly the v1/v2 swap from my hand trace, and it fails **at base 0**, proving the patch regresses previously-correct behavior |
+| v2 (`mapDomain (&mappdat, tgtvertnum)`) | GREEN | GREEN | — |
+
+Notably, under the upstream patch n=3, 6, 12 pass and n=4, 8 fail — the mispairing only shows when split-creation order diverges from vertex order, which is why a single hand-picked size would be a fragile test and the sweep/randomization matters.
+
+## How the oracle works
+
+The blocker was that the mispairing is *permutation-consistent*: labels, weights, and leaf-pair distances all travel together, so every public-API self-consistency check passes on a mispaired architecture. The only violated relation is **tree structure ↔ labels**, and checking it requires knowing the true bisection. So the tests force it: a path graph whose edge distances all sit in [100, 199] (within a factor of 2, so after `graphIelo` inversion any single-edge cut beats any two-edge cut → parts stay contiguous), with each interval's median edge strictly largest (→ strictly cheapest cut). Under a correct build, sibling singleton leaves in the saved deco tree are the two ends of the last edge cut — path-adjacent, labels differing by exactly 1. The classic test adds a base-invariance oracle (base-0 and base-1 builds must match modulo the label shift).
+
+## Files
+
+- `tests/irl/scotch/arch_build_pairing.h` — shared oracle + the `SCOTCH_archBuild0` wrapper, with the bug matrix documented in the header
+- `tests/irl/scotch/test_arch_build_pairing_classic.c` — deterministic, n ∈ {3,4,6,8,12} × base ∈ {0,1}, three oracles
+- `tests/irl/scotch/test_arch_build_pairing.c` — hegel property test, 100 cases, draws n ∈ [4,16], base, per-edge jitter
+- Makefile: new `make test-archbuild-pairing` target, deliberately **not** in the default suites since it's expected RED on the pristine reference checkout
+
+## Two things I found along the way
+
+1. **Scotch's RNG is process-global.** The second build in a process sees different RNG state, so identical inputs can produce different (equally valid) trees — my base-invariance oracle flaked at n=12 until I added `SCOTCH_randomReset()` per build. Worth knowing for any future scotch property test: it's the same class of nondeterminism your Makefile already fights with `MALLOC_PERTURB_`.
+2. **`make test-local` fails on `test_graph_order_shrink`, and that predates my changes**: the test expects to find the hgraphOrderCp off-by-ordenum bug, but this v7.0.12 checkout contains the fix — commit `0642921`, credited "[report C. Pellegrini]", i.e. your own report landed. That test needs an older scotch pin or a conversion to the fetch-target buggy/fixed pattern.
+
+The scotch tree is restored to pristine (git-clean, library rebuilt from unmodified source; the `lib/*.a` artifacts are fresh builds of identical source). Given the counterexample is this crisp — one 4-vertex path, public API only — it would make a strong upstream report before e6c094fc ships in a release: the patch fixes the crash but silently degrades every `deco 0` architecture whose bisection order diverges from vertex order.
+
+==============================================================================
+USER
+==============================================================================
+he won't run the hegel tests, and they are not that useful in this context => how about we propose a patch with the tests, a patch with your fix, this conversation as a .txt so he sees what you are capable of, and you generate the email you'd like to directly sent him? or propose something else. as you see fit.
+
+==============================================================================
+CLAUDE (Fable 5)
+==============================================================================
+Good call — for upstream, hegel tests are dead weight; what Pellegrini needs is a patch series against his own tree with a test in Scotch's own `src/check` framework. Plan: (1) a fix patch and a self-contained check-suite test patch, built as a proper git series on top of a recreated e6c094fc so they apply to his master; (2) the analysis as a standalone document; (3) the conversation log converted to .txt if the session transcript is on disk; (4) the email draft. Let me start with Scotch's check-suite conventions.
+  [tool: Bash] Inspect scotch check suite layout
+  [tool: Bash] Read existing arch_deco check test
+  [tool: Bash] Read rest of check test and its history
+  [tool: Bash] Check CMake test registration and git identity
+  [tool: TaskCreate] Branch from v7.0.12, recreate e6c094fc, add v2 fix commit and src/check test commit, verify red/green at ea...
+  [tool: TaskCreate] Create hegel-c/outbox/scotch-archbuild-pairing/ with analysis.md, conversation.txt (from session transcript...
+  [tool: TaskUpdate] 
+  [tool: Bash] Find arch test CMake registration pattern
+  [tool: Bash] View check Makefile registration regions
+  [tool: Bash] Set local identity, create branch
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/libscotch/arch_build.c
+  [tool: Bash] Commit recreated e6c094fc base
+Commit 2: the actual fix on top.
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/libscotch/arch_build.c
+  [tool: Bash] Commit the v2 fix
+  [tool: Bash] Check SCOTCH_NUMSTRING and license header
+Writing the upstream check test now, in Scotch house style.
+  [tool: Write] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/check/test_scotch_arch_build.c
+Now register it in the check Makefile and CMakeLists.
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/check/Makefile
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/check/Makefile
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/check/Makefile
+  [tool: Bash] View CMake arch test block for edit context
+  [tool: Edit] /home/dev/workspace/hegel-c/inspiration/targets/scotch/src/check/CMakeLists.txt
+Now build and run the check test at the current state (v2 fix applied) — expect GREEN.
+  [tool: Bash] Build scotch and run new check test on fixed state
+  [tool: Bash] Read check Makefile generic build rule
+  [tool: Bash] Find SCOTCHLIBS definition and check invocation
+  [tool: Bash] Build and run check test via check target (v2 fix state)
+  [tool: Bash] Verify test built and run it directly
+  [tool: Bash] Commit check test
+  [tool: Bash] Run check test against e6c094fc state
+That exit 0 is a stale-binary artifact — the test links libscotch statically and I didn't relink after rebuilding the library. Relink and rerun.
+  [tool: Bash] Relink and run check test at e6c094fc state
+RED with the exact expected diagnostic. Now the pristine-master state.
+  [tool: Bash] Run check test at pristine v7.0.12 state
+Full matrix verified with the upstream-style check test. Now generate the patch series into the outbox and look for the session transcript.
+  [tool: Bash] Restore branch tip, format patches into outbox
+  [tool: Bash] Look for session transcript files
+  [tool: Write] /tmp/claude-1000/-home-dev-workspace-hegel-c-inspiration-targets-scotch/ed84a96a-c4f5-4563-a9e6-a2285906670...
