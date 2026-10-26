@@ -1,0 +1,511 @@
+From a333b2cb1f494dd02f33c97f5061680be5936fbd Mon Sep 17 00:00:00 2001
+From: c4ffein <c4ffein.work@gmail.com>
+Date: Sat, 4 Jul 2026 23:21:30 +0000
+Subject: [PATCH 2/2] Add semantic check for `deco 0` architecture building
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+test_scotch_arch_build builds decomposition-described architectures
+from weighted path graphs whose edge loads force the recursive
+bipartition (loads within a factor of two keep parts contiguous; the
+median edge of every interval carries the strictly largest load, hence
+the strictly cheapest cut).  It then checks, by parsing the saved
+"deco 1" data, that:
+
+- the root domain holds all the terminals;
+- the singleton leaves hold each path vertex exactly once;
+- sibling singleton leaves hold path-ADJACENT vertices (the two ends
+  of the last edge cut) — this is the property that detects terminal
+  vertices paired with the wrong domain of the bipartition;
+- the architecture is invariant with respect to the graph base value
+  (tested with bases 0, 1 and 100000).
+
+The existing test_scotch_arch_deco only exercises build/save/load
+round-trips, so it cannot detect a structurally consistent but
+mispaired decomposition tree.
+---
+ src/check/CMakeLists.txt           |   6 +
+ src/check/Makefile                 |  10 +
+ src/check/test_scotch_arch_build.c | 417 +++++++++++++++++++++++++++++
+ 3 files changed, 433 insertions(+)
+ create mode 100644 src/check/test_scotch_arch_build.c
+
+diff --git a/src/check/CMakeLists.txt b/src/check/CMakeLists.txt
+index 69baad7..29cdb9f 100644
+--- a/src/check/CMakeLists.txt
++++ b/src/check/CMakeLists.txt
+@@ -224,6 +224,12 @@ add_test_scotch(test_scotch_arch)
+ 
+ add_test(NAME test_scotch_arch COMMAND test_scotch_arch arch.tgt)
+ 
++# test_scotch_arch_build
++
++add_test_scotch(test_scotch_arch_build)
++
++add_test(NAME test_scotch_arch_build COMMAND test_scotch_arch_build arch3.tgt)
++
+ # test_scotch_arch_deco
+ 
+ add_test_scotch(test_scotch_arch_deco)
+diff --git a/src/check/Makefile b/src/check/Makefile
+index d69e3a1..9330234 100644
+--- a/src/check/Makefile
++++ b/src/check/Makefile
+@@ -161,6 +161,7 @@ realclean			:	clean
+ 					test_libmetis_dual_f_v3			\
+ 					test_libmetis_dual_f_v5			\
+ 					test_scotch_arch			\
++					test_scotch_arch_build			\
+ 					test_scotch_arch_deco			\
+ 					test_scotch_context			\
+ 					test_scotch_graph_coarsen		\
+@@ -197,6 +198,7 @@ CHECKSCOTCH = 		check_common_file_compress		\
+ 			check_fibo				\
+ 			check_strat_seq				\
+ 			check_scotch_arch			\
++			check_scotch_arch_build			\
+ 			check_scotch_arch_deco			\
+ 			check_scotch_context			\
+ 			check_scotch_graph_coarsen		\
+@@ -389,6 +391,14 @@ test_scotch_arch		:	test_scotch_arch.c		\
+ 
+ ##
+ 
++check_scotch_arch_build		:	test_scotch_arch_build
++					$(EXECS) ./test_scotch_arch_build "$(TMPDIR)/arch3.tgt"
++
++test_scotch_arch_build		:	test_scotch_arch_build.c	\
++					$(SCOTCHLIBDIR)/libscotch$(LIB)
++
++##
++
+ check_scotch_arch_deco		:	test_scotch_arch_deco
+ 					$(EXECS) ./test_scotch_arch_deco data/m4x4.grf "$(TMPDIR)/arch2.tgt"
+ #					$(EXECS) ./test_scotch_arch_deco data/m4x4_b100000.grf "$(TMPDIR)/arch2.tgt"
+diff --git a/src/check/test_scotch_arch_build.c b/src/check/test_scotch_arch_build.c
+new file mode 100644
+index 0000000..018abc4
+--- /dev/null
++++ b/src/check/test_scotch_arch_build.c
+@@ -0,0 +1,417 @@
++/* Copyright 2026 IPB, Universite de Bordeaux, INRIA & CNRS
++**
++** This file is part of the Scotch software package for static mapping,
++** graph partitioning and sparse matrix ordering.
++**
++** This software is governed by the CeCILL-C license under French law
++** and abiding by the rules of distribution of free software. You can
++** use, modify and/or redistribute the software under the terms of the
++** CeCILL-C license as circulated by CEA, CNRS and INRIA at the following
++** URL: "http://www.cecill.info".
++**
++** As a counterpart to the access to the source code and rights to copy,
++** modify and redistribute granted by the license, users are provided
++** only with a limited warranty and the software's author, the holder of
++** the economic rights, and the successive licensors have only limited
++** liability.
++**
++** In this respect, the user's attention is drawn to the risks associated
++** with loading, using, modifying and/or developing or reproducing the
++** software by the user in light of its specific status of free software,
++** that may mean that it is complicated to manipulate, and that also
++** therefore means that it is reserved for developers and experienced
++** professionals having in-depth computer knowledge. Users are therefore
++** encouraged to load and test the software's suitability as regards
++** their requirements in conditions enabling the security of their
++** systems and/or data to be ensured and, more generally, to use and
++** operate it in the same conditions as regards security.
++**
++** The fact that you are presently reading this means that you have had
++** knowledge of the CeCILL-C license and that you accept its terms.
++*/
++/************************************************************/
++/**                                                        **/
++/**   NAME       : test_scotch_arch_build.c                **/
++/**                                                        **/
++/**   AUTHOR     : c4ffein                                 **/
++/**                                                        **/
++/**   FUNCTION   : This module tests the semantic          **/
++/**                correctness of the decomposition-       **/
++/**                described architectures built by        **/
++/**                SCOTCH_archBuild0(), for several graph  **/
++/**                base values.                            **/
++/**                                                        **/
++/**   DATES      : # Version 7.0  : from : 04 jul 2026     **/
++/**                                 to   : 04 jul 2026     **/
++/**                                                        **/
++/**   NOTES      : # The test builds "deco 0"              **/
++/**                  architectures from weighted path      **/
++/**                  graphs whose edge loads force the     **/
++/**                  recursive bipartition:                **/
++/**                                                        **/
++/**                  - all loads lie within a factor of    **/
++/**                    two of each other, so, after        **/
++/**                    inversion by graphIelo(), cutting   **/
++/**                    any single path edge is always      **/
++/**                    cheaper than cutting two: parts     **/
++/**                    remain contiguous;                  **/
++/**                                                        **/
++/**                  - within every contiguous interval,   **/
++/**                    the median edge carries the         **/
++/**                    strictly largest load, hence the    **/
++/**                    strictly cheapest cut: every        **/
++/**                    bipartition severs the median       **/
++/**                    edge.                               **/
++/**                                                        **/
++/**                  Consequently, in a correctly built    **/
++/**                  architecture, two singleton leaves    **/
++/**                  that are siblings in the              **/
++/**                  decomposition tree (domains 2k and    **/
++/**                  2k+1) are the two ends of the last    **/
++/**                  edge cut, so their terminal labels    **/
++/**                  are ADJACENT path vertices. The test  **/
++/**                  checks this property, the leaf label  **/
++/**                  bijection, and the invariance of the  **/
++/**                  whole architecture with respect to    **/
++/**                  the graph base value, by parsing the  **/
++/**                  saved architecture ("deco 1"          **/
++/**                  format).                              **/
++/**                                                        **/
++/************************************************************/
++
++/*
++**  The defines and includes.
++*/
++
++#include <stdio.h>
++#if (((defined __STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)) || (defined HAVE_STDINT_H))
++#include <stdint.h>
++#endif /* (((defined __STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)) || (defined HAVE_STDINT_H)) */
++#include <stdlib.h>
++#include <string.h>
++
++#include "scotch.h"
++
++#define PATHNBRMAX                  16            /* Maximum path graph size            */
++#define DOMNNBRMAX                  64            /* Maximum decomposition tree size    */
++#define BASENBR                     3             /* Number of base values to test with */
++
++/* Parsed "deco 1" architecture: per tree domain num
++** (1-based; sons of domain k are 2k and 2k+1), its
++** terminal label, subdomain size and weight.        */
++
++typedef struct TestArch_ {
++  SCOTCH_Num                domtrmnbr;            /* Number of terminal domains */
++  SCOTCH_Num                domnnbr;              /* Number of tree domains     */
++  SCOTCH_Num                labltab[DOMNNBRMAX];
++  SCOTCH_Num                sizetab[DOMNNBRMAX];
++  SCOTCH_Num                wghttab[DOMNNBRMAX];
++} TestArch;
++
++/* This routine gives every edge of a path interval a
++** load such that the median edge of each sub-interval
++** carries the strictly largest load of the interval.
++** Loads span [109, 199]: within a factor of two.
++*/
++
++static
++void
++testPathLoad (
++const SCOTCH_Num            vertmin,              /* First vertex of interval             */
++const SCOTCH_Num            vertnnd,              /* After-last vertex of interval        */
++const SCOTCH_Num            leveval,              /* Recursion level                      */
++SCOTCH_Num * const          edlotab)              /* Edge load array, (vertnbr - 1) slots */
++{
++  SCOTCH_Num                vertmed;
++
++  if ((vertnnd - vertmin) < 2)                    /* Nothing to cut in singleton intervals */
++    return;
++
++  vertmed = vertmin + (vertnnd - vertmin) / 2;    /* Cut edge is (vertmed - 1, vertmed) */
++  edlotab[vertmed - 1] = 199 - 30 * leveval;
++  testPathLoad (vertmin, vertmed, leveval + 1, edlotab);
++  testPathLoad (vertmed, vertnnd, leveval + 1, edlotab);
++}
++
++/* This routine builds a "deco 0" architecture from a
++** loaded path graph of the given size and base value,
++** saves it to the given file, and parses it back.
++** It returns:
++** - 0   : on success.
++** - !0  : on error.
++*/
++
++static
++int
++testArchBuild (
++const SCOTCH_Num            vertnbr,              /* Number of path vertices */
++const SCOTCH_Num            baseval,              /* Graph base value        */
++const char * const          filename,             /* Scratch file name       */
++TestArch * const            tarcptr)              /* Parsed architecture     */
++{
++  SCOTCH_Graph              grafdat;
++  SCOTCH_Strat              stradat;
++  SCOTCH_Arch               archdat;
++  FILE *                    fileptr;
++  SCOTCH_Num                verttab[PATHNBRMAX + 1];
++  SCOTCH_Num                edgetab[2 * (PATHNBRMAX - 1)];
++  SCOTCH_Num                edlotab[2 * (PATHNBRMAX - 1)];
++  SCOTCH_Num                pathload[PATHNBRMAX - 1];
++  SCOTCH_Num                decoval;
++  SCOTCH_Num                distnbr;
++  SCOTCH_Num                edgenbr;
++  SCOTCH_Num                vertnum;
++  SCOTCH_Num                domnnum;
++  SCOTCH_Num                distval;
++  char                      archname[32];
++  int                       o;
++
++  memset (tarcptr, 0, sizeof (TestArch));
++
++  testPathLoad (0, vertnbr, 0, pathload);         /* Compute forced-median edge loads */
++
++  edgenbr = 0;                                    /* Build compact path graph arrays */
++  for (vertnum = 0; vertnum < vertnbr; vertnum ++) {
++    verttab[vertnum] = edgenbr + baseval;
++    if (vertnum > 0) {
++      edgetab[edgenbr] = vertnum - 1 + baseval;
++      edlotab[edgenbr] = pathload[vertnum - 1];
++      edgenbr ++;
++    }
++    if (vertnum < (vertnbr - 1)) {
++      edgetab[edgenbr] = vertnum + 1 + baseval;
++      edlotab[edgenbr] = pathload[vertnum];
++      edgenbr ++;
++    }
++  }
++  verttab[vertnbr] = edgenbr + baseval;
++
++  if (SCOTCH_graphInit (&grafdat) != 0) {
++    SCOTCH_errorPrint ("testArchBuild: cannot initialize graph");
++    return (1);
++  }
++  if (SCOTCH_graphBuild (&grafdat, baseval, vertnbr, verttab, NULL, NULL, NULL,
++                         edgenbr, edgetab, edlotab) != 0) {
++    SCOTCH_errorPrint ("testArchBuild: cannot build graph");
++    return (1);
++  }
++
++  SCOTCH_stratInit   (&stradat);                  /* Default bipartitioning strategy       */
++  SCOTCH_archInit    (&archdat);
++  SCOTCH_randomReset ();                          /* Same random state for all base values */
++
++  if (SCOTCH_archBuild0 (&archdat, &grafdat, 0, NULL, &stradat) != 0) {
++    SCOTCH_errorPrint ("testArchBuild: cannot build architecture (" SCOTCH_NUMSTRING ", " SCOTCH_NUMSTRING ")",
++                       vertnbr, baseval);
++    return (1);
++  }
++
++  if ((fileptr = fopen (filename, "w")) == NULL) { /* Save and parse back the architecture */
++    SCOTCH_errorPrint ("testArchBuild: cannot open file (1)");
++    return (1);
++  }
++  if (SCOTCH_archSave (&archdat, fileptr) != 0) {
++    SCOTCH_errorPrint ("testArchBuild: cannot save architecture");
++    return (1);
++  }
++  fclose (fileptr);
++
++  SCOTCH_archExit  (&archdat);
++  SCOTCH_stratExit (&stradat);
++  SCOTCH_graphExit (&grafdat);
++
++  if ((fileptr = fopen (filename, "r")) == NULL) {
++    SCOTCH_errorPrint ("testArchBuild: cannot open file (2)");
++    return (1);
++  }
++  if ((fscanf (fileptr, "%31s " SCOTCH_NUMSTRING " " SCOTCH_NUMSTRING " " SCOTCH_NUMSTRING,
++               archname, &decoval, &tarcptr->domtrmnbr, &tarcptr->domnnbr) != 4) ||
++      (strcmp (archname, "deco") != 0)                                           ||
++      (decoval != 1)) {
++    SCOTCH_errorPrint ("testArchBuild: invalid architecture header");
++    return (1);
++  }
++  if ((tarcptr->domtrmnbr != vertnbr) ||
++      (tarcptr->domnnbr   <  vertnbr) ||
++      (tarcptr->domnnbr   >  DOMNNBRMAX)) {
++    SCOTCH_errorPrint ("testArchBuild: invalid architecture size (" SCOTCH_NUMSTRING ", " SCOTCH_NUMSTRING ")",
++                       tarcptr->domtrmnbr, tarcptr->domnnbr);
++    return (1);
++  }
++  for (domnnum = 0; domnnum < tarcptr->domnnbr; domnnum ++) {
++    if (fscanf (fileptr, SCOTCH_NUMSTRING " " SCOTCH_NUMSTRING " " SCOTCH_NUMSTRING,
++                &tarcptr->labltab[domnnum], &tarcptr->sizetab[domnnum], &tarcptr->wghttab[domnnum]) != 3) {
++      SCOTCH_errorPrint ("testArchBuild: truncated domain array");
++      return (1);
++    }
++  }
++  o = 0;
++  distnbr = (tarcptr->domnnbr * (tarcptr->domnnbr - 1)) / 2;
++  while (distnbr -- > 0)                          /* Distance array must be complete */
++    o |= (fscanf (fileptr, SCOTCH_NUMSTRING, &distval) != 1);
++  fclose (fileptr);
++  if (o != 0) {
++    SCOTCH_errorPrint ("testArchBuild: truncated distance array");
++    return (1);
++  }
++
++  return (0);
++}
++
++/* This routine checks that the given parsed architecture
++** is a proper decomposition of the forced path graph:
++** - the root domain holds all the terminals;
++** - the singleton leaves hold each path vertex exactly once;
++** - sibling singleton leaves hold adjacent path vertices.
++** It returns:
++** - 0   : on success.
++** - !0  : on error.
++*/
++
++static
++int
++testArchCheck (
++const TestArch * const      tarcptr,
++const SCOTCH_Num            vertnbr,
++const SCOTCH_Num            baseval)
++{
++  int                       flagtab[PATHNBRMAX];
++  SCOTCH_Num                leafnbr;
++  SCOTCH_Num                pairnbr;
++  SCOTCH_Num                domnnum;
++  SCOTCH_Num                lablval;
++
++  if (tarcptr->sizetab[0] != vertnbr) {
++    SCOTCH_errorPrint ("testArchCheck: root domain does not hold all terminals (" SCOTCH_NUMSTRING " != " SCOTCH_NUMSTRING ", base " SCOTCH_NUMSTRING ")",
++                       tarcptr->sizetab[0], vertnbr, baseval);
++    return (1);
++  }
++
++  memset (flagtab, 0, sizeof (flagtab));
++  for (domnnum = 0, leafnbr = 0; domnnum < tarcptr->domnnbr; domnnum ++) {
++    if (tarcptr->sizetab[domnnum] != 1)
++      continue;
++    leafnbr ++;
++    lablval = tarcptr->labltab[domnnum];
++    if ((lablval <  baseval)           ||
++        (lablval >= (baseval + vertnbr))) {
++      SCOTCH_errorPrint ("testArchCheck: out-of-range terminal label " SCOTCH_NUMSTRING " (base " SCOTCH_NUMSTRING ")",
++                         lablval, baseval);
++      return (1);
++    }
++    if (flagtab[lablval - baseval] ++ != 0) {
++      SCOTCH_errorPrint ("testArchCheck: duplicate terminal label " SCOTCH_NUMSTRING " (base " SCOTCH_NUMSTRING ")",
++                         lablval, baseval);
++      return (1);
++    }
++  }
++  if (leafnbr != vertnbr) {
++    SCOTCH_errorPrint ("testArchCheck: " SCOTCH_NUMSTRING " singleton leaves for " SCOTCH_NUMSTRING " vertices (base " SCOTCH_NUMSTRING ")",
++                       leafnbr, vertnbr, baseval);
++    return (1);
++  }
++
++  for (domnnum = 2, pairnbr = 0; (domnnum + 1) <= tarcptr->domnnbr; domnnum += 2) { /* For all sibling pairs (2k, 2k+1) */
++    SCOTCH_Num                lablva0;
++    SCOTCH_Num                lablva1;
++
++    if ((tarcptr->sizetab[domnnum - 1] != 1) ||   /* Consider singleton sibling leaves only */
++        (tarcptr->sizetab[domnnum]     != 1))
++      continue;
++    pairnbr ++;
++    lablva0 = tarcptr->labltab[domnnum - 1];
++    lablva1 = tarcptr->labltab[domnnum];
++    if ((lablva1 - lablva0) * (lablva1 - lablva0) != 1) { /* Labels must be path-adjacent */
++      SCOTCH_errorPrint ("testArchCheck: sibling leaves " SCOTCH_NUMSTRING " and " SCOTCH_NUMSTRING " hold non-adjacent vertices " SCOTCH_NUMSTRING " and " SCOTCH_NUMSTRING " (base " SCOTCH_NUMSTRING ")",
++                         domnnum, domnnum + 1, lablva0, lablva1, baseval);
++      return (1);
++    }
++  }
++  if (pairnbr <= 0) {                             /* Full decompositions always split some pair */
++    SCOTCH_errorPrint ("testArchCheck: no singleton sibling pair (base " SCOTCH_NUMSTRING ")",
++                       baseval);
++    return (1);
++  }
++
++  return (0);
++}
++
++/* This routine checks that two parsed architectures built
++** from the same path graph at different base values are
++** identical, up to the base shift on terminal labels.
++** It returns:
++** - 0   : on success.
++** - !0  : on error.
++*/
++
++static
++int
++testArchSame (
++const TestArch * const      tar0ptr,              /* Reference architecture   */
++const SCOTCH_Num            bas0val,              /* Reference base value     */
++const TestArch * const      tar1ptr,              /* Architecture to compare  */
++const SCOTCH_Num            bas1val)              /* Its base value           */
++{
++  SCOTCH_Num                domnnum;
++
++  if (tar0ptr->domnnbr != tar1ptr->domnnbr) {
++    SCOTCH_errorPrint ("testArchSame: tree sizes differ across bases (" SCOTCH_NUMSTRING " != " SCOTCH_NUMSTRING ")",
++                       tar0ptr->domnnbr, tar1ptr->domnnbr);
++    return (1);
++  }
++  for (domnnum = 0; domnnum < tar0ptr->domnnbr; domnnum ++) {
++    if ((tar0ptr->sizetab[domnnum] != tar1ptr->sizetab[domnnum]) ||
++        (tar0ptr->wghttab[domnnum] != tar1ptr->wghttab[domnnum]) ||
++        ((tar0ptr->sizetab[domnnum] > 0) &&
++         ((tar0ptr->labltab[domnnum] - bas0val) != (tar1ptr->labltab[domnnum] - bas1val)))) {
++      SCOTCH_errorPrint ("testArchSame: domain " SCOTCH_NUMSTRING " differs across bases " SCOTCH_NUMSTRING " and " SCOTCH_NUMSTRING,
++                         domnnum + 1, bas0val, bas1val);
++      return (1);
++    }
++  }
++
++  return (0);
++}
++
++/*********************/
++/*                   */
++/* The main routine. */
++/*                   */
++/*********************/
++
++int
++main (
++int                 argc,
++char *              argv[])
++{
++  TestArch            tarctab[BASENBR];
++  int                 vertidx;
++  int                 baseidx;
++
++  static const SCOTCH_Num vertnbrtab[] = { 3, 4, 6, 8, 12 };
++  static const SCOTCH_Num basevaltab[BASENBR] = { 0, 1, 100000 };
++
++  SCOTCH_errorProg (argv[0]);
++
++  if (argc != 2) {
++    SCOTCH_errorPrint ("usage: %s architecture_file", argv[0]);
++    exit (EXIT_FAILURE);
++  }
++
++  for (vertidx = 0; vertidx < (int) (sizeof (vertnbrtab) / sizeof (vertnbrtab[0])); vertidx ++) {
++    SCOTCH_Num                vertnbr;
++
++    vertnbr = vertnbrtab[vertidx];
++    for (baseidx = 0; baseidx < BASENBR; baseidx ++) {
++      if (testArchBuild (vertnbr, basevaltab[baseidx], argv[1], &tarctab[baseidx]) != 0)
++        exit (EXIT_FAILURE);
++      if (testArchCheck (&tarctab[baseidx], vertnbr, basevaltab[baseidx]) != 0)
++        exit (EXIT_FAILURE);
++      if ((baseidx > 0) &&
++          (testArchSame (&tarctab[0], basevaltab[0], &tarctab[baseidx], basevaltab[baseidx]) != 0))
++        exit (EXIT_FAILURE);
++    }
++  }
++
++  exit (EXIT_SUCCESS);
++}
+-- 
+2.47.3
+

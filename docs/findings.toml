@@ -589,7 +589,7 @@ state = "merged"
 since = "2026-08-18"
 versions = [{ v = 1, sent = "2026-07-04", patches = 2, to = "F. Pellegrini (email)" }]
 commit = "911ebdfb681b"
-dir = "submissions/scotch-archbuild-pairing-fix (not in git)"
+dir = "submissions/scotch-archbuild-pairing-fix"
 notes = "Merged as our one-line fix, mapDomain(&mappdat, tgtvertnum)."
 
 [[submission]]

@@ -1,0 +1,52 @@
+From f0660e3bc98588a534d75298008e732b128e0d97 Mon Sep 17 00:00:00 2001
+From: c4ffein <c4ffein.work@gmail.com>
+Date: Sat, 4 Jul 2026 23:18:17 +0000
+Subject: [PATCH 1/2] Bugfix: pair terminal vertices with their own domain when
+ building `deco 0` architectures
+
+The terminal vertex array built by archDecoArchBuild() must associate,
+for each terminal vertex, its label with the terminal number of the
+domain which contains THAT vertex in the recursive bipartition.
+
+The pre-e6c094fc code read `mapDomain (&mappdat, tgtvertnum - baseval)`;
+since mappdat.parttax is rebased at initialization time, the base was
+subtracted twice: base-1 graphs read parttax[-1] (out-of-bounds) for
+their first vertex and the domain of the wrong vertex for all others.
+
+Commit e6c094fc replaced the lookup with `&mappdat.domntab[termdomnum]`,
+which assumes that domain index i is the domain of terminal vertex i.
+This does not hold: domain indices are assigned in job-splitting order
+(driven by a LIFO job list), not in vertex order.  As soon as both
+halves of a bipartition need further splitting, labels are attached to
+the wrong leaves of the decomposition tree, at any base value.
+Minimal counterexample: a 4-vertex weighted path whose edge loads force
+the bipartition sequence {0,1}|{2,3}, then {0}|{1}, then {2}|{3};
+vertices 1 and 2 end up swapped in the decomposition tree, so sibling
+leaves carry labels {0,2} instead of {0,1}.  The resulting architecture
+is internally consistent but its tree no longer reflects the topology
+of the input graph, silently degrading the quality of every mapping
+computed onto it.
+
+The proper fix is to keep the parttax lookup and drop only the spurious
+rebasing, as parttax is already a based array: this is also how every
+other mapDomain() call site passes vertex indices.
+---
+ src/libscotch/arch_build.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/libscotch/arch_build.c b/src/libscotch/arch_build.c
+index 97cf98c..a369de8 100644
+--- a/src/libscotch/arch_build.c
++++ b/src/libscotch/arch_build.c
+@@ -306,7 +306,7 @@ Context * const             contptr)              /*+ Execution context
+     tgtvertnum = (tgtlistptr != NULL) ? tgtlistptr->vnumtab[termdomnum] : (termdomnum + tgtgrafptr->baseval);
+     termverttab[termdomnum].labl = tgtvertnum;
+     termverttab[termdomnum].wght = (tgtgrafptr->velotax != NULL) ? tgtgrafptr->velotax[tgtvertnum] : 1;
+-    termverttab[termdomnum].num  = archDomNum (&archdat, &mappdat.domntab[termdomnum]);
++    termverttab[termdomnum].num  = archDomNum (&archdat, mapDomain (&mappdat, tgtvertnum));
+     if (termverttab[termdomnum].num > termdommax) /* Find maximum terminal number */
+       termdommax = termverttab[termdomnum].num;
+   }
+-- 
+2.47.3
+
