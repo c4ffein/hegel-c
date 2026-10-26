@@ -423,19 +423,22 @@ subsystem = "lib/group_cpus"
 classes = ["null-deref"]
 provenance = "curated"
 tier = "A"
-status = "candidate"
+status = "harness-only"
 fixed = "2025-06-19"
 author = "Yu Kuai"
 source = "git log"
+harness_dir = "tests/irl/linux/group_cpus"
+pin = "tests/irl/linux/pins/group_cpus.conf"
 effort = "small"
 mechanism = """kcalloc(numgrps, ...) returns ZERO_SIZE_PTR for numgrps == 0 and \
 the result is dereferenced. Repro: echo 0 > poll_queues on a null_blk device. \
 The fix returns NULL early."""
-harness = """compile lib/group_cpus.c with the radix-tree harness's cpumask shim \
-or a small kcalloc / cpumask stub (~3-4 h)"""
-property = "group_cpus_evenly(n) doesn't crash for any n"
+harness = """compile lib/group_cpus.c without CONFIG_SMP against a small kcalloc / \
+cpumask compat header that keeps the kernel's ZERO_SIZE_PTR semantics (no \
+radix-tree harness needed)"""
+property = "group_cpus_evenly(n) doesn't crash, and for n > 0 its groups cover every possible CPU"
 why = "A boundary bug (n = 0) a full-range draw should hit at once."
-notes = "tests/irl/repro-driver/t01_group_cpus has a draft harness (untracked)."
+notes = "The harness builds only the non-SMP group_cpus_evenly() (the SMP path, where the reported crash was, needs topology stubs); the fix patches both. Written knowing the bug, so never a blind hit. A first try in May 2026 stalled on the SMP stubs."
 
 [[target]]
 fixed_by = "ea9b77f98d94"

@@ -327,3 +327,18 @@ note = "open bug: red on master"
 target = "scotch-graphpart-strat-f-d-segv"
 verdict = "as-expected"
 note = "open bug: red on master"
+
+[[run]]
+id = "2026-10-26-group-cpus-pin"
+date = "2026-10-26"
+kind = "pins"
+project = "linux"
+summary = "the July group_cpus draft harness turned into a pin: buggy red, fixed green"
+hegel_c = "bfa9e65"
+libhegel = "0.48.0"
+notes = "Ran on bfa9e65 plus the then-uncommitted harness. Written knowing the bug; checks the harness discriminates, not that a hunt would find it."
+
+[[run.result]]
+target = "df831e977394"
+verdict = "as-expected"
+note = "shrunk to numgrps = 0: ASan SEGV at 0x10 in cpumask_copy"

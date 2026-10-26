@@ -71,7 +71,7 @@ tools/merge-corpus.py                # -> .corpus/merged_*.json
 ```
 
 Current merge (sashiko pin `a434adc`): **257 unique bugs** — 21 ours-only, 235
-theirs-only, **1 in both** (`c6e8e595a079`, the idr range bug). 12 have an
+theirs-only, **1 in both** (`c6e8e595a079`, the idr range bug). 13 have an
 existing harness under `tests/irl/linux/`.
 
 ## How we pick targets

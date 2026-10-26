@@ -96,6 +96,21 @@
   scoped to self-contained code (codecs, parsers, pure helpers); (2) several
   models as decorrelated hunters over one shared executable judge — only
   after the benchmark is rebuilt leak-free, or it measures noise.
+- **Reach beyond leaf code: the forked child as any runtime.** Our Linux
+  harnesses all run kernel code natively against hand-written shims, so they
+  only reach leaf data structures and algorithms. The fork protocol already
+  says "the board takes the child's role"; the same holds for a kernel:
+  - `uml`: an `ARCH=um` kernel as a userspace process, a KUnit module fed
+    draws over the pipe, KASAN; a crash is a SIGSEGV `waitpid` sees. Reaches
+    page cache, mm, fs, core net. First target: lib/buildid.c (sashiko
+    `29fb415a6a72`, needs `filemap_read_folio`); then ext4 `do_split`
+    (`94824ac9a8aa`) and minix statfs (`8c97a6ddc956`).
+  - `qemu`: the `.qemu` VM (validated with libnftables 2026-04-30), a guest
+    agent over serial, VM reset as crash isolation. Reaches the syscall and
+    netlink surface (nft, net/sched).
+  Prove one bug end to end on `uml` before wiring more. (From the July 2026
+  `tests/irl/repro-driver` draft; its shim example became the `group_cpus`
+  pin, its MPI example duplicated `tests/mpi`.)
 - **Grow the rediscovery corpus** with the deferred filesystem picks: ext4
   do_split, minix superblock, ADFS nzones, squashfs negative offset, UDF
   lengthAllocDescs, HFS+ catalog record, lib/crypto/mpi underflow (2–6 h
