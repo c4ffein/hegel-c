@@ -1,0 +1,17 @@
+sg_split props: NEED_SG_DMA_LENGTH=1 ASan=0 cases=2000
+=== core
+=== core: pass
+=== walkable
+=== walkable: pass
+=== nozero
+=== nozero: pass
+=== nozero_mapped
+=== nozero_mapped: pass
+=== geometry
+=== geometry: pass
+=== invalid
+=== invalid: pass
+=== invalid_other
+=== invalid_other: pass
+=== errpaths
+=== errpaths: pass

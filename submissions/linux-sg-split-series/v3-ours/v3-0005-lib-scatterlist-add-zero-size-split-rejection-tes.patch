@@ -1,0 +1,158 @@
+From 04ac51bd79ee9c93f3928e2df687f83c8fd85e59 Mon Sep 17 00:00:00 2001
+In-Reply-To: <178113124323.90620.6403136846887207198@gmail.com>
+References: <178113124323.90620.6403136846887207198@gmail.com>
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Mon, 6 Jul 2026 18:59:12 +0000
+Subject: [PATCH v3 5/5] lib: scatterlist: add zero-size split rejection tests
+ for sg_split()
+
+Cover the three positions a zero split_sizes[] entry can take: with
+input remaining past it (t8), trailing at exact input exhaustion (t8b),
+and at exhaustion with a further non-zero size after it (t8c). All
+three must fail with -EINVAL, in both the unmapped and the
+identity-mapped mode, without touching the caller's output array.
+
+Each case documents what the pre-rejection code did for that shape:
+t8 handed back a split holding one zero-length entry, t8b performed an
+out-of-bounds write through a ZERO_SIZE_PTR output array, and t8c
+returned success with the trailing split silently unfulfilled. The t8c
+shape was surfaced by the automated review of the v2 posting and
+reproduced and minimized (in = [1], sizes = {1, 0, 1}) by
+property-based testing with the generator widened to draw zero and
+over-requesting sizes.
+
+Without the preceding rejection patch, t8 fails its -EINVAL
+expectations (the zero-size split is silently accepted), while t8b and
+t8c oops: the out_sg[-1] fixup in the copiers is a wild write through
+the ZERO_SIZE_PTR output array (page fault at 0xfffffffffffffffc,
+caught by KUnit's fault handling).
+
+Assisted-by: Claude:claude-fable-5 hegel-c
+Signed-off-by: Charles Pellegrini <c4ffein.work@gmail.com>
+---
+ lib/tests/sg_split_kunit.c | 95 +++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 94 insertions(+), 1 deletion(-)
+
+diff --git a/lib/tests/sg_split_kunit.c b/lib/tests/sg_split_kunit.c
+index 31159aabffc8..4fc26f3780a0 100644
+--- a/lib/tests/sg_split_kunit.c
++++ b/lib/tests/sg_split_kunit.c
+@@ -15,7 +15,7 @@
+  *
+  * COVERAGE
+  * --------
+- * Every case runs in two modes via sg_split_run():
++ * Every case runs in two modes (Group C via sg_split_run_expect_einval):
+  *   - unmapped : in_mapped_nents = 0  -> the CPU-view path (sg_split_phys).
+  *   - mapped   : an identity DMA mapping (dma_len == length, IOVA laid out
+  *                contiguously from SG_SPLIT_DMA_BASE) -> additionally the
+@@ -297,6 +297,96 @@ static void sg_split_t7_skip_plus_partial_midentry(struct kunit *test)
+ 	sg_split_run(test, in, 2, 20, sizes, 1);
+ }
+ 
++/* ========================================================================
++ * Group C — zero-size splits are rejected with -EINVAL in every position.
++ *
++ * A zero length has a defined meaning only in the DMA view of an
++ * already-mapped list, as a trailing terminator (see the sg_dma_len()
++ * comment in include/linux/scatterlist.h); split_sizes[] are CPU-view
++ * byte counts, where the CPU view of a scatterlist has no empty
++ * representation (the end-of-list marker lives on the last entry).
++ * sg_split() therefore rejects the request upfront.  Each case
++ * documents what the pre-rejection code did for that shape.
++ */
++static void sg_split_run_expect_einval(struct kunit *test,
++				       const struct sg_split_in_spec *in_spec,
++				       int n_in, off_t skip,
++				       const size_t *sizes, int nb_splits)
++{
++	struct scatterlist *out[SG_SPLIT_MAX_SPLITS] = { NULL };
++	int out_nents[SG_SPLIT_MAX_SPLITS] = { 0 };
++	struct scatterlist *in_sgl;
++	dma_addr_t a;
++	u8 *oracle;
++	int rc, k, i, mode;
++
++	for (mode = 0; mode < 2; mode++) {
++		bool dma_mapped = mode == 1;
++		const char *name = dma_mapped ? "mapped" : "unmapped";
++
++		in_sgl = sg_split_build_input(test, in_spec, n_in, &oracle);
++		if (dma_mapped) {
++			a = SG_SPLIT_DMA_BASE;
++			for (i = 0; i < n_in; i++) {
++				sg_dma_address(&in_sgl[i]) = a;
++				sg_dma_len(&in_sgl[i]) = in_spec[i].len;
++				a += in_spec[i].len;
++			}
++		}
++
++		rc = sg_split(in_sgl, dma_mapped ? n_in : 0, skip, nb_splits,
++			      sizes, out, out_nents, GFP_KERNEL);
++		KUNIT_EXPECT_EQ_MSG(test, rc, -EINVAL,
++				    "[%s] sg_split returned %d, want -EINVAL",
++				    name, rc);
++		for (k = 0; k < nb_splits; k++)
++			KUNIT_EXPECT_NULL_MSG(test, out[k],
++					      "[%s] split[%d] written on error path",
++					      name, k);
++	}
++}
++
++static void sg_split_t8_zero_size_input_remaining(struct kunit *test)
++{
++	/* A zero size with input remaining past it.  Before the rejection,
++	 * this "succeeded" and handed back a split holding one zero-length
++	 * entry -- a scatterlist the DMA API does not accept.
++	 */
++	const struct sg_split_in_spec in[] = { { 0, 0, 10 }, { 1, 0, 5 } };
++	const size_t sizes[] = { 10, 0 };
++
++	sg_split_run_expect_einval(test, in, 2, 0, sizes, 2);
++}
++
++static void sg_split_t8b_zero_size_at_exhaustion(struct kunit *test)
++{
++	/* A trailing zero size landing exactly when the input is exhausted.
++	 * Before the rejection, the split kept nents == 0, its output array
++	 * was a ZERO_SIZE_PTR allocation, and both copiers performed an
++	 * out-of-bounds write through out_sg[-1] (KASAN-detectable).
++	 */
++	const struct sg_split_in_spec in[] = { { 0, 0, 10 } };
++	const size_t sizes[] = { 10, 0 };
++
++	sg_split_run_expect_einval(test, in, 1, 0, sizes, 2);
++}
++
++static void sg_split_t8c_zero_then_nonzero(struct kunit *test)
++{
++	/* A zero size at input exhaustion with a further non-zero size after
++	 * it.  Before the rejection, sg_calculate_split() exited its loop
++	 * with size == 0 and mistook the request for satisfied: it returned
++	 * success while the trailing 5-byte split was silently left
++	 * unfulfilled.  Surfaced by the automated review of v2; the minimal
++	 * shape (in = [1], sizes = {1, 0, 1}) was reproduced and minimized by
++	 * property-based testing.
++	 */
++	const struct sg_split_in_spec in[] = { { 0, 0, 10 } };
++	const size_t sizes[] = { 10, 0, 5 };
++
++	sg_split_run_expect_einval(test, in, 1, 0, sizes, 3);
++}
++
+ /* ========================================================================
+  * Group D — boundary-position matrix (3 x 10-byte entries).
+  */
+@@ -472,6 +562,9 @@ static struct kunit_case sg_split_test_cases[] = {
+ 	KUNIT_CASE(sg_split_t5_minimal_repro),
+ 	KUNIT_CASE(sg_split_t6_dthev2_aead_shape),
+ 	KUNIT_CASE(sg_split_t7_skip_plus_partial_midentry),
++	KUNIT_CASE(sg_split_t8_zero_size_input_remaining),
++	KUNIT_CASE(sg_split_t8b_zero_size_at_exhaustion),
++	KUNIT_CASE(sg_split_t8c_zero_then_nonzero),
+ 	KUNIT_CASE(sg_split_t9_mid_first_two_trailing),
+ 	KUNIT_CASE(sg_split_t10_edge_first_two_trailing),
+ 	KUNIT_CASE(sg_split_t11_mid_middle_one_trailing),
+-- 
+2.47.3
+

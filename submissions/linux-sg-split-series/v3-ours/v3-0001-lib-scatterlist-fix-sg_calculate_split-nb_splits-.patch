@@ -1,0 +1,79 @@
+From 741cdf214493af4ba0327923f17d9baf6cd2f705 Mon Sep 17 00:00:00 2001
+In-Reply-To: <178113124323.90620.6403136846887207198@gmail.com>
+References: <178113124323.90620.6403136846887207198@gmail.com>
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Wed, 10 Jun 2026 13:25:55 +0000
+Subject: [PATCH v3 1/5] lib: scatterlist: fix sg_calculate_split() nb_splits
+ overshoot on partial coverage
+
+sg_calculate_split() decrements nb_splits in two places per outer-loop
+iteration: once in the inner while() that advances to the next output
+split when a split boundary falls mid-entry, and once in the trailing
+
+    if (!size && --nb_splits > 0)
+
+The loop-termination check only tests for nb_splits == 0:
+
+    if (!nb_splits)
+        break;
+
+When the final requested split ends mid-entry of a non-last input entry,
+both decrements run with their bodies skipped: the inner while() takes
+nb_splits 1 -> 0, then the trailing if() takes it 0 -> -1. The
+termination check then sees -1, not 0, so the loop does not break and the
+next input entry is folded into the last split, inflating its nents and
+length_last_sg. The resulting split covers more bytes than requested.
+For in=[2, 1], skip=0, nb_splits=1, sizes=[1] the single output split
+reports a total length of 2 instead of 1.
+
+Widen the termination check to also catch the overshoot to -1:
+
+    if (nb_splits <= 0)
+        break;
+
+The new condition only fires when nb_splits is already negative, which is
+reachable solely through the double decrement above, so it cannot change
+behaviour for any input that splits correctly today.
+
+This was first reported by Alexander Egorenkov in 2021, with an identical
+root-cause analysis; that patch was never reviewed or merged. Its proposed
+fix moved the existing termination check above the second decrement rather
+than widening it. That handles the mid-entry case but regresses
+edge-aligned partial coverage -- a split ending exactly on an input-entry
+boundary with further entries trailing -- which the current code handles
+correctly. A KUnit test added later in this series
+(sg_split_t10_edge_first_two_trailing) covers that regression.
+
+No in-tree caller triggers the bug today: four request full coverage or
+re-split over a DMA-mapped subset, and the one caller that requests
+partial coverage (the DTHEv2 AEAD driver) bounds its consumer by cryptlen,
+masking the wrong geometry. The fix matters for callers that legitimately
+request partial coverage, which the API has documented as supported since
+the original commit ("the union of spans of all resulting scatter lists is
+a subrange of the span of the original scatter list").
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Reported-by: Alexander Egorenkov <egorenar-dev@posteo.net>
+Closes: https://lore.kernel.org/all/20210418143425.22944-1-egorenar-dev@posteo.net/
+Assisted-by: Claude:claude-opus-4-8 hegel-c
+Signed-off-by: Charles Pellegrini <c4ffein.work@gmail.com>
+---
+ lib/sg_split.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index 24e8f5e48e63..28fe7fa6c9ac 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -67,7 +67,7 @@ static int sg_calculate_split(struct scatterlist *in, int nents, int nb_splits,
+ 			size = *(++sizes);
+ 		}
+ 
+-		if (!nb_splits)
++		if (nb_splits <= 0)
+ 			break;
+ 	}
+ 
+-- 
+2.47.3
+

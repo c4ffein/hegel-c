@@ -1,0 +1,71 @@
+1:  98a125b1eb70 = 1:  741cdf214493 lib: scatterlist: fix sg_calculate_split() nb_splits overshoot on partial coverage
+2:  19c4b5c2c77a = 2:  a90d9d19f700 lib: scatterlist: fix sg_split_phys() ->length clobber on !NEED_SG_DMA_LENGTH
+3:  8e3cf4840ec4 ! 3:  be6ee3623df7 lib: scatterlist: add KUnit tests for sg_split()
+    @@ Commit message
+             tools/testing/kunit/kunit.py run sg_split
+     
+         Assisted-by: Claude:claude-opus-4-8 hegel-c
+    +    Assisted-by: Claude:claude-fable-5 hegel-c
+         Signed-off-by: Charles Pellegrini <c4ffein.work@gmail.com>
+     
+      ## lib/Kconfig.debug ##
+    @@ lib/tests/sg_split_kunit.c (new)
+     + *
+     + * COVERAGE
+     + * --------
+    -+ * Every base case T1..T16 (+ T8b) runs in two modes via sg_split_run():
+    ++ * Every case runs in two modes via sg_split_run():
+     + *   - unmapped : in_mapped_nents = 0  -> the CPU-view path (sg_split_phys).
+     + *   - mapped   : an identity DMA mapping (dma_len == length, IOVA laid out
+     + *                contiguously from SG_SPLIT_DMA_BASE) -> additionally the
+    @@ lib/tests/sg_split_kunit.c (new)
+     +		KUNIT_ASSERT_NOT_NULL_MSG(test, out[k], "[%s] split[%d] NULL",
+     +					  mode, k);
+     +		/* Exactly one end marker, on the final entry: each entry is
+    -+		 * end-marked iff it is the last.  out_nents == 0 (the
+    -+		 * degenerate zero-size split, out[k] == ZERO_SIZE_PTR) walks
+    -+		 * zero times, so we never index out[k][-1].
+    ++		 * end-marked iff it is the last.
+     +		 */
+     +		for (int j = 0; j < out_nents[k]; j++)
+     +			KUNIT_EXPECT_EQ_MSG(test, !!sg_is_last(&out[k][j]),
+    @@ lib/tests/sg_split_kunit.c (new)
+     +					    "[%s] split[%d] entry[%d] end-mark wrong",
+     +					    mode, k, j);
+     +		/* Identity mapping keeps CPU and DMA geometry equal, so
+    -+		 * out_nents[k] is both counts; it is also 0 for a degenerate
+    -+		 * zero-size split, keeping the walk safe.
+    ++		 * out_nents[k] is both counts.
+     +		 */
+     +		sg_split_check_cpu(test, mode, k, out[k], out_nents[k],
+     +				   sizes[k], oracle, cursor);
+    @@ lib/tests/sg_split_kunit.c (new)
+     +}
+     +
+     +/* ========================================================================
+    -+ * Group C — trailing zero-size split.
+    -+ */
+    -+static void sg_split_t8_sizes_trailing_zero(struct kunit *test)
+    -+{
+    -+	const struct sg_split_in_spec in[] = { { 0, 0, 10 }, { 1, 0, 5 } };
+    -+	const size_t sizes[] = { 10, 0 };
+    -+
+    -+	sg_split_run(test, in, 2, 0, sizes, 2);
+    -+}
+    -+
+    -+/* ========================================================================
+     + * Group D — boundary-position matrix (3 x 10-byte entries).
+     + */
+     +static void sg_split_t9_mid_first_two_trailing(struct kunit *test)
+    @@ lib/tests/sg_split_kunit.c (new)
+     +	KUNIT_CASE(sg_split_t5_minimal_repro),
+     +	KUNIT_CASE(sg_split_t6_dthev2_aead_shape),
+     +	KUNIT_CASE(sg_split_t7_skip_plus_partial_midentry),
+    -+	KUNIT_CASE(sg_split_t8_sizes_trailing_zero),
+     +	KUNIT_CASE(sg_split_t9_mid_first_two_trailing),
+     +	KUNIT_CASE(sg_split_t10_edge_first_two_trailing),
+     +	KUNIT_CASE(sg_split_t11_mid_middle_one_trailing),
+4:  84ece42d3b39 < -:  ------------ lib: scatterlist: guard sg_split_phys()/sg_split_mapped() against zero-nents splits
+5:  b0787c7b7aae < -:  ------------ lib: scatterlist: add zero-nents regression test for sg_split()
+-:  ------------ > 4:  f2b78a5d536c lib: scatterlist: reject zero-size splits with -EINVAL
+-:  ------------ > 5:  04ac51bd79ee lib: scatterlist: add zero-size split rejection tests for sg_split()

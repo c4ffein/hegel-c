@@ -1,0 +1,151 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Fri, 23 Oct 2026 15:54:19 +0000
+Subject: [PATCH v3 3/6] lib: scatterlist: fix sg_split() splits that start at
+ the end of the input
+
+sg_calculate_split() walks the input entries and stops once every split
+has been placed. When the input runs out first, the splits not placed
+yet -- the current one and every one after it -- are left with nents == 0,
+and the function only checks that the current split has no bytes left
+before returning success. Two bugs follow.
+
+1. Out-of-bounds write. A zero-size split that starts exactly at the end
+   of the input gets nents == 0, so sg_split() allocates its output with
+
+       kmalloc_objs(struct scatterlist, 0, gfp_mask)
+
+   which returns ZERO_SIZE_PTR. Both copiers finish each split with a
+   fixup of the last entry they wrote -- sg_split_phys() does
+
+       out_sg[-1].length = split->length_last_sg;
+       sg_mark_end(out_sg - 1);
+
+   and sg_split_mapped() does
+
+       sg_dma_len(--out_sg) = split->length_last_sg;
+
+   For a split with no entry out_sg has not advanced, so these write
+   sizeof(struct scatterlist) below ZERO_SIZE_PTR. Examples: in = one
+   10-byte entry with sizes = {10, 0}, or skip = 10 with sizes = {0, 0}.
+
+2. A request that runs past the end of the input is accepted. Once a
+   zero-size split becomes the current one exactly as the input runs
+   out, the splits after it are never looked at, whatever their size:
+   in = one 10-byte entry with sizes = {10, 0, 5} returns success (and
+   hits the write above), while sizes = {10, 5} correctly returns -EINVAL.
+
+Fix both in sg_calculate_split(). When the input runs out before every
+split is placed, return -EINVAL if any of the remaining splits has bytes
+to cover. Otherwise they are all zero-size splits at the end of the
+input: give each of them one zero-length entry at the end of the last
+input entry (in_sg0 = that entry, skip_sg0 = its length, nents = 1,
+length_last_sg = 0). The copiers then produce a one-entry, zero-length,
+end-marked list for such a split, which is the shape a zero-size split
+already gets everywhere else (for instance in = {10, 5} with
+sizes = {10, 0}). So every out[k] of a successful call is a scatterlist
+that sg_nents(), sg_next() and the sg_copy_*() helpers can walk, and
+out_mapped_nents[k] is 1 for a zero-size split.
+
+The previous version of this series instead skipped splits with no entry
+in both copiers. That removed the write, but returned ZERO_SIZE_PTR as
+out[k], with no entry and no end marker, so the bad dereference moved to
+any caller walking out[k] (out_mapped_nents may be NULL for unmapped
+input, so a caller cannot always tell), and it did not fix bug 2.
+
+Document in the kernel-doc that the requested bytes must lie within the
+input, what a zero-size split returns, and that @out and
+@out_mapped_nents are left untouched on failure.
+
+No in-tree caller passes such a split_sizes[] array, so this is latent;
+bug 1 was surfaced by an automated review of the v1 posting.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Link: https://lore.kernel.org/all/20260601175549.b4a10c07dd9e3b867f66da0c@linux-foundation.org/
+Assisted-by: Claude:claude-opus-4-8 hegel-c
+Assisted-by: Claude:claude-opus-5-5 hegel-c
+---
+ lib/sg_split.c | 44 +++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 41 insertions(+), 3 deletions(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index ab574dd26..a2f6bf5ed 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -25,7 +25,8 @@ static int sg_calculate_split(struct scatterlist *in, int nents, int nb_splits,
+ 	unsigned int sglen;
+ 	size_t size = sizes[0], len;
+ 	struct sg_splitter *curr = splitters;
+-	struct scatterlist *sg;
++	struct scatterlist *sg, *last_sg = NULL;
++	unsigned int last_len = 0;
+ 
+ 	for (i = 0; i < nb_splits; i++) {
+ 		splitters[i].in_sg0 = NULL;
+@@ -34,6 +35,8 @@ static int sg_calculate_split(struct scatterlist *in, int nents, int nb_splits,
+ 
+ 	for_each_sg(in, sg, nents, i) {
+ 		sglen = mapped ? sg_dma_len(sg) : sg->length;
++		last_sg = sg;
++		last_len = sglen;
+ 		if (skip > sglen) {
+ 			skip -= sglen;
+ 			continue;
+@@ -71,7 +74,35 @@ static int sg_calculate_split(struct scatterlist *in, int nents, int nb_splits,
+ 			break;
+ 	}
+ 
+-	return (size || !splitters[0].in_sg0) ? -EINVAL : 0;
++	/*
++	 * The loop only ends with nb_splits > 0 when the input ran out before
++	 * every split was complete.  That is only valid if the current split
++	 * has no bytes left to cover and the splits after it, which start at
++	 * the very end of the input, are zero-size too.
++	 */
++	if (nb_splits > 0) {
++		if (size)
++			return -EINVAL;
++		for (i = 1; i < nb_splits; i++)
++			if (sizes[i])
++				return -EINVAL;
++	}
++	if (!splitters[0].in_sg0)
++		return -EINVAL;
++
++	/*
++	 * The splits left are zero-size splits that got no input entry.  Give
++	 * each one a zero-length entry at the end of the last input entry, so
++	 * that every output is a real, end-marked scatterlist.
++	 */
++	for (; nb_splits > 0; nb_splits--, curr++) {
++		curr->in_sg0 = last_sg;
++		curr->skip_sg0 = last_len;
++		curr->nents = 1;
++		curr->length_last_sg = 0;
++	}
++
++	return 0;
+ }
+ 
+ static void sg_split_phys(struct sg_splitter *splitters, const int nb_splits)
+@@ -142,9 +173,16 @@ static void sg_split_mapped(struct sg_splitter *splitters, const int nb_splits)
+  *  - @out[1], which covers bytes [@skip + split_sizes[0] ..
+  *                                 @skip + @split_sizes[0] + @split_sizes[1] -1]
+  * etc ...
++ * The requested bytes must lie within @in: @skip plus the sum of
++ * @split_sizes must not exceed the total length of @in (and, when
++ * @in_mapped_nents is not 0, the total DMA length of its mapped entries).
++ * A zero-size split is valid anywhere in that range, including at the very
++ * end; its output is a single end-marked entry of length 0 (DMA length 0 if
++ * mapped), and its @out_mapped_nents is 1.
+  * It will be the caller's duty to kfree() out array members.
+  *
+- * Returns 0 upon success, or error code
++ * Returns 0 upon success, -EINVAL if the request runs past the end of @in,
++ * or -ENOMEM.  On failure, @out and @out_mapped_nents are left untouched.
+  */
+ int sg_split(struct scatterlist *in, const int in_mapped_nents,
+ 	     const off_t skip, const int nb_splits,
+-- 
+2.47.3
+

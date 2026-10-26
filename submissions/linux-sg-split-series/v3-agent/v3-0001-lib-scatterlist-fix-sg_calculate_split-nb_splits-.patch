@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Fri, 23 Oct 2026 15:54:18 +0000
+Subject: [PATCH v3 1/6] lib: scatterlist: fix sg_calculate_split() nb_splits
+ overshoot on partial coverage
+
+sg_calculate_split() decrements nb_splits in two places per outer-loop
+iteration: once in the inner while() that advances to the next output
+split when a split boundary falls mid-entry, and once in the trailing
+
+    if (!size && --nb_splits > 0)
+
+The loop-termination check only tests for nb_splits == 0:
+
+    if (!nb_splits)
+        break;
+
+When the final requested split ends mid-entry of an input entry that is
+not the last one the pass iterates, both decrements run with their
+bodies skipped: the inner while() takes nb_splits 1 -> 0, then the
+trailing if() takes it 0 -> -1. The termination check sees -1, not 0, so
+the loop does not break and every remaining input entry is appended to
+the last split. Each appended entry gets len = min(0, sglen) = 0, so
+length_last_sg ends up 0, while the entry in which the split should have
+ended is no longer the last one and keeps its full length, as do the
+appended entries other than the last. The split therefore covers more
+bytes than requested: up to the end of the next-to-last input entry,
+followed by a zero-length entry. With CONFIG_NEED_SG_DMA_LENGTH, for
+in=[2, 1], skip=0, nb_splits=1, sizes=[1] the single output split is
+{2, 0}: 2 bytes instead of 1; for in=[2, 1, 1] it is {2, 1, 0}. (Without
+CONFIG_NEED_SG_DMA_LENGTH the ->length clobber fixed by the next patch
+also zeroes the non-last entries, and the first example gives {0, 0}.)
+
+The mapped pass (in_mapped_nents != 0) runs the same function over the
+DMA segmentation, which can be coarser than the CPU one. There the DMA
+pass can overshoot while the CPU pass does not, so it counts more
+entries for a split than sg_split() allocated from the CPU pass, and
+sg_split_mapped() writes past the end of that split's output array. For
+example, with three physically contiguous 5-byte entries mapped as two
+DMA segments [10, 5] and sizes=[5], the CPU pass ends on the edge of
+entry 0 (one entry allocated) while the DMA pass ends mid-segment 0 and
+overshoots to two entries: sg_split_mapped() writes one entry past the
+allocation (a heap-buffer-overflow write in a userspace ASan build).
+
+Widen the termination check to also catch the overshoot to -1:
+
+    if (nb_splits <= 0)
+        break;
+
+The new condition only fires when nb_splits is already negative, which is
+reachable solely through the double decrement above, so it cannot change
+behaviour for any input that splits correctly today.
+
+This was first reported by Alexander Egorenkov in 2021, with an identical
+root-cause analysis; that patch was never reviewed or merged. Its proposed
+fix moved the existing termination check above the second decrement rather
+than widening it. That handles the mid-entry case but regresses
+edge-aligned partial coverage -- a split ending exactly on an input-entry
+boundary with further entries trailing -- which the current code handles
+correctly. A KUnit test added later in this series
+(sg_split_t10_edge_first_two_trailing) covers that regression.
+
+No in-tree caller triggers the bug today: four request full coverage or
+re-split over a DMA-mapped subset, and the one caller that requests
+partial coverage (the DTHEv2 AEAD driver) bounds its consumer by cryptlen,
+masking the wrong geometry. The fix matters for callers that request
+partial coverage, which the kernel-doc allows: it defines out[k] as the
+byte range starting at skip + sizes[0] + ... + sizes[k - 1], which only
+requires the requested ranges to fit in the input, not to cover it.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Reported-by: Alexander Egorenkov <egorenar-dev@posteo.net>
+Closes: https://lore.kernel.org/all/20210418143425.22944-1-egorenar-dev@posteo.net/
+Assisted-by: Claude:claude-opus-4-8 hegel-c
+Assisted-by: Claude:claude-opus-5-5 hegel-c
+---
+ lib/sg_split.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index 24e8f5e48..28fe7fa6c 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -67,7 +67,7 @@ static int sg_calculate_split(struct scatterlist *in, int nents, int nb_splits,
+ 			size = *(++sizes);
+ 		}
+ 
+-		if (!nb_splits)
++		if (nb_splits <= 0)
+ 			break;
+ 	}
+ 
+-- 
+2.47.3
+

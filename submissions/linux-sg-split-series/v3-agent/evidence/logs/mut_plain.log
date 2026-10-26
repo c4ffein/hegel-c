@@ -1,0 +1,36 @@
+33 mutants of work/v3/lib/sg_split.c vs work/v3x/mut_fake.c work/v3x/mut_diff_x.c work/v3x/mut_new_x.c work/v3x/mut_props_x.c (ASan/UBSan)
+killed by mut_fake.c         L31: for (i = 0; i < nb_splits; i++) {   ->   for (i = 0; i <= nb_splits; i++) {
+killed by mut_fake.c         L45: if (skip > sglen || (skip == sglen && size && !curr->in_sg0)) {   ->   if (skip >= sglen || (skip == sglen && size && !curr->in_sg0)) {
+killed by mut_fake.c         L45: if (skip > sglen || (skip == sglen && size && !curr->in_sg0)) {   ->   if (skip > sglen || (skip != sglen && size && !curr->in_sg0)) {
+killed by mut_fake.c         L45: if (skip > sglen || (skip == sglen && size && !curr->in_sg0)) {   ->   if (skip > sglen || (skip == sglen || size && !curr->in_sg0)) {
+killed by mut_fake.c         L45: if (skip > sglen || (skip == sglen && size && !curr->in_sg0)) {   ->   if (skip > sglen || (skip == sglen && size || !curr->in_sg0)) {
+killed by mut_fake.c         L45: if (skip > sglen || (skip == sglen && size && !curr->in_sg0)) {   ->   if (skip > sglen && (skip == sglen && size && !curr->in_sg0)) {
+killed by mut_fake.c         L59: while (!size && (skip + len < sglen) && (--nb_splits > 0)) {   ->   while (!size && (skip + len < sglen) && (--nb_splits >= 0)) {
+killed by mut_fake.c         L59: while (!size && (skip + len < sglen) && (--nb_splits > 0)) {   ->   while (!size && (skip + len <= sglen) && (--nb_splits > 0)) {
+killed by mut_fake.c         L59: while (!size && (skip + len < sglen) && (--nb_splits > 0)) {   ->   while (!size || (skip + len < sglen) && (--nb_splits > 0)) {
+killed by mut_fake.c         L59: while (!size && (skip + len < sglen) && (--nb_splits > 0)) {   ->   while (!size && (skip + len < sglen) || (--nb_splits > 0)) {
+killed by mut_fake.c         L59: while (!size && (skip + len < sglen) && (--nb_splits > 0)) {   ->   while (!size && (skip + len < sglen) && (++nb_splits > 0)) {
+killed by mut_fake.c         L73: if (!size && --nb_splits > 0) {   ->   if (!size && --nb_splits >= 0) {
+killed by mut_fake.c         L73: if (!size && --nb_splits > 0) {   ->   if (!size || --nb_splits > 0) {
+killed by mut_fake.c         L73: if (!size && --nb_splits > 0) {   ->   if (!size && ++nb_splits > 0) {
+killed by mut_fake.c         L78: if (nb_splits <= 0)   ->   if (nb_splits < 0)
+SURVIVED                     L88: if (nb_splits > 0) {   ->   if (nb_splits >= 0) {
+killed by mut_fake.c         L91: for (i = 1; i < nb_splits; i++)   ->   for (i = 1; i <= nb_splits; i++)
+killed by mut_fake.c         L103: for (; nb_splits > 0; nb_splits--, curr++) {   ->   for (; nb_splits >= 0; nb_splits--, curr++) {
+killed by mut_fake.c         L103: for (; nb_splits > 0; nb_splits--, curr++) {   ->   for (; nb_splits > 0; nb_splits++, curr++) {
+killed by mut_fake.c         L119: for (i = 0, split = splitters; i < nb_splits; i++, split++) {   ->   for (i = 0, split = splitters; i <= nb_splits; i++, split++) {
+killed by mut_fake.c         L122: for (j = 0; j < split->nents; j++, out_sg++) {   ->   for (j = 0; j <= split->nents; j++, out_sg++) {
+killed by mut_fake.c         L136: sg_mark_end(out_sg - 1);   ->   sg_mark_end(out_sg);
+killed by mut_fake.c         L146: for (i = 0, split = splitters; i < nb_splits; i++, split++) {   ->   for (i = 0, split = splitters; i <= nb_splits; i++, split++) {
+killed by mut_fake.c         L149: for (j = 0; j < split->nents; j++, out_sg++) {   ->   for (j = 0; j <= split->nents; j++, out_sg++) {
+killed by mut_fake.c         L158: sg_dma_len(--out_sg) = split->length_last_sg;   ->   sg_dma_len(++out_sg) = split->length_last_sg;
+killed by mut_fake.c         L202: if (nb_splits <= 0 || skip < 0)   ->   if (nb_splits <= 0 || skip <= 0)
+killed by mut_new_x.c        L202: if (nb_splits <= 0 || skip < 0)   ->   if (nb_splits < 0 || skip < 0)
+killed by mut_fake.c         L202: if (nb_splits <= 0 || skip < 0)   ->   if (nb_splits <= 0 && skip < 0)
+killed by mut_fake.c         L211: if (ret < 0)   ->   if (ret <= 0)
+killed by mut_fake.c         L215: for (i = 0; i < nb_splits; i++) {   ->   for (i = 0; i <= nb_splits; i++) {
+killed by mut_fake.c         L229: if (ret < 0)   ->   if (ret <= 0)
+killed by mut_fake.c         L234: for (i = 0; i < nb_splits; i++) {   ->   for (i = 0; i <= nb_splits; i++) {
+killed by mut_fake.c         L244: for (i = 0; i < nb_splits; i++)   ->   for (i = 0; i <= nb_splits; i++)
+
+1 of 33 survived

@@ -1,0 +1,26 @@
+ok    sg_split_t1_single_entry_full
+ok    sg_split_t2_two_entries_full_coverage
+ok    sg_split_t3_two_entries_two_splits_full
+ok    sg_split_t4_edge_aligned_partial
+ok    sg_split_t6_dthev2_aead_shape
+ok    sg_split_t5_minimal_repro
+ok    sg_split_t7_skip_plus_partial_midentry
+ok    sg_split_t8_sizes_trailing_zero
+ok    sg_split_t8b_trailing_zero_no_input_left
+ok    sg_split_t8c_skip_at_end_zero_splits
+ok    sg_split_t8d_past_end_after_zero_split
+ok    sg_split_t8e_past_end
+ok    sg_split_t9_mid_first_two_trailing
+ok    sg_split_t10_edge_first_two_trailing
+ok    sg_split_t11_mid_middle_one_trailing
+ok    sg_split_t12_mid_last_no_trailing
+ok    sg_split_t13_skip_at_entry_boundary
+ok    sg_split_t14_skip_fastforward_partial
+ok    sg_split_t15_two_splits_last_mid_trailing
+ok    sg_split_t16_two_splits_full_coverage_mid_first
+ok    sg_split_t17_split_starts_at_empty_entry
+ok    sg_split_t18_invalid_args
+skip  sg_split_d1_coalesce_3to1
+skip  sg_split_d2_coalesce_3to2
+skip  sg_split_d3_coalesce_3to1_skip
+kunit-replay: 25 cases, 0 failed/crashed

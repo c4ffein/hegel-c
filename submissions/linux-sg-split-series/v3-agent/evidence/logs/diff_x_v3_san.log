@@ -1,0 +1,2 @@
+sg_split differential old=../../kernel/lib/sg_split.c vs new: ALLOW=7 NEED_SG_DMA_LENGTH=0 cases=1500
+differential v2/v3: pass  (identical-required=616, changed-allowed=884 [E1=198 E2=619 E3=129] of which still identical=37, valid ones among those=0; old not called=0)

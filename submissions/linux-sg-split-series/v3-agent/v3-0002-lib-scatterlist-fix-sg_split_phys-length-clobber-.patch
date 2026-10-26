@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Fri, 23 Oct 2026 15:54:18 +0000
+Subject: [PATCH v3 2/6] lib: scatterlist: fix sg_split_phys() ->length clobber
+ on !NEED_SG_DMA_LENGTH
+
+sg_split_phys() builds each output entry by copying the input entry and
+then scrubbing the output's DMA view:
+
+    *out_sg = *in_sg;
+    sg_dma_address(out_sg) = 0;
+    sg_dma_len(out_sg) = 0;
+
+On configurations where CONFIG_NEED_SG_DMA_LENGTH is not selected,
+sg_dma_len() is defined as ((sg)->length): there is no separate
+dma_length member. The sg_dma_len(out_sg) = 0 line therefore zeroes the
+CPU ->length that the function computes for the split. The trailing
+
+    out_sg[-1].length = split->length_last_sg;
+
+restores only the last entry, so for a multi-entry split every non-last
+entry is left with length 0 and the split silently exposes fewer bytes
+than requested.
+
+This shows for unmapped input (in_mapped_nents == 0) only. With a
+mapping, sg_split_mapped() runs afterwards and sets sg_dma_len() -- that
+is, ->length -- of every output entry again from the input, which hides
+the clobber. Where CONFIG_NEED_SG_DMA_LENGTH is selected (any config with
+an IOMMU, and arches such as x86, arm64, powerpc and sparc, or s390 with
+PCI) sg_dma_len() touches the distinct dma_length field and ->length is
+untouched, so the bug does not manifest.
+
+Compute the length into a local and assign ->length after the DMA scrub,
+so the value survives on both configurations:
+
+    unsigned int len = in_sg->length;
+
+    *out_sg = *in_sg;
+    sg_dma_address(out_sg) = 0;
+    sg_dma_len(out_sg) = 0;
+    if (!j) {
+        out_sg->offset += split->skip_sg0;
+        len -= split->skip_sg0;
+    }
+    out_sg->length = len;
+
+The sg_dma_len() = 0 scrub is kept deliberately: on NEED configurations it
+clears the dma_length copied by *out_sg = *in_sg, which a consumer would
+otherwise read as stale. Deleting it would fix the !NEED case but leak a
+stale DMA length on NEED; reordering is correct on both.
+
+No in-tree caller triggers this: the only caller that hands sg_split() an
+unmapped list and requests a multi-entry partial split (the DTHEv2 AEAD
+driver) builds for an arm64 platform, which selects
+CONFIG_NEED_SG_DMA_LENGTH and is therefore immune. It was found while
+correcting an in_mapped_nents argument in the KUnit suite added later in
+this series, which is what first exercised the unmapped multi-entry path
+on a !NEED build.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Assisted-by: Claude:claude-opus-4-8 hegel-c
+Assisted-by: Claude:claude-opus-5-5 hegel-c
+---
+ lib/sg_split.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index 28fe7fa6c..ab574dd26 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -84,13 +84,16 @@ static void sg_split_phys(struct sg_splitter *splitters, const int nb_splits)
+ 		in_sg = split->in_sg0;
+ 		out_sg = split->out_sg;
+ 		for (j = 0; j < split->nents; j++, out_sg++) {
++			unsigned int len = in_sg->length;
++
+ 			*out_sg = *in_sg;
++			sg_dma_address(out_sg) = 0;
++			sg_dma_len(out_sg) = 0;
+ 			if (!j) {
+ 				out_sg->offset += split->skip_sg0;
+-				out_sg->length -= split->skip_sg0;
++				len -= split->skip_sg0;
+ 			}
+-			sg_dma_address(out_sg) = 0;
+-			sg_dma_len(out_sg) = 0;
++			out_sg->length = len;
+ 			in_sg = sg_next(in_sg);
+ 		}
+ 		out_sg[-1].length = split->length_last_sg;
+-- 
+2.47.3
+

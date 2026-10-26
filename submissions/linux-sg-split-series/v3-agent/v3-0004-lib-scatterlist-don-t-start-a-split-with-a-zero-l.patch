@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Fri, 23 Oct 2026 15:54:19 +0000
+Subject: [PATCH v3 4/6] lib: scatterlist: don't start a split with a
+ zero-length entry
+
+When a split with bytes to cover starts exactly at the end of an input
+entry, sg_calculate_split() attaches it to that entry anyway, because
+the test that skips entries is skip > sglen, which is false for
+skip == sglen. The split takes 0 bytes from that entry and its output
+starts with a zero-length entry. For in = {10, 10, 10}, skip = 10,
+sizes = {5}, out[0] is {0, 5} with nents 2 instead of {5} with nents 1.
+A split that starts at an empty input entry gets the same leading
+zero-length entry.
+
+The bytes are still right, but on a mapped list the first output entry
+then has sg_dma_len() == 0, and scatterlist.h allows a DMA consumer to
+stop at the first entry whose sg_dma_len() is 0, so such a consumer sees
+the whole split as empty.
+
+Skip the entry instead when the split has bytes to cover and has not
+started yet. A zero-size split still attaches to it: at the very end of
+the input there is no next entry, so for instance skip equal to the total
+length with sizes = {0} must keep working. That is also why changing the
+test to skip >= sglen is not enough: it returns -EINVAL for that valid
+request.
+
+This only changes the outputs that started with a zero-length entry,
+which lose that entry; every other output is unchanged.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Assisted-by: Claude:claude-opus-5-5 hegel-c
+---
+ lib/sg_split.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index a2f6bf5ed..1904dd609 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -37,7 +37,12 @@ static int sg_calculate_split(struct scatterlist *in, int nents, int nb_splits,
+ 		sglen = mapped ? sg_dma_len(sg) : sg->length;
+ 		last_sg = sg;
+ 		last_len = sglen;
+-		if (skip > sglen) {
++		/*
++		 * A split with bytes to cover starts in the first entry that
++		 * has bytes left past skip: starting it in an entry that ends
++		 * exactly at skip would only give it a zero-length first entry.
++		 */
++		if (skip > sglen || (skip == sglen && size && !curr->in_sg0)) {
+ 			skip -= sglen;
+ 			continue;
+ 		}
+-- 
+2.47.3
+

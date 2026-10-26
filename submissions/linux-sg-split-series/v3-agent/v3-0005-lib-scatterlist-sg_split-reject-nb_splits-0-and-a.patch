@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Fri, 23 Oct 2026 15:54:19 +0000
+Subject: [PATCH v3 5/6] lib: scatterlist: sg_split(): reject nb_splits <= 0
+ and a negative skip
+
+sg_split() does not check its scalar arguments:
+
+ - nb_splits == 0: the splitters array is a zero-size allocation
+   (ZERO_SIZE_PTR), and sg_calculate_split() reads split_sizes[0] and
+   reads and writes splitters[0] before it looks at nb_splits: an
+   out-of-bounds access (a heap-buffer-overflow in a userspace ASan
+   build).
+
+ - nb_splits < 0: the count passed to kzalloc_objs() is negative, so the
+   allocation size overflows; the call fails and sg_split() reports
+   -ENOMEM for what is an invalid argument.
+
+ - skip < 0: skip is an off_t (a long) compared with an unsigned int
+   entry length. On 64-bit the comparison is signed, so a negative skip
+   never skips anything and becomes a negative offset into the first
+   entry. With a 10-byte entry at page offset 100, skip = -3 and
+   sizes = {5}, out[0] starts at offset 97, three bytes before the input,
+   and sg_split() returns 0. On 32-bit, long and unsigned int compare as
+   unsigned, so a negative skip already looks like a skip past the end of
+   @in and sg_split() returns -EINVAL; the new check gives 64-bit the same
+   result.
+
+The kernel-doc does not rule out any of them. Return -EINVAL for all three
+before allocating anything, and say so in the kernel-doc.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Assisted-by: Claude:claude-opus-5-5 hegel-c
+---
+ lib/sg_split.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index 1904dd609..70a9eb557 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -186,8 +186,9 @@ static void sg_split_mapped(struct sg_splitter *splitters, const int nb_splits)
+  * mapped), and its @out_mapped_nents is 1.
+  * It will be the caller's duty to kfree() out array members.
+  *
+- * Returns 0 upon success, -EINVAL if the request runs past the end of @in,
+- * or -ENOMEM.  On failure, @out and @out_mapped_nents are left untouched.
++ * Returns 0 upon success, -EINVAL if @nb_splits is not positive, @skip is
++ * negative or the request runs past the end of @in, or -ENOMEM.  On
++ * failure, @out and @out_mapped_nents are left untouched.
+  */
+ int sg_split(struct scatterlist *in, const int in_mapped_nents,
+ 	     const off_t skip, const int nb_splits,
+@@ -198,6 +199,9 @@ int sg_split(struct scatterlist *in, const int in_mapped_nents,
+ 	int i, ret;
+ 	struct sg_splitter *splitters;
+ 
++	if (nb_splits <= 0 || skip < 0)
++		return -EINVAL;
++
+ 	splitters = kzalloc_objs(*splitters, nb_splits, gfp_mask);
+ 	if (!splitters)
+ 		return -ENOMEM;
+-- 
+2.47.3
+

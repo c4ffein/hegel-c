@@ -1,0 +1,104 @@
+From f2b78a5d536cdfd65c25a6d4fbd2bb6ef25acf84 Mon Sep 17 00:00:00 2001
+In-Reply-To: <178113124323.90620.6403136846887207198@gmail.com>
+References: <178113124323.90620.6403136846887207198@gmail.com>
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Date: Mon, 6 Jul 2026 18:59:11 +0000
+Subject: [PATCH v3 4/5] lib: scatterlist: reject zero-size splits with -EINVAL
+
+sg_calculate_split() has no defined result for a zero entry in
+split_sizes[], and each position such a zero can take misbehaves
+differently:
+
+ - With input entries remaining past it, the zero-size split is
+   assigned one zero-length output entry. The DMA API provides no
+   defined behavior for zero-length segments, DMA engines have needed
+   explicit guards against them (78efb76ab4df ("dmaengine: rcar-dmac:
+   Reject zero-length slave DMA requests")), and the block layer
+   disallows them outright (9b2e0016d04c ("bvec/iter: disallow
+   zero-length segment bvecs")).
+
+ - Landing exactly when the input is exhausted, the split keeps
+   nents == 0, its output array allocation returns ZERO_SIZE_PTR, and
+   the out_sg[-1] fixup in sg_split_phys()/sg_split_mapped() is an
+   out-of-bounds write (a wild write landing outside any valid
+   mapping -- oopses under KUnit; also reproduced as a heap overflow
+   with a userspace ASAN harness).
+
+ - In that same position with further non-zero sizes after it, the
+   !size loop-exit check in sg_calculate_split() additionally mistakes
+   the request for satisfied: sg_split() returns success with the
+   trailing splits silently unfulfilled.
+
+There is no good empty value to hand back either. The CPU view of a
+scatterlist has no empty representation (the end-of-list marker lives
+on the last entry). The DMA view has a documented terminator --
+consumers of a mapped list may stop on the first sg_dma_len() == 0
+entry (include/linux/scatterlist.h) -- but carrying it requires
+allocating an entry whose CPU view is then a zero-length element, the
+shape rejected above, and sg_split_mapped() already leaves
+dma_len == 0 on the trailing entries of ordinary shorter mapped views,
+so overloading it as "empty split" would be ambiguous. A zero landing
+at input exhaustion has no allocated entry to carry a sentinel at all.
+
+Reject any zero split size upfront with -EINVAL. With every accepted
+size >= 1, each split on the success path consumes at least one input
+byte, so nents >= 1 always holds and the out_sg[-1] fixups stay in
+bounds.
+
+No in-tree caller passes a zero size. The two callers whose sizes
+could arithmetically reach zero already branch around the call
+(dthev2-aes.c's cryptlen == 0 guard, spi-omap2-mcspi.c's
+transfer_reduction test), and the nearest in-tree consumer of split
+outputs rejects empty lists with the same errno
+(sec_alloc_and_fill_hw_sgl() in drivers/crypto/hisilicon/sec/).
+
+The out-of-bounds write and the test-argument issue that exposed this
+family were flagged by an automated review of the v1 posting; the
+silent-success case by its review of v2.
+
+Fixes: f8bcbe62acd0 ("lib: scatterlist: add sg splitting function")
+Link: https://lore.kernel.org/all/20260601175549.b4a10c07dd9e3b867f66da0c@linux-foundation.org/
+Assisted-by: Claude:claude-fable-5 hegel-c
+Signed-off-by: Charles Pellegrini <c4ffein.work@gmail.com>
+---
+ lib/sg_split.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/lib/sg_split.c b/lib/sg_split.c
+index ab574dd26b03..058ccc9b446e 100644
+--- a/lib/sg_split.c
++++ b/lib/sg_split.c
+@@ -129,7 +129,8 @@ static void sg_split_mapped(struct sg_splitter *splitters, const int nb_splits)
+  * @in_mapped_nents: the result of a dma_map_sg(in, ...), or 0 if not mapped.
+  * @skip: the number of bytes to skip in the input sg list
+  * @nb_splits: the number of desired sg outputs
+- * @split_sizes: the respective size of each output sg list in bytes
++ * @split_sizes: the respective size of each output sg list in bytes; every
++ *               size must be non-zero
+  * @out: an array where to store the allocated output sg lists
+  * @out_mapped_nents: the resulting sg lists mapped number of sg entries. Might
+  *                    be NULL if sglist not already mapped (in_mapped_nents = 0)
+@@ -144,7 +145,8 @@ static void sg_split_mapped(struct sg_splitter *splitters, const int nb_splits)
+  * etc ...
+  * It will be the caller's duty to kfree() out array members.
+  *
+- * Returns 0 upon success, or error code
++ * Returns 0 upon success, or error code; a zero entry in @split_sizes is
++ * rejected with -EINVAL.
+  */
+ int sg_split(struct scatterlist *in, const int in_mapped_nents,
+ 	     const off_t skip, const int nb_splits,
+@@ -155,6 +157,10 @@ int sg_split(struct scatterlist *in, const int in_mapped_nents,
+ 	int i, ret;
+ 	struct sg_splitter *splitters;
+ 
++	for (i = 0; i < nb_splits; i++)
++		if (!split_sizes[i])
++			return -EINVAL;
++
+ 	splitters = kzalloc_objs(*splitters, nb_splits, gfp_mask);
+ 	if (!splitters)
+ 		return -ENOMEM;
+-- 
+2.47.3
+

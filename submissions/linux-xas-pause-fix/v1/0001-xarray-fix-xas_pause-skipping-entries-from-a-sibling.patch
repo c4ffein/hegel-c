@@ -1,0 +1,86 @@
+From: Charles Pellegrini <c4ffein.work@gmail.com>
+Subject: [PATCH] xarray: fix xas_pause() skipping entries when the walk
+ started in a sibling slot
+
+xas_pause() advances xa_index past the current entry and its siblings
+by (offset - xa_offset) << node->shift, where offset is the first slot
+past the siblings. That assumes xa_index lies in the slot xa_offset
+names. It does not when the walk started at an index inside a
+multi-index entry: xas_descend() resolves a sibling slot to the entry's
+canonical slot, so xa_offset is the canonical slot while xa_index still
+points into a sibling.
+
+Commit c9ba5249ef8b ("Xarray: move forward index correctly in
+xas_pause()") fixed the case where xa_index carries bits below
+node->shift, by masking them off first. It does not cover a walk that
+starts in a sibling slot of a leaf node (shift 0), where there are no
+such bits: with an order-1 entry at 0-1 and an entry at 2, a walk from
+index 1 yields the entry at 0 with xa_offset 0, and xas_pause() sets
+xa_index = 1 + (2 - 0) = 3. The walk never yields the entry at 2.
+
+Measure the step from the slot xa_index is actually in, get_offset(),
+after masking the bits below node->shift. The two agree whenever the
+walk did not start in a sibling slot, so nothing changes there.
+
+Add the case to check_pause(); it fails without the fix.
+
+Tested with tools/testing/radix-tree on v7.3 (built with ASan and
+UBSan): the new check fails without the fix; with it, xarray, idr-test,
+multiorder, maple and main all pass.
+
+The bug was found with property-based testing of lib/xarray.c in
+userspace (hegel-c, https://github.com/c4ffein/hegel-c), with an LLM
+assistant writing the harness, minimising the reproducer, and drafting
+this fix and changelog, which I reviewed.
+
+Fixes: b803b42823d0 ("xarray: Add XArray iterators")
+Assisted-by: Claude Opus 5.5 hegel-c
+---
+ lib/test_xarray.c | 18 ++++++++++++++++++
+ lib/xarray.c      |  3 ++-
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/lib/test_xarray.c b/lib/test_xarray.c
+index 5ca0aefee..66f5d12d7 100644
+--- a/lib/test_xarray.c
++++ b/lib/test_xarray.c
+@@ -1497,6 +1497,24 @@ static noinline void check_pause(struct xarray *xa)
+ 
+ 	xa_destroy(xa);
+ 
++	/* test index in a sibling slot of a multi-index entry in a leaf */
++	XA_BUG_ON(xa, xa_store_order(xa, 0, 1, xa_mk_index(0), GFP_KERNEL));
++	XA_BUG_ON(xa, xa_store_index(xa, 2, GFP_KERNEL) != NULL);
++
++	index = 0;
++	count = 0;
++	xas_set(&xas, 1);
++	rcu_read_lock();
++	xas_for_each(&xas, entry, ULONG_MAX) {
++		XA_BUG_ON(xa, entry != xa_mk_index(index));
++		index += 2;
++		count++;
++		xas_pause(&xas);
++	}
++	rcu_read_unlock();
++	XA_BUG_ON(xa, count != 2);
++
++	xa_destroy(xa);
+ }
+ 
+ static noinline void check_move_tiny(struct xarray *xa)
+diff --git a/lib/xarray.c b/lib/xarray.c
+index bfe7bef80..f1c289e5c 100644
+--- a/lib/xarray.c
++++ b/lib/xarray.c
+@@ -1290,7 +1290,8 @@ void xas_pause(struct xa_state *xas)
+ 				break;
+ 		}
+ 		xas->xa_index &= ~0UL << node->shift;
+-		xas->xa_index += (offset - xas->xa_offset) << node->shift;
++		xas->xa_index += (offset - get_offset(xas->xa_index, node)) <<
++				node->shift;
+ 		if (xas->xa_index == 0)
+ 			xas->xa_node = XAS_BOUNDS;
+ 	} else {
+-- 

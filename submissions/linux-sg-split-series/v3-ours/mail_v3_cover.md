@@ -1,0 +1,162 @@
+Subject: [PATCH v3 0/5] lib: scatterlist: fix sg_split() partial-coverage geometry, two latent corruption bugs, and reject zero-size splits
+In-Reply-To: <178113124323.90620.6403136846887207198@gmail.com>  (v2 cover)
+
+sg_split() is EXPORT_SYMBOL'd, so its contract is "any caller, any
+split_sizes[]", not just the six in-tree call sites. None of the bugs
+below is triggered by an in-tree caller today -- all are latent. So
+even without a real-world trigger, I think they're worth fixing.
+
+The automated (Sashiko) review of v2 found one issue, confirmed real
+and pre-existing: a zero split size landing exactly at input
+exhaustion, with non-zero sizes still pending, makes
+sg_calculate_split() return success while the trailing splits are
+silently left unfulfilled (bug 4 below). On current kernels that input
+instead hits the ZERO_SIZE_PTR out-of-bounds write (bug 3): the bogus
+success was unobservable before, and would have become observable
+precisely with v2's tolerate-and-skip guard applied as-is.
+
+That settled the zero-size question v2 left open, in favor of
+rejection (patch 4):
+
+ - there is no good empty result to return: the CPU view of a
+   scatterlist has no empty representation (the end-of-list marker
+   lives on the last entry), and while the DMA view has a documented
+   terminator -- stop on the first sg_dma_len() == 0 entry
+   (include/linux/scatterlist.h) -- carrying it needs an allocated
+   entry whose CPU view is then a zero-length element, and
+   sg_split_mapped() already leaves dma_len == 0 on trailing entries
+   of ordinary shorter mapped views, so overloading it as "empty"
+   would be ambiguous;
+ - the shape it returns today with input remaining -- one zero-length
+   entry -- is not accepted downstream: the block layer disallows
+   zero-length segments outright (9b2e0016d04c ("bvec/iter: disallow
+   zero-length segment bvecs")) and DMA engines have needed explicit
+   guards against them (78efb76ab4df ("dmaengine: rcar-dmac: Reject
+   zero-length slave DMA requests"));
+ - no in-tree caller can pass a zero size: the two whose sizes could
+   arithmetically reach zero already branch around the call
+   (dthev2-aes.c's cryptlen == 0 guard, spi-omap2-mcspi.c's
+   transfer_reduction test), and the nearest in-tree consumer of split
+   outputs rejects empty lists with the same errno
+   (sec_alloc_and_fill_hw_sgl() in drivers/crypto/hisilicon/sec/).
+
+The four bugs (all Fixes: f8bcbe62acd0):
+
+1. sg_calculate_split() nb_splits overshoot (unchanged from v1/v2).
+   Partial coverage ending mid-entry of a non-last input entry
+   overshoots the counter to -1, misses the !nb_splits termination
+   check, and folds a trailing entry into the last split.
+
+2. sg_split_phys() ->length clobber (unchanged from v2). On
+   !NEED_SG_DMA_LENGTH configs sg_dma_len() aliases ->length, so the
+   DMA-scrub line zeroes the CPU length it has just computed; only the
+   last entry is restored -> silent short data on multi-entry splits.
+
+3. zero-nents ZERO_SIZE_PTR OOB. A split that receives no input entry
+   leaves out_sg == ZERO_SIZE_PTR; the out_sg[-1] fixups in both
+   copiers are then out-of-bounds writes -- wild writes landing outside
+   any valid mapping (oopses under KUnit; also reproduced as a heap
+   overflow with a userspace ASAN harness).
+
+4. zero-at-exhaustion silent success (new; found by the v2 review).
+   Described above. Minimal reproducer: 1-byte input,
+   split_sizes = {1, 0, 1} -> returns 0 with split[2] empty.
+
+Patch layout (bisect-safe):
+
+  1/5  overshoot fix               -- unchanged from v1/v2
+  2/5  ->length clobber fix        -- unchanged from v2
+  3/5  KUnit suite                 -- T1-T16 minus the zero-size case,
+                                      each run unmapped AND
+                                      identity-mapped; NEED-gated
+                                      divergent-geometry cases
+  4/5  reject zero-size splits     -- fixes bugs 3 and 4 in one check;
+                                      supersedes v2's copier guards
+  5/5  zero-size rejection tests   -- the three zero positions, all
+                                      asserting -EINVAL
+
+Patches 4 and 5 remain an isolable tail: patches 1-3 stand on their
+own if you'd rather take only those.
+
+Changes since v2:
+ - patch 4 is now an upfront -EINVAL rejection of zero split sizes,
+   replacing v2's tolerate-and-skip copier guards. With every accepted
+   size >= 1, each split on the success path consumes at least one
+   input byte, so nents >= 1 always holds and the out_sg[-1] fixups
+   stay in bounds -- the guards become dead code and are not added.
+ - this also fixes the silent-success the v2 review found (bug 4);
+   tolerate-and-skip alone would have exposed it.
+ - the zero-size case moved out of the base suite (patch 3) into
+   patch 5, which now covers all three zero positions (input
+   remaining / at exhaustion / at exhaustion with trailing non-zero),
+   asserting -EINVAL and an untouched output array.
+ - kdoc: @split_sizes documents the non-zero requirement and the
+   -EINVAL return.
+ - rebased net-7.1-rc2 -> v7.2-rc1.
+
+If you'd rather keep tolerating zero-size splits, the alternative is
+small and was implemented and tested as well -- tolerate-and-skip plus
+an exit check so trailing non-zero sizes still fail (fixing bug 4
+under tolerate semantics):
+
+    --- a/lib/sg_split.c   (alternative to patch 4; NOT part of this series)
+    +++ b/lib/sg_split.c
+    @@ sg_calculate_split()
+    -	return (size || !splitters[0].in_sg0) ? -EINVAL : 0;
+    +	if (size || !splitters[0].in_sg0)
+    +		return -EINVAL;
+    +	while (--nb_splits > 0)	/* unconsumed sizes must all be zero */
+    +		if (*(++sizes))
+    +			return -EINVAL;
+    +	return 0;
+    @@ sg_split_phys()
+     	for (i = 0, split = splitters; i < nb_splits; i++, split++) {
+    +		if (!split->nents)
+    +			continue;
+    @@ sg_split_mapped()
+     	for (i = 0, split = splitters; i < nb_splits; i++, split++) {
+    +		if (!split->nents)
+    +			continue;
+
+I went with rejection because the tolerated result is unusable (see
+above) and rejecting is the reversible choice: relaxing -EINVAL to
+tolerance later breaks nobody, while the reverse would. Happy to
+respin to the tolerate variant if you prefer.
+
+Testing. KUnit: UML (!NEED_SG_DMA_LENGTH): 18 passed / 3 skipped
+(divergent cases need a separate dma_length field); x86_64 + KASAN:
+21/21 passed. At series position 3 (base suite only): UML 15 passed /
+3 skipped. Bisect control -- with patch 4 reverted at the tip
+(x86_64 + KASAN), exactly t8/t8b/t8c fail: t8's zero-size split is
+silently accepted, and t8b/t8c oops on the wild out_sg[-1] write
+through the ZERO_SIZE_PTR output array (page fault at
+0xfffffffffffffffc, caught by KUnit). checkpatch --strict: clean (one
+benign
+MAINTAINERS warning on the new test file; lib/sg_split.c is orphaned
+LIBRARY CODE).
+
+Additionally, both zero-size semantics (this rejection and the
+tolerate alternative above) were implemented in a userspace harness
+and run against a property-based contract suite whose generator draws
+zero and over-requesting sizes; each variant passes under its own
+contract, and cross-checking each against the other's contract fails
+exactly at the minimal divergent input (a single zero-size split) --
+i.e. the suite distinguishes the semantics, and the chosen one holds.
+
+v1: https://lore.kernel.org/all/178027099087.72481.1976843064458686851@gmail.com/
+v2: https://lore.kernel.org/all/178113124323.90620.6403136846887207198@gmail.com/
+
+Charles Pellegrini (5):
+  lib: scatterlist: fix sg_calculate_split() nb_splits overshoot on
+    partial coverage
+  lib: scatterlist: fix sg_split_phys() ->length clobber on
+    !NEED_SG_DMA_LENGTH
+  lib: scatterlist: add KUnit tests for sg_split()
+  lib: scatterlist: reject zero-size splits with -EINVAL
+  lib: scatterlist: add zero-size split rejection tests for sg_split()
+
+ lib/Kconfig.debug          |  14 ++
+ lib/sg_split.c             |  22 +-
+ lib/tests/Makefile         |   1 +
+ lib/tests/sg_split_kunit.c | 587 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 618 insertions(+), 6 deletions(-)
