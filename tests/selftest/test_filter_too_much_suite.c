@@ -27,27 +27,18 @@
 #include <stdlib.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
-
-typedef struct Thing {
-  int                 x;
-} Thing;
 
 /* ---- Layer 1: predicate ---- */
 
 static
 int
 only_accept_zero (
-int                         v,
-void *                      ctx)
+int                         v)
 {
-  (void) ctx;
   return (v == 0);
 }
 
 /* ---- Layer 2: hegel tests ---- */
-
-static hegel_schema_t thing_schema;
 
 static
 void
@@ -72,11 +63,13 @@ void
 test_too_strict (
 hegel_testcase *            tc)
 {
-  Thing *             t;
-  hegel_shape *       sh;
+  int                 x;
 
-  sh = hegel_schema_draw (tc, thing_schema, (void **) &t);
-  hegel_shape_free (sh);
+  /* A filter: draw, and reject the case when the predicate fails.
+  ** The body is intentionally trivial — the interesting behavior is
+  ** the engine deciding to abort generation. */
+  x = hegel_draw_int (tc, -1000000, 1000000);
+  hegel_assume (tc, only_accept_zero (x));
 }
 
 /* ---- Layer 3: runner ---- */
@@ -87,17 +80,11 @@ main (void)
   hegel_suite *       s;
   int                 rc;
 
-  thing_schema = HEGEL_STRUCT (Thing,
-      HEGEL_FILTER_INT (hegel_schema_int_range (-1000000, 1000000),
-                        only_accept_zero, NULL));
-
   s = hegel_suite_new ();
   hegel_suite_add (s, "test_passes_first", test_passes_first);
   hegel_suite_add (s, "test_too_strict",   test_too_strict);
   rc = hegel_suite_run (s);
   hegel_suite_free (s);
-
-  hegel_schema_free (thing_schema);
 
   /* Suite returns non-zero because test_too_strict triggers
   ** the health check.  Pass that signal up to our exit. */

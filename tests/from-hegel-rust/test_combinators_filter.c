@@ -7,47 +7,31 @@
 **   assert!(value % 2 == 0);
 **   assert!((0..=100).contains(&value));
 **
-** Schema-API translation of the original combinator-API port.
+** filter(): draw, and reject the case when the predicate fails.
 */
 #include <stdio.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
-
-static
-int
-is_even (int val, void * ctx)
-{
-  (void) ctx;
-  return (val % 2 == 0);
-}
-
-static hegel_schema_t  filter_schema;
 
 static
 void
 test_filter (
 hegel_testcase *            tc)
 {
-  int                  val = 0;
-  hegel_shape *        sh;
+  int                  val;
 
-  sh = HEGEL_DRAW (&val, filter_schema);
+  val = hegel_draw_int (tc, 0, 100);
+  hegel_assume (tc, val % 2 == 0);
 
   HEGEL_ASSERT (val % 2 == 0,
                 "filter produced odd value: %d", val);
   HEGEL_ASSERT (val >= 0 && val <= 100,
                 "filter result %d out of [0, 100]", val);
-
-  hegel_shape_free (sh);
 }
 
 int
 main (void)
 {
-  filter_schema = HEGEL_FILTER_INT (
-      HEGEL_INT (0, 100), is_even, NULL);
   hegel_run_test (test_filter);
-  hegel_schema_free (filter_schema);
   return (0);
 }

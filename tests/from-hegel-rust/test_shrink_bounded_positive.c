@@ -17,39 +17,23 @@
 #include <stdint.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 
-static
-int
-is_nonzero (
-int64_t             val,
-void *              ctx)
-{
-  (void) ctx;
-  return (val != 0);
-}
-
-static hegel_schema_t  filter_schema;
-
+/* filter(x != 0): draw, and reject the case when the predicate fails. */
 static
 void
 test_bounded_positive (
 hegel_testcase *    tc)
 {
-  int64_t             val = 0;
-  hegel_shape *       sh;
+  int64_t             val;
 
-  sh = HEGEL_DRAW (&val, filter_schema);
+  val = hegel_draw_i64 (tc, -10, 10);
+  hegel_assume (tc, val != 0);
   HEGEL_ASSERT (0, "x=%ld", (long) val);
-  hegel_shape_free (sh);
 }
 
 int
 main (void)
 {
-  filter_schema = HEGEL_FILTER_I64 (
-      HEGEL_I64 (-10, 10), is_nonzero, NULL);
   hegel_run_test (test_bounded_positive);
-  hegel_schema_free (filter_schema);
   return (0);
 }

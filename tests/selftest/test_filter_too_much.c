@@ -4,9 +4,9 @@
 
 /* Regression test for the "filter_too_much" health-check path.
 **
-** When a HEGEL_FILTER_INT predicate rejects too many candidate
-** values, hegel-c's underlying Hypothesis-style engine fires a
-** "filter_too_much" health check.  This must reach the C user as:
+** When a filter (a draw, then hegel_assume on a predicate) rejects
+** too many candidate values, the engine fires a "filter_too_much"
+** health check.  This must reach the C user as:
 **   1. A non-zero exit code (the test does NOT silently pass).
 **   2. A clear stderr message naming the cause and the suppress
 **      escape hatch (so the user knows what to fix).
@@ -25,7 +25,7 @@
 ** Three-layer pattern (selftest convention):
 **   Layer 1: only_accept_zero — predicate rejecting ~99.9999% of
 **            inputs from a [-1_000_000, 1_000_000] range.
-**   Layer 2: test_too_strict — uses HEGEL_FILTER_INT with that
+**   Layer 2: test_too_strict — draws and assumes with that
 **            predicate; the test body never reaches anything
 **            meaningful because every draw is filtered out.
 **   Layer 3: the Makefile asserts: exit non-zero AND stderr
@@ -36,41 +36,31 @@
 #include <stdlib.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
-
-typedef struct Thing {
-  int                 x;
-} Thing;
 
 /* ---- Layer 1: predicate ---- */
 
 static
 int
 only_accept_zero (
-int                         v,
-void *                      ctx)
+int                         v)
 {
-  (void) ctx;
   return (v == 0);
 }
 
 /* ---- Layer 2: hegel test ---- */
-
-static hegel_schema_t thing_schema;
 
 static
 void
 test_too_strict (
 hegel_testcase *            tc)
 {
-  Thing *             t;
-  hegel_shape *       sh;
+  int                 x;
 
-  sh = hegel_schema_draw (tc, thing_schema, (void **) &t);
-  /* Test body is intentionally trivial — the interesting behavior
-  ** is in the engine deciding to abort generation, not in any
-  ** assertion the test could make. */
-  hegel_shape_free (sh);
+  /* A filter: draw, and reject the case when the predicate fails.
+  ** The body is intentionally trivial — the interesting behavior is
+  ** the engine deciding to abort generation. */
+  x = hegel_draw_int (tc, -1000000, 1000000);
+  hegel_assume (tc, only_accept_zero (x));
 }
 
 /* ---- Layer 3: runner ---- */
@@ -78,11 +68,7 @@ hegel_testcase *            tc)
 int
 main (void)
 {
-  thing_schema = HEGEL_STRUCT (Thing,
-      HEGEL_FILTER_INT (hegel_schema_int_range (-1000000, 1000000),
-                        only_accept_zero, NULL));
   hegel_run_test_n (test_too_strict, 100);
   /* Should not reach here — health check should panic out. */
-  hegel_schema_free (thing_schema);
   return (0);
 }
