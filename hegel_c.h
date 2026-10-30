@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <limits.h>
+#include <float.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -166,6 +168,54 @@ int hegel_draw_bytes (hegel_testcase * tc, int min_size, int max_size,
 ** hegel_draw_text. */
 int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
                       char * buf, int capacity);
+
+/* ---- Draw shorthands ----
+**
+** The primitives above, for a test case named `tc` in scope, with the
+** range as arguments or none for the type's full range:
+**
+**     int     x = HEGEL_DRAW_INT    (0, 10);
+**     int     y = HEGEL_DRAW_INT    ();           /. INT_MIN..INT_MAX ./
+**     int64_t a = HEGEL_DRAW_I64    (-100, 100);
+**     double  d = HEGEL_DRAW_DOUBLE (0.0, 1.0);
+**     bool    b = HEGEL_DRAW_BOOL   ();           /. 0 or 1 ./
+**
+** Same choices as the call they expand to, so they shrink the same. */
+
+/* Arg-count dispatch: HEGEL__DISPATCH (NAME, a, b) calls NAME_2 (a, b),
+** HEGEL__DISPATCH (NAME) calls NAME_0 ().  Uses __VA_OPT__. */
+#define HEGEL__NARG(...) \
+  HEGEL__NARG_(_0 __VA_OPT__(,) __VA_ARGS__, 5, 4, 3, 2, 1, 0)
+#define HEGEL__NARG_(_0, _1, _2, _3, _4, _5, N, ...) N
+#define HEGEL__GLUE(a, b)  HEGEL__GLUE_(a, b)
+#define HEGEL__GLUE_(a, b) a##b
+#define HEGEL__DISPATCH(name, ...) \
+  HEGEL__GLUE(name##_, HEGEL__NARG(__VA_ARGS__))(__VA_ARGS__)
+
+#define HEGEL__DRAW_INT_0()       hegel_draw_int    ((tc), INT_MIN,    INT_MAX)
+#define HEGEL__DRAW_INT_2(lo, hi) hegel_draw_int    ((tc), (lo),       (hi))
+#define HEGEL_DRAW_INT(...)       HEGEL__DISPATCH (HEGEL__DRAW_INT,    __VA_ARGS__)
+
+#define HEGEL__DRAW_I64_0()       hegel_draw_i64    ((tc), INT64_MIN,  INT64_MAX)
+#define HEGEL__DRAW_I64_2(lo, hi) hegel_draw_i64    ((tc), (lo),       (hi))
+#define HEGEL_DRAW_I64(...)       HEGEL__DISPATCH (HEGEL__DRAW_I64,    __VA_ARGS__)
+
+#define HEGEL__DRAW_U64_0()       hegel_draw_u64    ((tc), 0,          UINT64_MAX)
+#define HEGEL__DRAW_U64_2(lo, hi) hegel_draw_u64    ((tc), (lo),       (hi))
+#define HEGEL_DRAW_U64(...)       HEGEL__DISPATCH (HEGEL__DRAW_U64,    __VA_ARGS__)
+
+#define HEGEL__DRAW_FLOAT_0()       hegel_draw_float  ((tc), -FLT_MAX, FLT_MAX)
+#define HEGEL__DRAW_FLOAT_2(lo, hi) hegel_draw_float  ((tc), (lo),     (hi))
+#define HEGEL_DRAW_FLOAT(...)       HEGEL__DISPATCH (HEGEL__DRAW_FLOAT, __VA_ARGS__)
+
+#define HEGEL__DRAW_DOUBLE_0()       hegel_draw_double ((tc), -DBL_MAX, DBL_MAX)
+#define HEGEL__DRAW_DOUBLE_2(lo, hi) hegel_draw_double ((tc), (lo),     (hi))
+#define HEGEL_DRAW_DOUBLE(...)       HEGEL__DISPATCH (HEGEL__DRAW_DOUBLE, __VA_ARGS__)
+
+/* Bool takes no range.  Draws hegel_draw_int (0, 1), so it shrinks to
+** false like any 0/1 draw. */
+#define HEGEL__DRAW_BOOL_0() ((bool)(hegel_draw_int ((tc), 0, 1)))
+#define HEGEL_DRAW_BOOL(...) HEGEL__DISPATCH (HEGEL__DRAW_BOOL, __VA_ARGS__)
 
 /* ---- Test suite ---- */
 

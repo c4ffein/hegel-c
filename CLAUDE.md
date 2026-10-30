@@ -82,6 +82,8 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 
 **Primitive draws:** `hegel_draw_int`, `_i64`, `_u64`, `_usize`, `_float`, `_double`, `_bool`, `_text`, `_bytes`, `_regex` (full match)
 
+**Draw shorthands:** `HEGEL_DRAW_INT(lo, hi)` / `HEGEL_DRAW_INT()` (full range), same for `_I64` / `_U64` / `_FLOAT` / `_DOUBLE`, and `HEGEL_DRAW_BOOL()` — the primitives for a test case named `tc` in scope; same choices, so they shrink the same.
+
 **Spans:** `hegel_start_span(tc, label)`, `hegel_stop_span(tc, discard)` — structural shrinking hints; derive labels with `hegel_label("lib.thing")` (FNV-1a, as libhegel's `hegel_label_from_name`). Users rarely call these directly; the schema API emits them automatically.
 
 **Engine protocols** (handles are `{ int64_t id; }` newtypes, ids into the server's per-case table — so they work across the fork pipe):
