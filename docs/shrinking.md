@@ -45,12 +45,12 @@ There are two schools of shrinking:
   anything because they're just consumers of the same bytes.
 
 hegel-c gets integrated shrinking for free from the underlying
-`hegeltest` engine. The schema API (`hegel_gen.h`) is built on
-primitive draws (`hegel_draw_int` etc.) which all read from the
-shared byte stream, so a `HEGEL_ARRAY_INLINE` of structs with
-nested `HEGEL_INT` fields shrinks coherently — the array length
-shrinks, individual element values shrink, and they shrink
-together rather than as independent dimensions.
+`hegeltest` engine. Every generator is built on primitive draws
+(`hegel_draw_int` etc.) which all read from the shared byte
+stream, so a list of structs drawn element by element shrinks
+coherently — the length shrinks, individual element values
+shrink, and they shrink together rather than as independent
+dimensions.
 
 The practical implication: **you don't write any shrink logic.**
 You write the property, hegel-c does the rest.
@@ -97,16 +97,19 @@ The test lives at
 
 ### Step 1: write a logical input type
 
-<!-- /include tests/irl/scotch/test_graph_order_shrink.c:65-74 -->
+<!-- /include tests/irl/scotch/test_graph_order_shrink.c:64-76 -->
 ```c
 typedef struct EdgePair {
   int                 u;
   int                 v;
 } EdgePair;
 
+#define MAX_VERT  20
+#define MAX_EDGES 30
+
 typedef struct Graph {
   int                 nvert;
-  EdgePair *          edges;
+  EdgePair            edges[MAX_EDGES];
   int                 nedges;
 } Graph;
 ```
@@ -116,25 +119,42 @@ A graph is a vertex count plus a list of undirected edges. Note
 that this is the **logical** input — how we want hegel to think
 about graphs — not the CSR representation Scotch wants.
 
-### Step 2: declare the schema
+### Step 2: write the generator
 
-where `MAX_VERT = 20` and `MAX_EDGES = 30`:
-
-<!-- /include tests/irl/scotch/test_graph_order_shrink.c:85-91 -->
+<!-- /include tests/irl/scotch/test_graph_order_shrink.c:154-175 -->
 ```c
-  hegel_schema_t edge_schema = HEGEL_STRUCT (EdgePair,
-      HEGEL_INT (0, MAX_VERT - 1),
-      HEGEL_INT (0, MAX_VERT - 1));
+/* nvert, then up to MAX_EDGES endpoint pairs drawn in [0, nvert).
+** Self-loops and duplicate pairs are left in; build_csr drops them.
+** The list and element spans let the shrinker delete whole edges. */
+static
+void
+gen_graph (
+hegel_testcase *            tc,
+Graph *                     g)
+{
+  int                 i;
 
-  graph_schema = HEGEL_STRUCT (Graph,
-      HEGEL_INT (3, MAX_VERT),
-      HEGEL_ARRAY_INLINE (edge_schema, sizeof (EdgePair), 0, MAX_EDGES));
+  g->nvert = hegel_draw_int (tc, 3, MAX_VERT);
+  hegel_start_span (tc, HEGEL_SPAN_LIST);
+  g->nedges = hegel_draw_int (tc, 0, MAX_EDGES);
+  for (i = 0; i < g->nedges; i++) {
+    hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
+    g->edges[i].u = hegel_draw_int (tc, 0, g->nvert - 1);
+    g->edges[i].v = hegel_draw_int (tc, 0, g->nvert - 1);
+    hegel_stop_span (tc, 0);
+  }
+  hegel_stop_span (tc, 0);
+}
 ```
 <!-- /endinclude -->
 
-The schema generates graphs with 3–20 vertices and 0–30 edges,
-with edge endpoints drawn in `[0, nvert)`.  Ranges deliberately
-small so that shrunken counterexamples are easy to read.
+The generator draws graphs with 3–20 vertices and 0–30 edges,
+with edge endpoints drawn in `[0, nvert)` — the bound comes
+straight from the `nvert` drawn just before. Ranges deliberately
+small so that shrunken counterexamples are easy to read. The two
+spans tell the shrinker where an edge starts and ends, so it can
+drop whole edges instead of nudging their endpoints one at a
+time.
 
 ### Step 3: write a property
 
@@ -196,22 +216,24 @@ input shape is reliable.)
 ```bash
 $ make test-local
 ==== Scotch reducer-quality tests (must shrink to small counterexample) ====
-  test_graph_order_shrink            OK (shrunk to MINIMAL nvert=4 nedges=1 edges=[(2,3)])
+  test_graph_order_shrink            OK (shrunk to MINIMAL nvert=3 nedges=1 edges=[(1,2)])
 ```
 
-That's the whole story. hegel-c started from the schema's full
+That's the whole story. hegel-c started from the generator's full
 range (3–20 vertices, 0–30 edges), found a failing case within a
 handful of tries (~25% of small random graphs trigger the bug),
 shrunk the failing byte stream until no smaller variant still
-failed, and reported a 4-vertex / 1-edge graph as the minimum.
+failed, and reported a 3-vertex / 1-edge graph as the minimum.
 
-The theoretical minimum for this bug is **3 vertices, 1 edge** (one
-isolated vertex + one K₂ pair, where the K₂ ordens at `ordenum>0`).
-We hit that on roughly 2 of every 5 runs; the other runs land at
-`nvert=4, nedges=1` or `nvert=3, nedges=2`, all within one step of
-the theoretical minimum. That variance is normal — integrated
-shrinking is greedy on the byte stream, not on the structural
-size, so it doesn't always discover the absolute structural
+That is the theoretical minimum for this bug: **3 vertices, 1 edge**
+(one isolated vertex + one K₂ pair, where the K₂ orders at
+`ordenum>0`). This generator reached it on 5 runs out of 5
+(2026-10-30, pin `hgraphOrderCp`). An earlier version of the test,
+which drew endpoints in `[0, 20)` and folded them into range with
+`% nvert`, reached it on about 2 runs in 5 and otherwise stopped at
+`nvert=4, nedges=1` or `nvert=3, nedges=2`. Some variance is normal —
+integrated shrinking is greedy on the byte stream, not on the
+structural size, so it doesn't always find the absolute structural
 minimum.
 
 ### Step 6: assert in CI
@@ -236,14 +258,14 @@ real degradation.
 After building this test (and several others), the rules that
 matter are:
 
-### 1. Make the schema small at the boundary, not the body
+### 1. Make the ranges small at the boundary, not the body
 
-Bound the schema's value ranges as tightly as the property allows.
-`HEGEL_INT(0, 1000000)` shrinks fine, but the *minimum* it
-can shrink to is `0`, `1`, etc., based on byte-stream simplicity
-order. If your property only cares about whether `x` is even, use
-`HEGEL_INT(0, 1)` and post-multiply — the minimum you'll see
-in the shrunken case is much closer to what's interesting.
+Bound the drawn ranges as tightly as the property allows.
+`hegel_draw_int (tc, 0, 1000000)` shrinks fine, but the *minimum*
+it can shrink to is `0`, `1`, etc., based on byte-stream simplicity
+order. If your property only cares about whether `x` is even, draw
+from `[0, 1]` and post-multiply — the minimum you'll see in the
+shrunken case is much closer to what's interesting.
 
 For our Scotch test: `nvert ∈ [3, 20]` instead of `[3, 1000]`.
 The shrinker can reach `3` either way, but the upper bound bounds
@@ -298,10 +320,10 @@ HEGEL_ASSERT (parse (s) == n, "...");
 
 Now both `n` *and* the bytes shrink coherently.
 
-The schema API does this for you automatically — `HEGEL_ARR_OF`
-and `HEGEL_ARRAY_INLINE` draw each element through the schema,
-which in turn uses primitive draws. No extra discipline needed if
-you stick to the schema layer.
+Wrap each element in a `HEGEL_SPAN_LIST_ELEMENT` span inside a
+`HEGEL_SPAN_LIST` (as `gen_graph` does above) and the shrinker can
+also delete whole elements; for a raw byte buffer,
+`hegel_draw_bytes` draws the whole array as one span.
 
 ### 4. Make the assertion message reproducer-friendly
 
@@ -401,8 +423,8 @@ generation phase you'll see varied input shapes; once a case
 fails, subsequent cases are micro-variations of the failing input
 as hegel tries to find something smaller.
 
-Cost: one stderr line per primitive draw. For schema-API tests
-with array fields, that's ~10–500 lines per test case, so a
+Cost: one stderr line per primitive draw. For tests that draw
+arrays, that's ~10–500 lines per test case, so a
 1000-case run can produce ~50k–500k lines. Pipe to `grep`, a
 file, or a pager rather than dumping it all to your terminal.
 
@@ -479,7 +501,7 @@ either:
 - The test didn't reach `hegel_note(tc, ...)` before failing
   (move the note earlier in the function)
 - Or the failure is in setup code that runs before `test_fn`
-  itself — check that the test compiles and the schema builds
+  itself — check that the test compiles and its setup runs
 
 ## Other shrink-quality demos in this repo
 

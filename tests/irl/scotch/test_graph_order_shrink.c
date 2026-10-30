@@ -34,10 +34,10 @@
 **     which compresses
 **
 ** Hegel's integrated shrinker should land near this — it operates
-** on the byte stream behind the schema, so it can independently
-** reduce nvert, the array length, and the edge endpoint values.
-** With our schema (nvert in [3, 20], up to 30 edges), the shrunk
-** result should have small nvert and small nedges.
+** on the choices behind gen_graph(), so it can independently reduce
+** nvert, the edge count, and the edge endpoint values.  With nvert in
+** [3, 20] and up to 30 edges, the shrunk result should have small
+** nvert and small nedges.
 **
 ** The Makefile assertion:
 **   - exit must be non-zero (the assert fired)
@@ -58,7 +58,6 @@
 #include <scotch.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 
 /* ---- Layer 1: types + CSR builder ---- */
 
@@ -67,32 +66,16 @@ typedef struct EdgePair {
   int                 v;
 } EdgePair;
 
-typedef struct Graph {
-  int                 nvert;
-  EdgePair *          edges;
-  int                 nedges;
-} Graph;
-
 #define MAX_VERT  20
 #define MAX_EDGES 30
 
-static hegel_schema_t graph_schema;
-
-static
-void
-init_schemas (void)
-{
-  hegel_schema_t edge_schema = HEGEL_STRUCT (EdgePair,
-      HEGEL_INT (0, MAX_VERT - 1),
-      HEGEL_INT (0, MAX_VERT - 1));
-
-  graph_schema = HEGEL_STRUCT (Graph,
-      HEGEL_INT (3, MAX_VERT),
-      HEGEL_ARRAY_INLINE (edge_schema, sizeof (EdgePair), 0, MAX_EDGES));
-}
+typedef struct Graph {
+  int                 nvert;
+  EdgePair            edges[MAX_EDGES];
+  int                 nedges;
+} Graph;
 
 /* Build a valid undirected CSR from the logical graph:
-**   - clamp endpoints into [0, nvert)
 **   - strip self-loops
 **   - dedupe
 **   - symmetrize (each undirected pair emits both directions)
@@ -119,8 +102,8 @@ int *                       nedge_out)
 
   undir = calloc ((size_t) cap, sizeof (int[2]));
   for (i = 0; i < g->nedges; i++) {
-    u = g->edges[i].u % nvert;
-    v = g->edges[i].v % nvert;
+    u = g->edges[i].u;
+    v = g->edges[i].v;
     if (u == v) continue;
     if (u > v) { t = u; u = v; v = t; }
     {
@@ -168,6 +151,29 @@ int *                       nedge_out)
 
 /* ---- Layer 2: hegel test ---- */
 
+/* nvert, then up to MAX_EDGES endpoint pairs drawn in [0, nvert).
+** Self-loops and duplicate pairs are left in; build_csr drops them.
+** The list and element spans let the shrinker delete whole edges. */
+static
+void
+gen_graph (
+hegel_testcase *            tc,
+Graph *                     g)
+{
+  int                 i;
+
+  g->nvert = hegel_draw_int (tc, 3, MAX_VERT);
+  hegel_start_span (tc, HEGEL_SPAN_LIST);
+  g->nedges = hegel_draw_int (tc, 0, MAX_EDGES);
+  for (i = 0; i < g->nedges; i++) {
+    hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
+    g->edges[i].u = hegel_draw_int (tc, 0, g->nvert - 1);
+    g->edges[i].v = hegel_draw_int (tc, 0, g->nvert - 1);
+    hegel_stop_span (tc, 0);
+  }
+  hegel_stop_span (tc, 0);
+}
+
 /* Property: SCOTCH_graphOrder with SCOTCH_STRATDISCONNECTED must
 ** produce a permtab that is a valid permutation of [0, nvert) —
 ** every value in range, no duplicates, all positions written.
@@ -182,8 +188,8 @@ void
 test_graph_order (
 hegel_testcase *            tc)
 {
-  Graph *             g;
-  hegel_shape *       shape;
+  Graph               graph;
+  Graph *             g = &graph;
   SCOTCH_Num *        verttab = NULL;
   SCOTCH_Num *        edgetab = NULL;
   SCOTCH_Num *        permtab;
@@ -199,7 +205,7 @@ hegel_testcase *            tc)
   SCOTCH_Strat        stradat;
   SCOTCH_Num          cblknbr = 0;
 
-  shape = hegel_schema_draw (tc, graph_schema, (void **) &g);
+  gen_graph (tc, g);
   nvert = g->nvert;
 
   /* Annotate the test case with the graph shape so the SHRUNKEN
@@ -289,7 +295,6 @@ hegel_testcase *            tc)
     SCOTCH_graphExit (&grafdat);
     free (verttab);
     free (edgetab);
-    hegel_shape_free (shape);
     hegel_fail (msg);
   }
 
@@ -298,7 +303,6 @@ hegel_testcase *            tc)
   SCOTCH_graphExit (&grafdat);
   free (verttab);
   free (edgetab);
-  hegel_shape_free (shape);
 }
 
 /* ---- Layer 3: runner ---- */
@@ -314,12 +318,10 @@ seed_scotch (void)
 int
 main (void)
 {
-  init_schemas ();
   hegel_set_case_setup (seed_scotch);
   /* 200 cases is more than enough — at ~25% trigger rate, hegel
   ** should hit a failing case within the first ~5 attempts and
   ** then spend the rest on shrinking. */
   hegel_run_test_n (test_graph_order, 200);
-  hegel_schema_free (graph_schema);
   return (0);
 }
