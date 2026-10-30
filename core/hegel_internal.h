@@ -228,6 +228,13 @@ extern char hegel__fail_origin[512];
 /* Registered per-case setup hook (hegel_set_case_setup). */
 extern void (*hegel__case_setup)(void);
 
+/* Set by a generation layer built on the runtime (the schema layer in
+** experiments/schema-with-callbacks sets it on its first draw); run
+** wherever the runtime recovers from a non-local exit (end of a nofork
+** case, a stateful rule that assumed) to free the draws that exit
+** abandoned. */
+extern void (*hegel__draws_abandoned)(void);
+
 /* Terminal-outcome helpers shared by runtime + runner + stateful. */
 void hegel__escape (hegel_testcase * tc, int code);          /* longjmp or send+_exit */
 void hegel__send_terminal (int fd, int op);

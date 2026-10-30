@@ -169,6 +169,7 @@ static int run_rule (hegel_state_machine * sm, int rule, void * state, hegel_tes
   tc->rule_escape = &rule_env;
   if (setjmp (rule_env) != 0) {
     tc->rule_escape = saved;
+    if (hegel__draws_abandoned) hegel__draws_abandoned ();
     return 0;
   }
   sm->rule_fns[rule] (state, tc);

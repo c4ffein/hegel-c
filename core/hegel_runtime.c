@@ -28,6 +28,7 @@ hegel_testcase * hegel__current_tc = NULL;
 char hegel__fail_msg[1024];
 char hegel__fail_origin[512];
 void (*hegel__case_setup)(void) = NULL;
+void (*hegel__draws_abandoned)(void) = NULL;
 
 void hegel_set_case_setup (void (*setup_fn)(void))
 {

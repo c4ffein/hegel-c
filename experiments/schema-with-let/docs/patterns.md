@@ -1,0 +1,788 @@
+<!-- SPDX-License-Identifier: MIT
+     Copyright (c) 2026 c4ffein
+     Part of hegel-c — see hegel/LICENSE for terms. -->
+
+# Schema pattern catalog
+
+The selftest suite doubles as documentation. Each pattern below
+maps a common C data layout to the test file that demonstrates how
+to generate it with the schema API. Use this when you're trying to
+figure out "how do I generate X?".
+
+For the API reference itself, see [schema-api.md](schema-api.md).
+
+All test files are in `tests/selftest/` and start with
+`test_schema_`. Each one uses real C struct layouts and verifies
+the generated data matches its declared constraints.
+
+---
+
+## Recursive trees with optional fields
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct Tree {
+  int val;
+  char *label;            /* optional */
+  struct Tree *left;      /* optional recursive */
+  struct Tree *right;     /* optional recursive */
+} Tree;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+tree_schema = HEGEL_STRUCT (Tree,
+    HEGEL_INT      (-1000, 1000),
+    HEGEL_OPTIONAL (hegel_schema_text (0, 8)),
+    HEGEL_SELF     (),
+    HEGEL_SELF     ());
+```
+
+**Test:** [`test_schema_recursive_tree_json_roundtrip.c`](../tests/test_schema_recursive_tree_json_roundtrip.c)
+
+Exercises: `HEGEL_OPTIONAL`, `HEGEL_SELF`, JSON round-trip as a
+canonical PBT property. Also contains two other test functions
+showing `HEGEL_ARR_OF` (`Bag` with `int *items`) and the full set of
+typed integer macros (`Sensor` with u8/i16/u32/i64/float/double).
+
+---
+
+## Nested sub-struct by value
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { uint8_t r, g, b; }  RGB;
+typedef struct { RGB fg; RGB bg; }   Palette;
+```
+
+**Schema (fresh form):**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+palette_schema = HEGEL_STRUCT (Palette,
+    HEGEL_INLINE (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()),
+    HEGEL_INLINE (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ()));
+```
+
+**Schema (shared form — one `RGB` schema reused at two offsets):**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+rgb_schema = HEGEL_STRUCT (RGB, HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());
+hegel_schema_ref (rgb_schema);
+palette_schema = HEGEL_STRUCT (Palette,
+    HEGEL_INLINE_REF (RGB, rgb_schema),
+    HEGEL_INLINE_REF (RGB, rgb_schema));
+```
+
+**Tests:**
+- [`test_schema_inline_struct.c`](../tests/test_schema_inline_struct.c) — fresh form, mixed inline + `HEGEL_OPTIONAL`, and three-level nesting
+- [`test_schema_shape_get_and_reuse.c`](../tests/test_schema_shape_get_and_reuse.c) — shared form + `HEGEL_SHAPE_GET` resolving through nested shapes
+
+Exercises: `HEGEL_INLINE` / `HEGEL_INLINE_REF`. Sub-struct storage is
+carved out of the parent's own allocation (no extra malloc per
+field). Nests to any depth — each inner `HEGEL_INLINE` runs its own
+`sizeof(T)` assert at schema-build time, so field-order or type
+mismatches fire at init with a clear diagnostic. `HEGEL_SHAPE_GET`
+resolves leaf offsets through any level of nesting.
+
+---
+
+## Tagged union with wrapper struct
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  int tag;
+  union {
+    struct { double radius; }                circle;
+    struct { double width; double height; }  rect;
+  } u;
+} Shape;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+shape_schema = HEGEL_STRUCT (Shape,
+    HEGEL_UNION (
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                    HEGEL_DOUBLE (0.1, 100.0))));
+```
+
+**Test:** [`test_schema_union_variant_tagged_untagged.c`](../tests/test_schema_union_variant_tagged_untagged.c) (Test 1)
+
+Exercises: `HEGEL_UNION` in the classic C tagged-union idiom — tag
+field adjacent to the union, inside a wrapping struct. Standard way
+to do sum types in C.
+
+---
+
+## Bare union (tag lives in shape tree only)
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef union {
+  struct { double radius; }                circle;
+  struct { double width; double height; }  rect;
+} RawShape;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+raw_shape_schema = HEGEL_STRUCT (RawShape,
+    HEGEL_UNION_UNTAGGED (
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+        HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                    HEGEL_DOUBLE (0.1, 100.0))));
+```
+
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
+```c
+/* In the test: read the variant tag from the shape tree */
+int tag = hegel_shape_tag (hegel_shape_field (sh, 0));
+```
+
+**Test:** [`test_schema_union_variant_tagged_untagged.c`](../tests/test_schema_union_variant_tagged_untagged.c) (Test 2)
+
+Exercises: `HEGEL_UNION_UNTAGGED`. Use when your C code doesn't
+store a tag field (e.g., the tested function takes the discriminator
+as a separate parameter). The framework picks a variant; you read
+it back from the shape tree.
+
+---
+
+## Variant with tag + pointer to separate allocation
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { double radius; }           Circle;
+typedef struct { double width, height; }    Rect;
+
+typedef struct {
+  int    tag;
+  void * value;   /* Circle* or Rect* */
+} ShapeVar;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+hegel_schema_t circle_s = HEGEL_STRUCT (Circle,
+    HEGEL_DOUBLE (0.1, 100.0));
+hegel_schema_t rect_s   = HEGEL_STRUCT (Rect,
+    HEGEL_DOUBLE (0.1, 100.0),
+    HEGEL_DOUBLE (0.1, 100.0));
+
+shapevar_schema = HEGEL_STRUCT (ShapeVar,
+    HEGEL_VARIANT (circle_s, rect_s));
+```
+
+**Test:** [`test_schema_union_variant_tagged_untagged.c`](../tests/test_schema_union_variant_tagged_untagged.c) (Test 3)
+
+Exercises: `HEGEL_VARIANT`. Use when variants are genuinely
+different-size types and you want each in its own allocation
+instead of a padded union.
+
+---
+
+## Array of scalars, contiguous
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  int *items;
+  int  n_items;
+} Bag;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+bag_schema = HEGEL_STRUCT (Bag,
+    HEGEL_LET    (n, HEGEL_INT (0, 10)),                  /* non-positional */
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 100)),     /* int *items */
+    HEGEL_USE    (n));                                     /* int n_items */
+```
+
+**Tests:**
+- [`test_schema_array_of_ints.c`](../tests/test_schema_array_of_ints.c) (length variation, pinned, empty-allowed)
+- [`test_schema_recursive_tree_json_roundtrip.c`](../tests/test_schema_recursive_tree_json_roundtrip.c) (`Bag` test)
+- [`test_schema_array_all_composition_patterns.c`](../tests/test_schema_array_all_composition_patterns.c) (`ScalarBag` test)
+
+Exercises: `HEGEL_ARR_OF` with a scalar element. `items` is one
+malloc'd block of `n * sizeof(int)` bytes. `HEGEL_LET(n, ...)` is
+non-positional — no slot consumed — so the drawn length is reached
+by the `ARR_OF`'s length parameter and written to the `n_items`
+slot via the trailing `HEGEL_USE(n)`.
+
+---
+
+## Array of inline structs (contiguous, no pointer chasing)
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { uint8_t r, g, b; }             Color;
+typedef struct { Color *colors; int n; }        Palette;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+hegel_schema_t color_s = HEGEL_STRUCT (Color,
+    HEGEL_U8 (), HEGEL_U8 (), HEGEL_U8 ());
+
+palette_s = HEGEL_STRUCT (Palette,
+    HEGEL_ARRAY_INLINE (color_s, sizeof (Color), 1, 5));
+```
+
+**Test:** [`test_schema_array_all_composition_patterns.c`](../tests/test_schema_array_all_composition_patterns.c) (`Palette` + others)
+
+Exercises: `HEGEL_ARRAY_INLINE` with a same-type struct element. One
+contiguous allocation, each element at stride `sizeof(Color)`.
+Cache-friendly. Also demonstrates `hegel_schema_ref` for sharing
+`color_s` across two parent schemas.
+
+---
+
+## Array of inline tagged unions (per-element polymorphism, fixed stride)
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  int tag;
+  union {
+    struct { double radius; }                circle;
+    struct { double width; double height; }  rect;
+  } u;
+} Shape;
+
+typedef struct { Shape *shapes; int n_shapes; } Gallery;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+hegel_schema_t shape_union = hegel_schema_of (HEGEL_UNION (
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_DOUBLE (0.1, 100.0),
+                HEGEL_DOUBLE (0.1, 100.0))));
+
+gallery_schema = HEGEL_STRUCT (Gallery,
+    HEGEL_ARRAY_INLINE (shape_union, sizeof (Shape), 1, 6));
+```
+
+**Test:** [`test_schema_array_inline_of_tagged_unions.c`](../tests/test_schema_array_inline_of_tagged_unions.c)
+
+Exercises: `HEGEL_ARRAY_INLINE` + `HEGEL_UNION`. Each array slot is
+`sizeof(Shape)` bytes (= max of variant sizes + tag + padding), and
+each slot independently holds a circle or a rect. One allocation
+for the whole array, zero pointer chasing, per-element variant.
+
+---
+
+## Array of bare unions using common initial sequence
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef union {
+  struct { int tag; double radius; }                circle;
+  struct { int tag; double width; double height; }  rect;
+  struct { int tag; int64_t millis; }                timestamp;
+} BareShape;
+```
+
+The C standard's **common initial sequence** rule: if every union
+member begins with the same sequence of fields (here, `int tag`),
+you can read those fields through any member regardless of which
+was last written. Used by real C interpreters (Lua TValue, Erlang
+VM terms, Scheme cell tagging).
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+hegel_schema_t bare_shape = hegel_schema_of (HEGEL_UNION_UNTAGGED (
+    HEGEL_CASE (HEGEL_INT    (17, 17),
+                HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_INT    (29, 29),
+                HEGEL_DOUBLE (0.1, 100.0),
+                HEGEL_DOUBLE (0.1, 100.0)),
+    HEGEL_CASE (HEGEL_INT    (42, 42),
+                HEGEL_I64    (0, 1000000000))));
+```
+
+**Test:** [`test_schema_array_inline_of_bare_unions_common_prefix.c`](../tests/test_schema_array_inline_of_bare_unions_common_prefix.c)
+
+Exercises: `HEGEL_UNION_UNTAGGED` with each case writing its own
+tag as a constant `HEGEL_INT(min==max)` at offset 0 of the slot.
+Arbitrary tag values (17, 29, 42) prove they're not just variant
+indices. In user code: `*(int*)(&shape)` reads the tag through any
+variant.
+
+---
+
+## Array of wrapper structs holding variant pointers
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { int tag; int value; }               TypeA;  /* tag=3 */
+typedef struct { int tag; char *name; uint8_t b; }   TypeB;  /* tag=5 */
+
+typedef struct {
+  int    which;    /* 0 = TypeA, 1 = TypeB */
+  void * ptr;
+} Elem;
+
+typedef struct { Elem *items; int n_items; } Collection;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+hegel_schema_t type_a = HEGEL_STRUCT (TypeA,
+    HEGEL_INT (3, 3),          /* constant */
+    HEGEL_INT (-1000, 1000));
+
+hegel_schema_t type_b = HEGEL_STRUCT (TypeB,
+    HEGEL_INT (5, 5),          /* constant */
+    HEGEL_TEXT (1, 10),
+    HEGEL_U8 ());
+
+hegel_schema_t elem_schema = HEGEL_STRUCT (Elem,
+    HEGEL_VARIANT (type_a, type_b));
+
+coll_schema = HEGEL_STRUCT (Collection,
+    HEGEL_ARRAY_INLINE (elem_schema, sizeof (Elem), 1, 5));
+```
+
+**Test:** [`test_schema_array_of_variant_struct_pointers.c`](../tests/test_schema_array_of_variant_struct_pointers.c)
+
+Exercises: `HEGEL_ARRAY_INLINE` + `HEGEL_VARIANT` inside each element
+struct. Array of fixed-size `Elem` wrappers, each holding a
+different-size variant pointer. The `which` field is the framework's
+picked variant index; the pointed-to `TypeA.tag` / `TypeB.tag`
+fields are always their respective constants.
+
+---
+
+## Array of raw pointers (no wrapper) to different-size structs
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { int tag; int value; }       TypeA;  /* tag=3, 8 B */
+typedef struct { int tag; char *name; ... }  TypeB;  /* tag=5, 24 B */
+typedef struct { int tag; double x, y, z; }  TypeC;  /* tag=7, 32 B */
+
+typedef struct {
+  void **items;       /* bare heterogeneous pointer array */
+  int    n_items;
+} RawCollection;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n_items);
+hegel_schema_t one_of = HEGEL_ONE_OF_STRUCT (type_a, type_b, type_c);
+
+coll_schema = HEGEL_STRUCT (RawCollection,
+    HEGEL_LET    (n_items, HEGEL_INT (1, 6)),
+    HEGEL_ARR_OF (HEGEL_USE (n_items), one_of),
+    HEGEL_USE    (n_items));
+```
+
+**Test:** [`test_schema_array_of_raw_struct_pointers_by_kind.c`](../tests/test_schema_array_of_raw_struct_pointers_by_kind.c)
+
+Exercises: `HEGEL_ONE_OF_STRUCT` as the element of `HEGEL_ARR_OF`.
+No wrapper struct — `items` is a bare `void **`, and each pointer
+goes directly to a `TypeA`, `TypeB`, or `TypeC` allocation. The
+user reads `*(int*)items[i]` to get the tag (3, 5, or 7) and casts
+accordingly. This is the "tag inside the pointed-to struct" idiom.
+
+---
+
+## Nested arrays (array of arrays)
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { int *values; int n_values; } Row;
+typedef struct { Row *rows;   int n_rows; }   Matrix;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n_values);
+hegel_schema_t row = HEGEL_STRUCT (Row,
+    HEGEL_LET    (n_values, HEGEL_INT (1, 6)),
+    HEGEL_ARR_OF (HEGEL_USE (n_values), HEGEL_INT (0, 99)),
+    HEGEL_USE    (n_values));
+
+matrix_schema = HEGEL_STRUCT (Matrix,
+    HEGEL_ARRAY_INLINE (row, sizeof (Row), 1, 4));
+```
+
+**Test:** [`test_schema_nested_array_of_arrays_matrix.c`](../tests/test_schema_nested_array_of_arrays_matrix.c)
+
+Exercises: `HEGEL_ARRAY_INLINE` containing a struct that contains
+`HEGEL_ARR_OF`. Outer array is contiguous (rows packed), each row's
+`values` is its own separate allocation. Per-instance binding
+scope ensures each row draws its own `n_values` independently.
+Two-level memory layout in
+one schema.
+
+---
+
+## All five array composition patterns in one file
+
+**Test:** [`test_schema_array_all_composition_patterns.c`](../tests/test_schema_array_all_composition_patterns.c)
+
+Five sub-tests in one binary:
+1. `ARRAY` of scalars (int)
+2. `ARRAY` of pointer-to-struct
+3. `ARRAY_INLINE` of structs (same size)
+4. `ARRAY_INLINE` containing struct with nested `ARRAY`
+5. `ARRAY` of ptr-to-struct containing `ARRAY_INLINE`
+
+Also demonstrates `hegel_schema_ref` to share `color_s` across
+`palette_s` and `sprite_s` (two different parent schemas).
+
+---
+
+## Non-adjacent array/count layout
+
+Sometimes the struct you're generating puts the array's pointer
+and length at non-adjacent positions — there's a tag field or
+some unrelated scalar between them. Because `HEGEL_LET` is
+non-positional, the length's draw order is decoupled from the
+slot position of the `HEGEL_USE` that writes it.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  int *items;
+  int  tag;         /* unrelated field between the pointer and count */
+  int  n;
+} Bag;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+bag_schema = HEGEL_STRUCT (Bag,
+    HEGEL_LET    (n, HEGEL_INT (0, 8)),                    /* non-positional */
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 999)),      /* int *items */
+    HEGEL_INT    (-10, 10),                                /* int tag */
+    HEGEL_USE    (n));                                      /* int n — LAST */
+```
+
+**Tests:**
+- [`test_schema_facets_nonadjacent.c`](../tests/test_schema_facets_nonadjacent.c) — tag field between the pointer and count
+- [`test_schema_facets_reversed.c`](../tests/test_schema_facets_reversed.c) — count comes before pointer in the struct
+- [`test_schema_facets_nested.c`](../tests/test_schema_facets_nested.c) — outer array whose elements hold their own inner array (verifies per-instance ctx scoping)
+
+Exercises: `HEGEL_LET` declares the length once; `HEGEL_USE` reads
+it wherever it's needed. Same drawn value used as both the array
+length and the count field. Per-instance scoping ensures array
+elements with their own bindings don't cross-pollute.
+
+---
+
+## Shared value across union / variant / optional boundaries
+
+A drawn value that must stay coherent between a struct and the
+polymorphic part it carries — a message header whose `len` repeats
+inside the chosen body variant, a config whose optional section
+mirrors a top-level field. `HEGEL_USE` inside a case (or an
+optional's inner struct) walks the scope chain out to the enclosing
+struct's `HEGEL_LET`; a case-local `HEGEL_LET` shadows the outer
+binding for that case only.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  int  n;
+  int  tag;
+  union {
+    struct { int a; }         one;   /* a == n */
+    struct { int x; int y; }  two;   /* x == n */
+  } u;
+} UBox;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+ubox_schema = HEGEL_STRUCT (UBox,
+    HEGEL_LET   (n, HEGEL_INT (0, 50)),
+    HEGEL_USE   (n),
+    HEGEL_UNION (
+        HEGEL_CASE (HEGEL_USE (n)),
+        HEGEL_CASE (HEGEL_USE (n), HEGEL_INT (0, 5))));
+```
+
+**Tests:**
+- [`test_binding_use_in_union.c`](../tests/test_binding_use_in_union.c) — tagged + untagged unions, plus a case-local LET shadowing the outer binding
+- [`test_binding_use_in_variant.c`](../tests/test_binding_use_in_variant.c) — variant case structs resolving the outer LET; also documents the cluster-alignment constraint (the tag+ptr cluster is pointer-aligned, so it can't directly follow a lone int field)
+- [`test_binding_use_in_optional.c`](../tests/test_binding_use_in_optional.c) — optional inner struct with a USE field and an inner ARR_OF sized by the outer LET
+- [`test_binding_shrink_use_in_cases.c`](../tests/test_binding_shrink_use_in_cases.c) — shrink-quality probes: all three paths shrink to the expected minimal with USE coherence intact
+
+Exercises: the scope chain crosses every composite draw boundary —
+union case bodies, variant case structs, optional inner structs —
+so one binding can feed slots on both sides of the polymorphism.
+
+---
+
+## Length-prefixed buffer (Pascal string, BER-style)
+
+Some C interfaces carry the length inside the buffer rather than in
+a sibling struct field — the first byte (or word) of the buffer is
+the length, followed by that many elements.  `HEGEL_LEN_PREFIXED_ARRAY`
+emits this layout in one slot.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  uint8_t *data;    /* data[0] = length, data[1..data[0]] = chars */
+} PStr;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+pstr_schema = HEGEL_STRUCT (PStr,
+    HEGEL_LET (n, HEGEL_INT (0, 32)),
+    HEGEL_LEN_PREFIXED_ARRAY (HEGEL_USE (n), HEGEL_U8 ('a', 'z')));
+```
+
+**Tests:**
+- [`test_array_len_prefixed.c`](../tests/test_array_len_prefixed.c)
+
+Exercises: prefix written at offset 0 in elem's bit-width; drawn
+elements at offsets 1..n.  Pair with the LET pattern when the C
+struct also has an explicit length field elsewhere.
+
+---
+
+## Sentinel-terminated buffer (null-terminated string, argv-like)
+
+Some C interfaces use a sentinel value to terminate a buffer
+instead of carrying a length — null-terminated strings are the
+canonical case.  `HEGEL_TERMINATED_ARRAY` draws elements then
+appends the sentinel.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct {
+  char *s;          /* drawn chars 0..n-1, '\0' at index n */
+} CStr;
+```
+
+**Schema:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+HEGEL_BINDING (n);
+cstr_schema = HEGEL_STRUCT (CStr,
+    HEGEL_LET (n, HEGEL_INT (0, 32)),
+    HEGEL_TERMINATED_ARRAY (HEGEL_USE (n), HEGEL_U8 ('a', 'z'), 0));
+```
+
+**Tests:**
+- [`test_array_terminated.c`](../tests/test_array_terminated.c)
+- [`test_terminated_sentinel_abort.c`](../tests/test_terminated_sentinel_abort.c) — schema-build-time abort when the sentinel is in elem's range
+
+Exercises: drawn elements at offsets 0..n-1; sentinel written at
+offset n.  The element schema must not be able to produce the
+sentinel value — for bounded `HEGEL_INT` / `HEGEL_CONST` the check
+fires at schema-build time, otherwise a runtime check catches the
+collision on first occurrence.
+
+---
+
+## Patterns we don't have a macro for — escape hatch
+
+For C array shapes without dedicated support (e.g. multi-byte
+big-endian length prefix, length-includes-prefix vs. length-of-
+elements-only, custom interleaving), draw the raw structural
+fields with the existing macros and post-process the value before
+passing it to the function under test.
+
+**Example: 2-byte big-endian length prefix.**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { uint8_t *data; } BERFrame;
+
+HEGEL_BINDING (n);
+ber_schema = HEGEL_STRUCT (BERFrame,
+    HEGEL_LET (n, HEGEL_INT (0, 1024)),
+    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_U8 (0, 255)));   /* just elements */
+
+/* In the test body, after hegel_schema_draw allocates BERFrame: */
+static void test_ber (hegel_testcase *tc) {
+    BERFrame *f;
+    hegel_shape *sh = hegel_schema_draw (tc, ber_schema, (void**)&f);
+    /* allocate a buffer with the 2-byte BE prefix prepended... */
+    /* feed the prefixed buffer to the function under test... */
+    hegel_shape_free (sh);
+}
+```
+
+The schema produces the structural payload; the test body assembles
+the wire format.  Same idiom applies to length-prefixes-encoded-as-
+varints, framing protocols with magic bytes, etc.  When the same
+post-processing recurs across multiple tests, that's a signal to
+file a TODO for a dedicated macro.
+
+---
+
+## Functional combinators — map, filter, flat_map
+
+The schema API isn't limited to structural composition. For
+transforming drawn values, filtering, and dependent generation,
+there are `HEGEL_MAP_INT`, `HEGEL_FILTER_INT`, `HEGEL_FLAT_MAP_INT`.
+
+**C layout:**
+<!-- /ignore layout: C struct/union declaration shown for reference -->
+```c
+typedef struct { int square; }      SquaredThing;
+typedef struct { int even_val; }    EvenThing;
+typedef struct { int dependent; }   DepThing;
+```
+
+**Schemas:**
+<!-- /ignore schema-doc: distilled schema builder, real code in the linked test file -->
+```c
+int square_fn (int x, void *ctx) { (void)ctx; return x * x; }
+int is_even   (int x, void *ctx) { (void)ctx; return (x % 2) == 0; }
+hegel_schema_t dep_fn (int n, void *ctx) {
+  (void)ctx;
+  return hegel_schema_int_range (0, n * 10);
+}
+
+/* map: field is always a perfect square in [0, 10000] */
+HEGEL_STRUCT (SquaredThing,
+    HEGEL_MAP_INT (hegel_schema_int_range (0, 100), square_fn, NULL));
+
+/* filter: field is always even */
+HEGEL_STRUCT (EvenThing,
+    HEGEL_FILTER_INT (hegel_schema_int_range (0, 100), is_even, NULL));
+
+/* flat_map: dependent — range of second draw depends on first */
+HEGEL_STRUCT (DepThing,
+    HEGEL_FLAT_MAP_INT (hegel_schema_int_range (1, 10), dep_fn, NULL));
+```
+
+**Test:** [`test_schema_functional_combinators.c`](../tests/test_schema_functional_combinators.c)
+
+Exercises **all legacy `hegel_gen_*` combinator functionality**
+at the schema layer, in 7 sub-tests:
+
+1. Optional int pointer via `HEGEL_OPTIONAL` + `int_range`
+2. `map` for int / i64 / double (square, cube, halve)
+3. `filter` for int / i64 / double (even, positive, ≥1.0)
+4. `flat_map` for int / i64 / double (dependent ranges)
+5. `HEGEL_ONE_OF` — "small OR large" distribution
+6. `HEGEL_BOOL` — 1-byte bool field
+7. `HEGEL_REGEX` — pattern-generated text
+
+This file is the feature-parity proof: the schema API fully
+subsumes the legacy `hegel_gen_*` combinator surface. The legacy
+API can be deprecated once existing tests that use it get migrated.
+
+---
+
+## Top-level draws (no struct wrapper)
+
+**Test:** [`test_schema_top_level_draw.c`](../tests/test_schema_top_level_draw.c)
+
+The schema API supports top-level draws in three styles beyond the
+classic `hegel_schema_draw(tc, s, (void **)&ptr)` form:
+
+<!-- /ignore api-example: distilled illustration backed by the linked test(s) or header file -->
+```c
+/* 1. Primitive scalar by value — no schema allocation. */
+int     x = HEGEL_DRAW_INT    (0, 10);
+double  d = HEGEL_DRAW_DOUBLE (0.0, 1.0);
+bool    b = HEGEL_DRAW_BOOL   ();
+
+/* 2. Reused global schema, scalar written through the address. */
+static hegel_schema_t reused_int_schema;   /* built in main() */
+/* in test: */
+int x = 0;
+hegel_shape *sh = HEGEL_DRAW (&x, reused_int_schema);
+/* ... use x ... */
+hegel_shape_free (sh);
+
+/* 3. Unified form for structs — HEGEL_DRAW takes &(StructT *). */
+Triplet *p = NULL;
+hegel_shape *sh = HEGEL_DRAW (&p, triplet_schema);
+/* ... use p ... */
+hegel_shape_free (sh);
+```
+
+Exercises: `HEGEL_DRAW` (all kinds that make sense at the top level
+— struct, scalar, text, optional, union, variant) and the primitive
+scalar family `HEGEL_DRAW_INT` / `_I64` / `_U64` / `_DOUBLE` /
+`_FLOAT` / `_BOOL`. The typed family dispatches directly to
+`hegel_draw_*` primitives — no schema involved. See
+[schema-api.md → Scalar by-value shortcuts](schema-api.md#scalar-by-value-shortcuts)
+for the full story.
+
+---
+
+## Recursive trees: depth cap and leaf budget
+
+`HEGEL_SELF` slots are drawn through the engine's recursion protocol:
+each slot either holds a child or is NULL (a leaf), as the engine
+decides. Drawn with `max_depth` d (default `HEGEL_DEFAULT_MAX_DEPTH =
+50`), a tree has at most d levels of structs; it has at most 100 NULL
+slots, with over-budget attempts unwound and redrawn from the root.
+Neither limit fails the test.
+
+**Test:** [`test_schema_self_limits.c`](../tests/test_schema_self_limits.c)
+
+**Schema** (transcluded from the test — kept in sync by
+`make docs-check`):
+
+<!-- /include experiments/schema-with-let/tests/test_schema_self_limits.c:119-122 -->
+```c
+  node_schema = HEGEL_STRUCT (Node,
+      HEGEL_INT  (0, 100),
+      HEGEL_SELF (),
+      HEGEL_SELF ());
+```
+<!-- /endinclude -->
+
+A binary tree, the shape that used to need the cap: two `HEGEL_SELF`
+slots per node. The test checks the depth cap (drawn with
+`max_depth` 3), the leaf budget at the default depth, and that the
+budget isn't met by drawing only tiny trees. See
+[schema-api.md → Recursion depth](schema-api.md#recursion-depth).
+
+---
+
+## Test count
+
+As of this document's last update (2026-07-13): **81/81 selftests**
+in the `selftest` target (PASS/FAIL/CRASH/HEALTH-CHECK buckets).

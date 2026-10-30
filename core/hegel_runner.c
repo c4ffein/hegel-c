@@ -371,6 +371,7 @@ static void run_case_inproc (hegel_case_srv * srv, void (*test_fn)(hegel_testcas
   }
 
   /* Per-case cleanup runs on every exit path (normal or escape). */
+  if (hegel__draws_abandoned) hegel__draws_abandoned ();
   if (tc.cleanup) {
     void (*fn)(void *) = tc.cleanup;
     tc.cleanup = NULL;
