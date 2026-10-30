@@ -44,10 +44,6 @@
     veneer (C without its discipline), and D, handles/facets V2 (one draw,
     named facets projected into slots; biggest migration, one silent
     footgun: a missing `HEGEL_OUTER` turns into per-element draws).
-- **`hegel_target(tc, score, label)`.** No longer blocked: libhegel 0.48
-  exports `hegel_target` and the TARGET phase hill-climbs toward the
-  scores. One new op in the wire protocol + a selftest where random
-  generation misses and targeting finds.
 - **Named shape accessors** — see "Named shape accessors" below.
 - **Raw-bytes schema field.** `hegel_draw_bytes` exists as a primitive;
   the schema layer has no `HEGEL_BYTES(lo, hi)` (pointer + length) —
@@ -831,7 +827,6 @@ features we don't have (`exclude_min`, NaN/inf) or are Rust-specific.
 
 ## TODO
 - [ ] Port more hegel-rust tests — see `tests/from-hegel-rust/manifest.md`. Remaining need features (exclude_min, NaN/inf) or are Rust-specific.
-- [ ] `hegel_target(tc, value, label)` — unblocked, see "Next up".
 - [ ] Parallel test execution
 - [ ] Test `HEGEL_DATABASE` replay in fork mode (`test_run_options` covers nofork only)
 - [ ] More Scotch IRL tests — strategy string fuzzing against real parser, mesh partitioning

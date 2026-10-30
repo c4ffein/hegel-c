@@ -463,7 +463,9 @@ void hegel_fail_with_origin (const char * origin, const char * msg);
 /* Record a numeric observation for targeted PBT: the engine biases
 ** later test cases toward inputs that scored HIGHER under the same
 ** label.  No-op unless the targeting phase is enabled (it is by
-** default).  Label must be non-NULL, stable, and UTF-8. */
+** default).  Label must be non-NULL, stable, and UTF-8.  The target
+** phase starts late in a run: with the default 100 test cases it rarely
+** gets going — ask for ~1000 (see tests/selftest/test_target.c). */
 void hegel_target (hegel_testcase * tc, double value, const char * label);
 
 /* Assert a condition — if false, fails with message and triggers shrinking */

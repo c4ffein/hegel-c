@@ -23,7 +23,7 @@ Most new code should use the schema API — it handles allocation, span annotati
   - `hegel_runtime.c` — the public primitives as requests; `hegel__call` picks the transport (INPROC = direct call into the server, CHILD = fork parent's pipe). Also `HEGEL_ISOLATED`.
   - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, capture-by-origin failure reporting, suite API.
   - `hegel_stateful.c` — stateful driver on the engine's state machine (`hegel_new_state_machine`), shaped like hegel-rust's `run_sequential`; preconditions map onto `rule_rejected`. Works in fork and nofork mode.
-- `tests/selftest/` — 90 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
+- `tests/selftest/` — 91 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI), a 29-test property suite (`props/`: 24 green on current master via `make test-props` / pin `current`, 5 witnesses of open bugs run by their pins) + bug pins (`pins/`; `PIN_ASAN=1` in a pin forces an ASan Scotch)
@@ -57,7 +57,7 @@ make lib                        # build build/libhegel_c.a (pure C, seconds)
 make libhegel                   # build the engine into build/libhegel.so (cargo; PREBUILT=1 downloads it)
 make check-libhegel             # engine pin: submodule tag, installed version, newer upstream release
 
-make selftest-test              # 90 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
+make selftest-test              # 91 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
 make from-hegel-rust-test       # 11 tests (5 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
@@ -91,7 +91,7 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 
 **Crash isolation for a block:** `HEGEL_ISOLATED(tc) { ... }` — no draws inside (health failure), no nesting, no break/return out of it. Every failure inside a block (crash, `HEGEL_ASSERT`, `hegel_fail`) shares one origin, `HEGEL_ISOLATED at <file:line>`, so a bug that sometimes asserts and sometimes segfaults shrinks as one bug. If a plain test shrinks poorly, wrapping the code under test in a block is the fix. `HEGEL_C_MERGE_ORIGINS=1` merges every failure in a run into one origin.
 
-**Other:** `hegel_note(tc, msg)` (captured for the counterexample report), `hegel_assume(tc, cond)`, `hegel_fail(msg)` (code-under-test broken), `hegel_health_fail(msg)` (test-setup broken — emits "Health check failure:" prefix), `HEGEL_ASSERT(cond, fmt, ...)`
+**Other:** `hegel_note(tc, msg)` (captured for the counterexample report), `hegel_target(tc, score, label)` (the TARGET phase hill-climbs toward higher scores; needs a budget well above the default 100 cases — see `tests/selftest/test_target.c`), `hegel_assume(tc, cond)`, `hegel_fail(msg)` (code-under-test broken), `hegel_health_fail(msg)` (test-setup broken — emits "Health check failure:" prefix), `HEGEL_ASSERT(cond, fmt, ...)`
 
 ## Schema API (`hegel_gen.h`)
 

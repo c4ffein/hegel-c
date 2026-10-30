@@ -83,7 +83,8 @@ TESTS_PASS = test_pass_simple \
              test_pool_basic \
              test_schema_self_limits \
              test_run_options \
-             test_reproduce_blob
+             test_reproduce_blob \
+             test_target
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
