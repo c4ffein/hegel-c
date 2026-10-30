@@ -526,9 +526,9 @@ void hegel_assert (int condition, const char * msg);
 **
 **   hegel_fail         → the CODE UNDER TEST is broken.  Shrink, show
 **                        the user a minimal counterexample.
-**   hegel_health_fail  → the TEST SETUP is broken (e.g. the schema's
-**                        recursion probabilities mean every draw hits
-**                        the depth bound).  The user needs to fix the
+**   hegel_health_fail  → the TEST SETUP is broken (e.g. a fixture the
+**                        test needs could not be built, or a generator
+**                        can never produce a valid value).  The user needs to fix the
 **                        test, not the code.  Shrinking shouldn't add
 **                        signal; the problem is invariant across
 **                        inputs.

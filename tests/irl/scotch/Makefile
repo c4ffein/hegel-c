@@ -44,7 +44,7 @@ LDFLAGS      = $(ASAN_FLAGS) -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lscotch -
 LDFLAGS_MPI  = -L$(HEGEL_C_LIB) $(SCOTCH_LIB) -lhegel_c -lptscotch -lscotch -lptscotcherr -lscotcherr -lz -lm -lpthread -ldl -lrt
 
 # Sequential Scotch tests
-TESTS_PASS = test_graph_part test_graph_part_schema
+TESTS_PASS = test_graph_part
 
 # Reducer-quality demos: tests that are EXPECTED to fail and that
 # we additionally check shrunk to a small minimal counterexample.
@@ -122,16 +122,8 @@ FORCE:
 test_graph_part: test_graph_part.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
-test_graph_part_schema: test_graph_part_schema.c $(HEGEL_C_LIB)/libhegel_c.a
-	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-
 test_graph_order_shrink: test_graph_order_shrink.c $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-
-# Standalone investigation binary — not in TESTS_PASS.
-# Reproduces a fork-mode orphan bug; see the header of the .c file.
-test_array_inline_orphan_repro: test_array_inline_orphan_repro.c $(HEGEL_C_LIB)/libhegel_c.a
-	$(CC) $(CFLAGS) -o $@ $< -L$(HEGEL_C_LIB) -lhegel_c -lpthread -lm -ldl
 
 $(TESTS_PROPS): %: props/%.c props/graph_gen.h props/scotch_helpers.h $(HEGEL_C_LIB)/libhegel_c.a
 	$(CC) $(CFLAGS) -Iprops -o $@ $< $(LDFLAGS)

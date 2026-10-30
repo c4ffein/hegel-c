@@ -63,11 +63,11 @@ variant of this union." AFL has no language for any of this —
 coherence has to emerge from coverage feedback, slowly and
 unreliably.
 
-Hegel-c's `HEGEL_LET` / `HEGEL_USE` is *literally* this. Bind
-once, reference multiple times, coherence by construction. Same
-for `HEGEL_LEN_PREFIXED_ARRAY` and `HEGEL_TERMINATED_ARRAY`. The
-whole binding system exists because cross-field invariants are
-the dominant case in C.
+A hegel-c generator is plain C, so this is just code: draw the
+length once, use it for the count field and the array, derive the
+offset from what was drawn. Coherence by construction, and the
+shrinker still sees every choice behind it. Cross-field invariants
+are the dominant case in C, and a generator states them directly.
 
 ### 3. Non-crash properties are not expressible at all
 

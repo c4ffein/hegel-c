@@ -17,7 +17,6 @@
 #define SCOTCH_HELPERS_H
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 #include "scotch.h"
 #include "graph_gen.h"
 

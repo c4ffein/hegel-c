@@ -72,7 +72,7 @@ printf '%s\n' "$NEW_HASHES" > "$HASH_RECORD"
 # ---- Stage 1: copy hegel-c essentials (PREBUILT, no source) ----
 #
 # The agent gets:
-#   - public headers (hegel_c.h, hegel_gen.h)
+#   - the public header (hegel_c.h)
 #   - the PREBUILT static lib (build/libhegel_c.a) and engine cdylib
 #     (build/libhegel.so) — no hegel-c or engine source at all
 #   - the .claude/skills/hegel and .claude/skills/hegel-bughunt skills
@@ -86,12 +86,12 @@ printf '%s\n' "$NEW_HASHES" > "$HASH_RECORD"
 #   - docs/* (internal docs)
 #   - tests/* (any of them — would leak example tests / patterns)
 #   - inspiration/* (other than scotch — would leak hegel-skill, theft, etc.)
-#   - core/ or hegel_gen.c source (internal; already inside libhegel_c.a)
+#   - core/ source (internal; already inside libhegel_c.a)
+#   - experiments/ (the retired schema layer — its tests name bugs too)
 #   - .git/ (deleted bug-tests are in history)
 
 mkdir -p "$SANDBOX/hegel-c/build"
 cp "$SOURCE_ROOT/hegel_c.h"          "$SANDBOX/hegel-c/"
-cp "$SOURCE_ROOT/hegel_gen.h"        "$SANDBOX/hegel-c/"
 cp "$SOURCE_ROOT/CLAUDE.md"          "$SANDBOX/hegel-c/"
 cp "$LIB_A"                          "$SANDBOX/hegel-c/build/"
 cp "$LIB_SO"                         "$SANDBOX/hegel-c/build/"

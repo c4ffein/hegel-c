@@ -4,18 +4,16 @@
 
 hegel-c is a C binding for Hegel, a property-based testing framework. It is pure C end to end: tests include the headers and link a static `libhegel_c.a`; at runtime the library dlopens `libhegel.so` — Hegel's official native engine (a Rust cdylib from the hegel-rust repo, prebuilt per platform on its GitHub releases). There is no server process, no Python, and no Rust in our build. (History: until 2026-06 this binding was a Rust FFI bridge to the Python `hegel-core` server; upstream 0.17.0 deleted the server and shipped the in-process engine + C ABI we now sit on.)
 
-**Two layers of public API:**
-- `hegel_c.h` — primitive draws, spans, engine collections / recursion / pools, `HEGEL_ISOLATED`, asserts, runners. Thin over libhegel's own protocols; the transport boundary.
-- `hegel_gen.h` — higher-level schema/shape system for describing and generating C structs declaratively. Pure C, uses `hegel_c.h` as its backend.
+**One public API:** `hegel_c.h` — primitive draws (and `HEGEL_DRAW_*` shorthands), spans, engine collections / recursion / pools, `HEGEL_ISOLATED`, asserts, runners. Thin over libhegel's own protocols; the transport boundary. Generators are plain C functions over it — see "Writing generators" below.
 
-Most new code should use the schema API — it handles allocation, span annotation, ownership tracking, and cleanup automatically. The primitive API is still there for simple scalar tests or when you need finer control.
+Until 2026-10-30 there was a second layer, `hegel_gen.h`: a declarative schema system (describe a C struct, get generation, allocation and cleanup). It moved to `experiments/schema-with-let/`, with a view-callbacks extension in `experiments/schema-with-callbacks/`; `experiments/README.md` has what was measured and why. Don't reintroduce it on main without revisiting that README.
 
-**Status**: Work in progress. V0 schema API done. Author: c4ffein. License: MIT.
+**Status**: Work in progress. Author: c4ffein. License: MIT.
 
 ## Architecture
 
 - `hegel_c.h` — Public C API (opaque types, draw functions, spans, collections, recursion, pools, `HEGEL_ISOLATED`, assertions, suite API, stateful)
-- `hegel_gen.h` / `hegel_gen.c` — Schema system (declarations + pure-C implementation). See `docs/schema-api.md` and `docs/patterns.md`.
+- `experiments/` — designs built, measured and not kept, each still buildable against main's library (`make -C experiments/<name> test PREBUILT=1`), never part of `make test`: `schema-with-let/` (the retired schema layer with its tests and docs), `schema-with-callbacks/` (the view-callbacks PoC), `TODO-schema.md` (the schema backlog), `README.md` (what was measured, why main is imperative, ideas not pursued).
 - `core/` — The pure-C runtime under `hegel_c.h`:
   - `hegel_engine.{c,h}` — dlopen binding to `libhegel.so` (search order: `$HEGEL_LIBHEGEL_PATH`, `./build/libhegel.so`, `./.hegel/libhegel/libhegel.so`, system). Mirrors upstream's types with an `hg_` prefix; dlsym keeps our same-named public functions (`hegel_start_span`, `hegel_note`, `hegel_collection_more`, ...) from colliding with libhegel's exports. One process-wide `hegel_context_t`.
   - `hegel_internal.h` — the wire protocol (every engine operation a body can perform is one request op) and the test-case struct.
@@ -23,13 +21,12 @@ Most new code should use the schema API — it handles allocation, span annotati
   - `hegel_runtime.c` — the public primitives as requests; `hegel__call` picks the transport (INPROC = direct call into the server, CHILD = fork parent's pipe). Also `HEGEL_ISOLATED`.
   - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, capture-by-origin failure reporting, suite API.
   - `hegel_stateful.c` — stateful driver on the engine's state machine (`hegel_new_state_machine`), shaped like hegel-rust's `run_sequential`; preconditions map onto `rule_rejected`. Works in fork and nofork mode.
-- `tests/selftest/` — 92 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK) including schema pattern, binding, stateful, isolation and engine-protocol tests
+- `tests/selftest/` — 34 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK): draws, spans, shrinking, stateful, isolation and engine-protocol tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
-- `tests/irl/scotch/` — 2 Scotch integration tests (sequential + PT-Scotch MPI), a 29-test property suite (`props/`: 24 green on current master via `make test-props` / pin `current`, 5 witnesses of open bugs run by their pins) + bug pins (`pins/`; `PIN_ASAN=1` in a pin forces an ASan Scotch)
+- `tests/irl/scotch/` — 3 Scotch integration tests (sequential, the `hgraphOrderCp` reducer demo, PT-Scotch MPI), a 29-test property suite (`props/`: 24 green on current master via `make test-props` / pin `current`, 5 witnesses of open bugs run by their pins) + bug pins (`pins/`; `PIN_ASAN=1` in a pin forces an ASan Scotch)
 - `tests/irl/linux/` — Linux kernel bug-hunt harnesses, one per target, each built against a pinned kernel checkout (`pins/`)
-- `docs/schema-api.md` — schema system reference
-- `docs/patterns.md` — pattern catalog (tests as documentation)
+- `docs/shrinking.md` — integrated shrinking, with the Scotch reducer walkthrough
 - `docs/mpi-testing.md` — MPI integration guide
 - `TODO.md` — deferred items
 - `docs/findings.toml` — ledger of bugs hegel-c found itself (Linux, Scotch) and their upstream status, plus every submission (patch series or report) with its versions and, while it waits on us, a `next` step; `make findings` / `findings-html` / `findings-serve` (0.0.0.0:8080, only the page and the files it links, rebuilt per load) / `lint-findings` (`tools/findings.py`, Python 3.11+, no deps; the page is `tools/findings_ui.html`, plain HTML/JS with the ledger and the files it links inlined as JSON: open submissions first under "to do", per-version patch tabs with colored diffs, and what changed between versions). Names bugs, so blind bug-hunt sandboxes never get it.
@@ -57,10 +54,10 @@ make lib                        # build build/libhegel_c.a (pure C, seconds)
 make libhegel                   # build the engine into build/libhegel.so (cargo; PREBUILT=1 downloads it)
 make check-libhegel             # engine pin: submodule tag, installed version, newer upstream release
 
-make selftest-test              # 92 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
+make selftest-test              # 34 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
 make from-hegel-rust-test       # 11 tests (5 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
-make scotch-test                # 2 tests (needs Scotch — clone via make inspiration)
+make scotch-test                # Scotch tests (needs Scotch — clone via make inspiration)
 
 make inspiration                # clone third-party repos into inspiration/{hegel,existing-pbt-in-c,targets}/
 ```
@@ -95,82 +92,18 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 
 **Other:** `hegel_note(tc, msg)` (captured for the counterexample report), `hegel_target(tc, score, label)` (the TARGET phase hill-climbs toward higher scores; needs a budget well above the default 100 cases — see `tests/selftest/test_target.c`), `hegel_assume(tc, cond)`, `hegel_fail(msg)` (code-under-test broken), `hegel_health_fail(msg)` (test-setup broken — emits "Health check failure:" prefix), `HEGEL_ASSERT(cond, fmt, ...)`
 
-## Schema API (`hegel_gen.h`)
+## Writing generators
 
-The schema system lets tests describe C structs declaratively and get generation/allocation/cleanup/spans for free.
+A generator is a C function that fills a value from draws: `void gen_graph (hegel_testcase *tc, Graph *g)`. Conventions the existing harnesses follow:
 
-**Three-layer architecture:**
-1. **Schema tree** (`hegel_schema_t`) — user-built description of the type, reference-counted
-2. **Shape tree** (`hegel_shape *`) — per-run metadata, built on draw, owns the value memory
-3. **Value memory** — the actual C struct passed to the tested function
+- **Dependencies are variables.** Draw what a field depends on first and use it as a bound (`u = hegel_draw_int (tc, 0, g->nvert - 1)`) instead of drawing wide and clamping after (`% nvert` costs shrink quality).
+- **Spans for structure.** Wrap a list in `HEGEL_SPAN_LIST` and each element in `HEGEL_SPAN_LIST_ELEMENT` so the shrinker can delete whole elements; a struct or node in its own span (`hegel_label ("lib.thing")`). `hegel_stop_span (tc, 1)` discards a dead end.
+- **Lengths:** a drawn length (`n = hegel_draw_int (tc, 0, MAX)`) gives sizes across the range; the collection protocol (`hegel_collection_*`) lets the engine own the length and reject elements (`_reject`, e.g. duplicates) but aims for ~5 elements whatever the max — use it when small lists are what you want.
+- **Recursive values** go through the recursion protocol (branch / leaf, then `_retry` when over the leaf budget and `_finish`); unwinding means freeing the half-built value. See `tests/selftest/test_recursion_tree.c` and `test_recursion_nary_tree.c`.
+- **Generate first, then isolate:** draws happen before `HEGEL_ISOLATED (tc) { ... }`, never inside.
+- **Notes for crash-prone code:** `hegel_note` the input's shape before calling the code under test, so a crash still reports it.
 
-**Wrapper type:** `hegel_schema_t` is a newtype struct `{ hegel_schema * _raw; }` — distinct C type from raw pointers, zero runtime cost. Users never touch `_raw`. Detailed rationale is in the `hegel_gen.h` header comment.
-
-**Ownership:** starts at refcount=1, passing to a parent transfers the reference (no bump). For sharing across multiple parents, explicitly call `hegel_schema_ref(s)` before each extra use. `hegel_schema_free` decrements; actual free at zero.
-
-**Low-level schema constructors (pure values, no positions):**
-- Integers: `hegel_schema_i8` through `u64`, plus `int` / `long` / `_range` variants
-- Floats: `hegel_schema_float` / `_range`, `hegel_schema_double` / `_range`
-- Text: `hegel_schema_text(min_len, max_len)`
-- `hegel_schema_self()` — recursive reference
-- `hegel_schema_optional_ptr(inner)`, `hegel_schema_arr_of(length, elem)`, etc.
-
-**Macros (the positional user-facing surface):**
-- `HEGEL_STRUCT(T, field_entries...)` — computes offsets from the struct type at runtime, asserts `sizeof(T) == computed_total`. Top-level composition primitive.
-- `HEGEL_INLINE(T, field_entries...)` / `HEGEL_INLINE_REF(T, schema)` — inline-by-value sub-struct field. Lays out `sizeof(T)` bytes in the parent slot; fields are drawn into that region (no separate allocation). Nests recursively; inner `sizeof(T)` assert fires at schema-build time. `_REF` form plugs in a pre-built struct schema; the `(sch, sizeof(T))` match is asserted.
-- `HEGEL_INT(lo, hi)` / `HEGEL_INT()` (full range) — 0-vs-2-arg overloaded via `__VA_OPT__`; same for `_I8`/`_U8`/`_I16`/…/`_DOUBLE` / `_LONG` / `_FLOAT`
-- `HEGEL_TEXT(lo, hi)` — `char *` field, pointer-sized slot
-- `HEGEL_OPTIONAL(inner)` — 50/50 nullable pointer; 1 slot
-- `HEGEL_SELF()` — optional recursive pointer; 1 slot. Child-or-NULL is decided by the engine's recursion protocol (branch = child, leaf = NULL), which owns the probabilities, the depth cap and a 100-leaf budget; over-budget attempts are unwound (longjmp, tracked allocations freed) and redrawn from the root — see `hegel__draw_root` in `hegel_gen.c`.
-- `HEGEL_BINDING(name)` — declares a compile-time binding id (expands to `enum { name = __COUNTER__ }`). Typo → compile error. Function-local scope is the pit of success; file-scope works; headers discouraged (per-TU `__COUNTER__` values don't match across translation units).
-- `HEGEL_LET(name, inner)` — non-positional: draws `inner` and caches the value under `name` in the enclosing struct's draw ctx. No slot consumed. Inner must be a scalar INTEGER (width 4 or 8) or FLOAT (single or double); composed scalar schemas (`HEGEL_MAP_INT`, etc.) are also accepted.
-- `HEGEL_USE(name)` / `_I64` / `_U64` / `_FLOAT` / `_DOUBLE` — reads the cached value and writes it to the current slot (1 slot, width matching the variant). Also usable as a length parameter to `HEGEL_ARR_OF` (int variant only). Walks the scope chain outward, so a USE in an inner struct resolves a LET in any enclosing struct. Width / sign / float-ness must match the LET inner kind — mismatch is a hard abort. Unresolved → hard abort with actionable message (schema authoring error, not a discardable filter).
-- `HEGEL_LET_ARR(name, length, elem)` — non-positional: draws a length, then `length` ints from `elem`, and caches the resulting `int[]` under `name`. No struct slot. Read elements via `HEGEL_USE_AT(name)`.
-- `HEGEL_USE_AT(name)` — int slot. Looks up the named array binding (walks scope chain), reads the `current_index` of the scope where the binding was declared, and writes `arr[current_index]` to the slot. The `current_index` is set by the enclosing `HEGEL_ARR_OF` while it iterates. Canonical pattern: parent struct does `HEGEL_LET_ARR(sizes, ...)`, parent's `HEGEL_ARR_OF` iterates over child structs, each child uses `HEGEL_USE_AT(sizes)` to get the i-th size — exactly the "sizes drives groups" pattern.
-- `HEGEL_USE_PATH(<HEGEL_PARENT>*, name [, HEGEL_INDEX_HERE])` — int slot. Variadic explicit-path resolver: zero or more `HEGEL_PARENT` steps SKIP that many scopes outward before lookup, then resolves the named binding. Optional trailing `HEGEL_INDEX_HERE` indexes into a `HEGEL_LET_ARR` binding (same semantics as `HEGEL_USE_AT`). Use when you need to bypass a closer same-named binding to reach an outer one (the only case `HEGEL_USE_AT` / `HEGEL_USE` can't express). Path sentinels are negative ints; binding ids are non-negative — runtime parser disambiguates by sign.
-- `HEGEL_ARR_OF(length_schema, elem_schema)` — 1 slot (pointer). Length must be **either a named binding** (`HEGEL_USE` / `HEGEL_USE_AT` / `HEGEL_USE_PATH`) **or a literal** (`HEGEL_CONST(N)`); raw `HEGEL_INT(lo,hi)` and composed scalars (`HEGEL_MAP_INT`, etc.) are rejected at schema-build time with an actionable abort. Wrap drawn lengths in `HEGEL_LET` first. Element kinds supported today: INTEGER, STRUCT, OPTIONAL_PTR (enables `HEGEL_SELF()` for recursive trees), ONE_OF_STRUCT, MAP_INT / FILTER_INT / FLAT_MAP_INT.
-- `HEGEL_LEN_PREFIXED_ARRAY(length_schema, elem_schema)` — 1 slot (pointer). Pascal-string-style: buffer of (n+1) elements where slot 0 is the drawn length n cast to elem's int type and slots 1..n are drawn from elem. Length constraint same as `HEGEL_ARR_OF`. Element must be `HEGEL_SCH_INTEGER` (any width). Drawn n must fit in elem type's representable range — exceeded values abort at draw time.
-- `HEGEL_TERMINATED_ARRAY(length_schema, elem_schema, sentinel)` — 1 slot (pointer). Null-terminated-style: buffer of (n+1) elements where slots 0..n-1 are drawn from elem and slot n is the literal sentinel. Same length/element constraints as LEN_PREFIXED. Schema-build-time check: if elem is a bounded HEGEL_INT or HEGEL_CONST and the sentinel could collide with a drawn element, the constructor aborts. For derived elem schemas (USE / MAP / etc.), runtime check fires on first collision.
-- `HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi)` — 2 slots: `void *` pointer + `int` count. Contiguous elements; user's struct must put ptr before count.
-- `HEGEL_UNION(cases...)` — cluster slot: int tag + union body (sized/aligned to widest case)
-- `HEGEL_UNION_UNTAGGED(cases...)` — cluster slot: union body only, tag in shape tree
-- `HEGEL_VARIANT(case_struct_schemas...)` — cluster slot: int tag + `void *` ptr
-- `HEGEL_ONE_OF_STRUCT(cases...)` — pointer-producing schema; used as `HEGEL_ARR_OF` elem or inside `HEGEL_OPTIONAL`
-- `HEGEL_CASE(field_entries...)` — used inside `HEGEL_UNION*`; contains layout entries, NOT bindings
-- `HEGEL_MAP_INT(source, fn, ctx)` / `HEGEL_FILTER_INT(source, pred, ctx)` / `HEGEL_FLAT_MAP_INT(source, fn, ctx)` — 1 slot (int-sized); same for `_I64` and `_DOUBLE`
-- `HEGEL_ONE_OF(scalar_schemas...)` — 1 slot, size/align inferred from the first case's kind
-- `HEGEL_BOOL()` — 1-byte `bool` slot
-- `HEGEL_REGEX(pattern, capacity)` — `char *` slot
-- `hegel_schema_of(layout_entry)` — unwrap a `HEGEL_UNION` / `HEGEL_VARIANT` layout entry to a raw `hegel_schema_t` for standalone use (e.g. as an `ARRAY_INLINE` element type)
-
-**Idiomatic array + count pattern.** A struct with a pointer and a count field uses the binding system to keep them coherent:
-```c
-typedef struct { int *items; int n; } Bag;
-HEGEL_BINDING (n);
-schema = HEGEL_STRUCT (Bag,
-    HEGEL_LET    (n, HEGEL_INT (0, 10)),                 /* non-positional */
-    HEGEL_ARR_OF (HEGEL_USE (n), HEGEL_INT (0, 100)),    /* int *items */
-    HEGEL_USE    (n));                                    /* int n */
-```
-Because LET is non-positional, the USE that writes to the count field can appear in any layout position — before, between, or after the ARR_OF. Per-struct-instance scoping means nested arrays-of-structs each draw their own value (e.g. jagged 2D: see `tests/selftest/test_binding_jagged_2d.c`).
-
-The positional form means **the user writes a flat list of generators in the same order as the struct fields**, with matching types. The layout pass computes byte offsets the same way the C compiler does and asserts `sizeof(T)` matches. If a field is reordered or its type changes, the assert fires at schema-build time.
-
-**Draw / free:**
-- `hegel_shape *hegel_schema_draw(tc, schema, (void**)&ptr)` — struct-oriented: allocates, fills, returns shape
-- `HEGEL_DRAW(&addr, sch)` — unified write-at-address entry point. STRUCT kind allocates and writes the pointer at `*addr`; scalar / text / optional / union / variant write the value directly at `addr`. Returns a `hegel_shape *` (leaf for scalars, real tree for composites) — always free it. ARRAY / ARRAY_INLINE / SELF / ONE_OF_STRUCT abort at the top level (they only compose inside a struct). Schema is not consumed.
-- `HEGEL_DRAW_INT(lo, hi)` / `HEGEL_DRAW_INT()` (full range) — dispatches directly to the `hegel_draw_int` primitive. Same `(lo, hi)` / `()` overloading for `_I64` / `_U64` / `_DOUBLE` / `_FLOAT`. `HEGEL_DRAW_BOOL()` takes no args. No schema allocation. For composed scalar schemas (`HEGEL_MAP_INT`, `HEGEL_FILTER_INT`, `HEGEL_FLAT_MAP_INT`, `HEGEL_ONE_OF`), hoist and use `HEGEL_DRAW(&x, sch)`. No `HEGEL_DRAW_ARRAY` by design.
-- `hegel_shape_free(sh)` — walks shape tree, frees value memory + shape (NULL-safe)
-- `hegel_schema_free(schema)` — refcount-decrement, free schema at zero
-- `HEGEL_DEFAULT_MAX_DEPTH = 50` — depth cap for `HEGEL_SELF` trees (at most that many levels of structs, root included; slots at the cap are NULL — not a failure). Override via `hegel_schema_draw_n` / `hegel_schema_draw_at_n`.
-
-**Shape accessors** (for untagged unions, parallel-length patterns):
-- `hegel_shape_tag(sh)` — variant index
-- `hegel_shape_array_len(sh)` — array length
-- `hegel_shape_is_some(sh)` — optional present/absent
-- `hegel_shape_field(sh, i)` — positional struct field access (TODO: named accessors)
-
-**See:** `docs/schema-api.md` for the full reference, `docs/patterns.md` for a catalog of C memory layouts with links to the test files that demonstrate each.
+Real examples: `tests/irl/scotch/test_graph_order_shrink.c` (`gen_graph`, walked through in `docs/shrinking.md`), `tests/irl/scotch/props/graph_gen.h` (topology generators building CSR arrays).
 
 ## Selftest three-layer pattern
 
@@ -237,7 +170,7 @@ In nofork mode the body runs in the parent itself and calls `hegel__serve_op` di
 
 Hegel uses **integrated shrinking** (from Hypothesis), not type-based shrinking (QuickCheck). All generation consumes from a shared choice stream. Shrinking operates on that stream — making it shorter or lexicographically smaller — then replays generation.
 
-- `map()`, `filter()`, `flat_map()` do NOT degrade shrinking quality
+- Transforming a drawn value (map), rejecting it with `hegel_assume` (filter) or drawing based on it (flat_map) does NOT degrade shrinking quality
 - Simplicity ordering: `false` < `true`, `0` < `1` < `-1` < `2` < `-2`...
 - All shrinking logic lives in libhegel's native engine (a Rust port of Hypothesis's conjecture engine, audited against it in 0.17.3)
 
@@ -291,6 +224,5 @@ The `fixed` state is what keeps rediscoveries honest: a test that is also red on
 - **Kernel trees: never clone the object store** (`inspiration/targets/linux-pins.git`). Use `scripts/pin-worktree.sh` or `git -C <store> worktree add` with a sparse checkout. A `git clone --filter` of the store (2026-10-23) bypassed the local fast path, ran pack-objects on the shallow partial store and took the machine down.
 - **Cap heavy commands** with a timeout and a memory limit, but not `ulimit -v` for ASan builds: ASan reserves terabytes of shadow address space and aborts at startup under it, which looks exactly like a red test. Use `systemd-run --user --scope -p MemoryMax=2G …`, or only a timeout.
 - **Skills are hunter-visible.** Blind bug hunts read `.claude/skills/`, so skill text and examples must never describe a bug in `docs/corpus.toml` or `docs/findings.toml`; keep examples generic, or the next blind run of that target is void.
-- Generator combinators take ownership of sub-generators — don't free sub-generators after passing them to a combinator
 - The `from-hegel-rust` test suite uses `RUST_SOURCE:` comments to map each C test to its Rust original. `make verify` uses Claude (opus) to semantically compare them.
 - The `from-hegel-rust` integer/float tests use `hegel_run_test_result_n(..., 5000)` for `find_any` edge cases — upstream's `find_any` raised `max_attempts` from 1000 to 5000 when the 0.17.3 distribution fixes capped the interesting-constants pool (boundary values are rarer per draw now).

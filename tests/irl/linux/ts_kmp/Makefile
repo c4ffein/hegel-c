@@ -43,7 +43,7 @@ LIBS    = $(HARNESS_OBJS) ts_kmp_adapter.o ctype.o \
           -L$(REPO_ROOT)/build \
           -lhegel_c -lurcu -lpthread -lm -ldl
 
-TESTS = test_ts_kmp_vs_memmem test_ts_kmp_vs_memmem_drawbytes test_ts_kmp_vs_memmem_schema
+TESTS = test_ts_kmp_vs_memmem test_ts_kmp_vs_memmem_drawbytes
 
 all: $(TESTS)
 

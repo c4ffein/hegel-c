@@ -25,7 +25,6 @@
 #include <string.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 #include "scotch.h"
 
 typedef struct {

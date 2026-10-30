@@ -43,8 +43,7 @@ CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -O2
 BUILD    = build
 CORE_SRC = core/hegel_engine.c core/hegel_server.c core/hegel_runtime.c \
-           core/hegel_runner.c core/hegel_stateful.c \
-           hegel_gen.c
+           core/hegel_runner.c core/hegel_stateful.c
 CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
 
 # Where the engine cdylib is built from.  The Hegel monorepo
@@ -144,10 +143,6 @@ $(BUILD)/libhegel_c.a: $(CORE_OBJ)
 # An object whose .d is missing (first build, or built before -MMD) is
 # rebuilt once, so a header edit is never missed.
 $(BUILD)/%.o: core/%.c $(BUILD)/%.d
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(DEPFLAGS) -I. -c -o $@ $<
-
-$(BUILD)/hegel_gen.o: hegel_gen.c $(BUILD)/hegel_gen.d
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -I. -c -o $@ $<
 

@@ -18,23 +18,23 @@ If you have an existing C codebase using one of the libraries below, **there is 
 - The idea that broad generators find more bugs.
 
 **What is fundamentally different:**
-- **Generation model.** theft uses `enum theft_alloc_res alloc_cb(struct theft *t, void *env, void **instance)` callbacks per type; hegel-c uses declarative schemas (`HEGEL_STRUCT(...)`) that handle allocation and cleanup automatically.
+- **Generation model.** theft uses `enum theft_alloc_res alloc_cb(struct theft *t, void *env, void **instance)` callbacks per type, drawing from a random bit pool; a hegel-c generator is a plain function that fills a value with `hegel_draw_*` calls, which the engine records and shrinks.
 - **Shrinking.** theft has hand-written `shrink_cb` callbacks per type; hegel uses Hypothesis's integrated shrinking on the byte stream — you don't write shrink logic at all.
 - **Instance hashing for dedup.** theft hashes generated instances to skip duplicates; hegel relies on Hypothesis's byte-stream coverage tracking.
-- **Process model.** theft is in-process; hegel-c talks to a Python/Hypothesis server over a pipe.
+- **Process model.** Both are in-process C; hegel-c loads Hegel's native engine (`libhegel.so`) and, in fork mode, has the forked child ask the parent for every draw over a pipe.
 
 If you're porting a theft test:
 
-1. Drop the `alloc_cb` / `print_cb` / `shrink_cb` triples. Replace with a single schema in the test file (`HEGEL_STRUCT(...)`).
+1. Drop the `alloc_cb` / `print_cb` / `shrink_cb` triples. The `alloc_cb` body usually becomes the generator almost as is, with its random-bit reads replaced by `hegel_draw_*` calls; print and shrink go away.
 2. Replace `struct theft_run_config` with `hegel_run_test_n(test_fn, n_cases)`.
 3. Replace `theft_hook_pre_run` / `_post_run` with the global `hegel_set_case_setup` callback.
-4. The property body itself usually translates almost directly — read inputs (drawn for you in theft, drawn via `hegel_schema_draw` in hegel-c), assert.
+4. The property body itself usually translates almost directly — get the input (drawn for you in theft, from your generator in hegel-c), assert.
 
 ### deepstate
 
 [deepstate](https://github.com/trailofbits/deepstate) is a Trail of Bits framework that exposes a Google-Test-like API on top of multiple back-ends — symbolic execution (Manticore, Angr), coverage-guided fuzzers (AFL, libFuzzer, Eclipser), and example-based runs. Deepstate is **not really comparable to hegel-c** — different design philosophy. Highlights:
 
-- **Multi-backend.** deepstate's value proposition is one harness, many backends. hegel chose centralized server-side shrinking instead, and only runs against the Hegel server.
+- **Multi-backend.** deepstate's value proposition is one harness, many backends. hegel runs against one engine, Hegel's, and puts its effort into that engine's generation and shrinking.
 - **Symbolic / coverage-guided.** deepstate can drive symbolic execution or coverage-guided fuzzing; hegel does neither.
 - **Stateful testing via `OneOf`.** deepstate has tier-1 stateful testing; hegel-c doesn't yet (see `reference.md` § Stateful Testing).
 - **Swarm testing.** deepstate exposes Hypothesis's swarm testing concept directly; hegel-c does not.
@@ -73,11 +73,11 @@ The short version:
 When moving code from theft (or hand-rolled fork-per-case PBT) to hegel-c:
 
 1. **Add hegel-c as a dependency** — vendor or submodule, build the static lib (see `reference.md` § Setup).
-2. **Replace `alloc_cb` + `shrink_cb` + `print_cb` triples with a schema.** A `HEGEL_STRUCT(...)` declaration in the test file usually replaces 50-150 lines of theft per-type plumbing.
-3. **Convert generator boilerplate to schema entries.** Map `enum theft_alloc_res` callbacks to the corresponding `HEGEL_INT` / `HEGEL_TEXT` / `HEGEL_OPTIONAL` / `HEGEL_ARR_OF` macros.
+2. **Turn each `alloc_cb` into a generator function** (`static void gen_foo (hegel_testcase *tc, Foo *out)`) that draws each field; delete the matching `print_cb` and `shrink_cb`.
+3. **Replace random-bit reads with typed draws.** `theft_random_bits` / `theft_random_choice` become `hegel_draw_int (tc, lo, hi)` and friends; wrap list elements in `HEGEL_SPAN_LIST_ELEMENT` spans (see `reference.md` § Writing Generators).
 4. **Drop hand-written shrink logic.** Hegel's shrinker operates on the byte stream; remove the `shrink_cb` entirely.
-5. **Move the property body into a `void test_fn(hegel_testcase *tc)`** — `hegel_schema_draw(tc, schema, &ptr)` to get a value, your assertion, `hegel_shape_free(sh)` to clean up.
+5. **Move the property body into a `void test_fn(hegel_testcase *tc)`** — call your generator, assert, free what it allocated.
 6. **Replace `theft_run` with `hegel_run_test_n(test_fn, N)`** — or add to a `hegel_suite` if you have multiple tests in one binary.
-7. **Drop instance-hash dedup.** Hegel handles coverage tracking server-side via the byte stream; you don't need to dedup explicitly.
+7. **Drop instance-hash dedup.** The engine tracks what it has tried on its own; you don't need to dedup explicitly.
 8. **Re-enable broader generators.** theft tests often narrow inputs because shrinking was unreliable on edge cases. Hegel's shrinking is robust — try the full type range first, only narrow if a real domain constraint requires it.
 9. **Run, observe, iterate.** Failing tests on inputs the old framework didn't reach are the point. Investigate before adding bounds.

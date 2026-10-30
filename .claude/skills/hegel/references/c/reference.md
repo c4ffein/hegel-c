@@ -2,53 +2,44 @@
 
 ## Table of Contents
 
-- [Setup](#setup) — vendor, static link, `gcc` flags
-- [Test Structure](#test-structure) — `hegel_run_test*`, suites, per-case setup
-- [TestCase Functions](#testcase-functions) — `hegel_draw_*`, `hegel_assume`, `hegel_note`, `hegel_fail`, `HEGEL_ASSERT`
-- [Schema System](#schema-system) — three-layer model, refcount-transfer ownership
-- [Schema Reference](#schema-reference) — scalars, text, struct composition, arrays, optionals, unions, bindings, combinators
-- [Drawing and Lifecycle](#drawing-and-lifecycle) — `HEGEL_DRAW`, `hegel_schema_draw`, `hegel_shape_free`, shape accessors
+- [Setup](#setup) — vendor, static link, `gcc` flags, the engine library
+- [Test Structure](#test-structure) — runners, suites, per-case setup, run options, replaying a failure
+- [TestCase Functions](#testcase-functions) — `hegel_draw_*`, `HEGEL_DRAW_*`, `hegel_assume`, `hegel_note`, `hegel_fail`, `HEGEL_ASSERT`, `hegel_target`
+- [Writing Generators](#writing-generators) — dependent fields, arrays, spans, optionals, one-of, recursion, map / filter / flat_map
 - [C-Specific Examples](#c-specific-examples)
+- [Crash Isolation](#crash-isolation)
 - [Gotchas](#gotchas)
 - [Stateful Testing](#stateful-testing)
 
 ## Setup
 
-hegel-c is **not yet published as a package**. Vendor it as a submodule and link the static library:
+hegel-c is **not yet published as a package**. Vendor it as a submodule and build the static library and the engine:
 
 ```bash
 git submodule add https://github.com/c4ffein/hegel-c third_party/hegel-c
-cd third_party/hegel-c/rust-version && cargo build --release
+make -C third_party/hegel-c lib libhegel PREBUILT=1
 ```
 
-This produces `third_party/hegel-c/rust-version/target/release/libhegel_c.a`. Add the include path and link flags to your build:
+`make lib` builds `build/libhegel_c.a` (pure C, seconds). `make libhegel PREBUILT=1` downloads Hegel's native engine, `libhegel.so`, as a checksum-verified release artifact into `build/` (without `PREBUILT=1` it builds it from source with cargo). The static library loads the engine at runtime with `dlopen`.
 
 ```make
-CFLAGS  += -I third_party/hegel-c -funwind-tables -fexceptions
-LDFLAGS += -L third_party/hegel-c/rust-version/target/release
+CFLAGS  += -I third_party/hegel-c
+LDFLAGS += -L third_party/hegel-c/build
 LDLIBS  += -lhegel_c -lpthread -lm -ldl
 ```
 
-The `-funwind-tables -fexceptions` flags are required — hegel-c relies on Rust's panic unwinding to surface failures across the FFI boundary.
-
-When linking against additional libraries (e.g., the C library you're testing), append their flags **after** `-lhegel_c`. Standard linker rules apply: a dependent library must come before what it depends on. For example, a Scotch test would use `-lhegel_c -lscotch -lscotcherr -lz -lpthread -lm -ldl -lrt` — `-lscotcherr` after `-lscotch` because `-lscotcherr` is the error-handler that `-lscotch` calls into.
+When linking against additional libraries (e.g., the C library you're testing), append their flags **after** `-lhegel_c`. Standard linker rules apply: a library must come before the libraries it depends on. A Scotch test, for example, links `-lhegel_c -lscotch -lscotcherr -lz -lm -lpthread -ldl -lrt`.
 
 A standalone compile of one test:
 
 ```bash
-gcc -O2 -I third_party/hegel-c -funwind-tables -fexceptions \
-    -o test_foo test_foo.c \
-    -L third_party/hegel-c/rust-version/target/release \
-    -lhegel_c -lpthread -lm -ldl
+gcc -O2 -I third_party/hegel-c -o test_foo test_foo.c \
+    -L third_party/hegel-c/build -lhegel_c -lpthread -lm -ldl
 ```
 
-The first run downloads the Hegel server (a Python package) into `.hegel/venv/` via [uv](https://docs.astral.sh/uv/). Add `.hegel/` to `.gitignore`. If something goes wrong with server installation, see https://hegel.dev/reference/installation.
+#### Finding the engine at runtime
 
-#### Running tests from the right working directory
-
-The Hegel server is auto-installed into `.hegel/` relative to the **current working directory** at first run, and the `hegeltest` Rust crate looks for the server in that same relative path on subsequent runs. If you `cd` into a `tests/` subdirectory and execute the binary there, you'll get a fresh `.hegel/` install (slow first run) or a "server not found" error.
-
-The convention is: define a `REPO_ROOT` in your project's test Makefiles and `cd` to it before running each test binary:
+The runtime looks for `libhegel.so` in this order: `$HEGEL_LIBHEGEL_PATH`, `./build/libhegel.so`, `./.hegel/libhegel/libhegel.so`, then the system loader path. The `./` paths are relative to the **current working directory**, so either export `HEGEL_LIBHEGEL_PATH`, or run test binaries from the directory that holds `build/libhegel.so`:
 
 ```make
 REPO_ROOT := $(abspath ../..)
@@ -57,16 +48,7 @@ test: $(BIN)
 	cd $(REPO_ROOT) && $(CURDIR)/$(BIN)
 ```
 
-This keeps `.hegel/` in one canonical place at the repo root.
-
-**Two headers — include both:**
-
-- `hegel_c.h` — primitive draw *functions* (`hegel_draw_int`, …), the test runner, `hegel_assume` / `hegel_note` / `hegel_fail`, `HEGEL_ASSERT`.
-- `hegel_gen.h` — the **schema system** (`HEGEL_STRUCT`, `HEGEL_INT`, `HEGEL_DRAW_INT`, …) for declaratively describing C structs and getting generation, allocation, and cleanup for free. **Most of the schema-flavored macros (`HEGEL_DRAW_*` in particular) live here**, not in `hegel_c.h`.
-
-Always `#include "hegel_c.h"` *and* `#include "hegel_gen.h"` in every test file. Forgetting `hegel_gen.h` is a common first-time mistake — `HEGEL_DRAW_INT` will then look like an undeclared function.
-
-> The header `hegel_c.h` also exposes a legacy `hegel_gen_*` combinator API (e.g. `hegel_gen_int`, `hegel_gen_one_of`, `hegel_gen_optional`, `hegel_gen_map_int`). **Do not use it.** It predates the schema system, will be deleted, and is not covered in this reference.
+**One header:** `#include "hegel_c.h"` — draws, the `HEGEL_DRAW_*` shorthands, spans, the engine protocols (collections, recursion, pools), runners, assertions, stateful testing.
 
 ## Test Structure
 
@@ -78,7 +60,6 @@ A hegel-c test is a regular C function with the signature `void test_fn(hegel_te
 ** Part of yourproject — see LICENSE for terms. */
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 
 static void test_addition_commutes(hegel_testcase *tc) {
     int a = HEGEL_DRAW_INT();   /* full int range */
@@ -102,18 +83,18 @@ Tests live alongside other tests in the same project — there is no separate "h
 | `hegel_run_test_n(fn, n)` | fork | `n` | Prints counterexample, calls `exit(1)` |
 | `hegel_run_test_result(fn)` | fork | 100 | Returns `0` on success, `1` on failure |
 | `hegel_run_test_result_n(fn, n)` | fork | `n` | Returns `0`/`1` |
-| `hegel_run_test_nofork(fn)` | nofork | 100 | No crash isolation — a SIGSEGV kills the process |
-| `hegel_run_test_nofork_n(fn, n)` | nofork | `n` | No crash isolation |
+| `hegel_run_test_with(fn, &opts)` | fork | from `opts` | Returns `0`/`1` |
+| `hegel_run_test_nofork(fn)` / `_n(fn, n)` / `_with(fn, &opts)` | nofork | 100 / `n` / `opts` | No per-case isolation — use `HEGEL_ISOLATED` (below) |
 
-**Fork mode is the default and what you want.** Each test case runs in a forked child; the parent serves draw requests over a pipe and turns child crashes (SIGSEGV, SIGABRT) into hegel failures so they can shrink. **Nofork mode** exists for benchmarking and for code that can't be forked (e.g., libraries that initialize MPI before the test runs).
+**Fork mode is the default and what you want.** Each test case runs in a forked child; the parent owns the engine, serves the child's draws over a pipe, and turns a child crash (SIGSEGV, SIGABRT) into a failure that shrinks. **Nofork mode** runs the body in the runner's own process — for benchmarking, code that can't be forked, or when you want crash isolation only around the code under test (see [Crash Isolation](#crash-isolation)).
 
-The `_result_*` variants are for binaries that run multiple tests in one process — they don't `exit()` on failure, so you can collect results from several `hegel_run_test_*` calls and return your own status code at the end.
+The `_result_*` and `_with` variants don't `exit()` on failure, so a binary can run several tests and return its own status.
 
-> **Success is silent.** A passing run prints nothing and returns / returns 0. Output appears only on the final replay of a failing case (where `hegel_note` lines and the assertion message are printed). If you're worried "is the test actually exercising my code?", **temporarily invert the property** (e.g., flip `==` to `!=`) and re-run — a passing inversion confirms the test runs *and* shows the shrunk-counterexample format so you know what failures will look like.
+> **Success is silent.** A passing run prints nothing. Output appears only for the minimal failing case (its `hegel_note` lines and the assertion message). If you're worried "is the test actually exercising my code?", **temporarily invert the property** (e.g., flip `==` to `!=`) and re-run — a failing inversion confirms the test runs *and* shows what a counterexample report looks like.
 
 ### Suites
 
-For multiple tests sharing one binary, use a suite — it amortizes the ~1 s server startup across all tests instead of paying it per binary:
+For multiple tests in one binary, use a suite (each test is its own engine run):
 
 ```c
 int main(void) {
@@ -145,62 +126,57 @@ int main(void) {
 }
 ```
 
-Pass `NULL` to clear. The callback runs in the child process before each case in fork mode, and once per case in nofork mode.
+Pass `NULL` to clear. The callback runs before each case, in fork and nofork mode.
 
-You usually don't need this. In **fork mode** the child exits after each case, so any in-process state (heap, statics) is naturally reset by the next fork. Setup callbacks are only needed when the library has state that survives across cases *within* the parent (rare) or when you want a deterministic seed for a library RNG. If you're not sure, skip it — most tests don't use it.
+You usually don't need this in fork mode: each case is a fresh child, so in-process state (heap, statics) starts from the parent's every time. It matters for a library RNG you want deterministic, or for state that would leak between cases in nofork mode.
 
-### Configuration
+### Run options
 
-There is no `Settings` struct yet — case count is the only knob, set via the `_n` runner variants. Seed control, verbosity, and health-check suppression are not exposed on the C side in v0.
+```c
+hegel_run_options o = { .test_cases = 1000,
+                        .suppress_health = HEGEL_SUPPRESS_FILTER_TOO_MUCH };
+int rc = hegel_run_test_with(test_foo, &o);
+```
+
+Fields: `test_cases`, `has_seed` + `seed`, `suppress_health` (`HEGEL_SUPPRESS_*` bits), `skip_phases` (`HEGEL_SKIP_*` bits, e.g. `HEGEL_SKIP_SHRINK`). Zero fields keep the engine default. The engine also reads `HEGEL_*` environment variables (`HEGEL_TEST_CASES`, `HEGEL_SEED`, `HEGEL_DATABASE`, ...); a field set in code wins.
+
+### Replaying a failure
+
+Every failure report ends with a line like `reproduce: HEGEL_C_REPRODUCE='1:AAEAAAAACgEAAABl'`. Rerun the same binary with that variable set and it replays exactly that failing case (the number is the run within the binary, in call order; the binary's other runs are skipped). Once the bug is fixed, the replay prints "did not reproduce" and passes — the quick way to check a fix.
 
 ## TestCase Functions
 
-The opaque `hegel_testcase *tc` handle is passed into your test function. It is **not** copyable — don't store it past the end of the test callback.
+The opaque `hegel_testcase *tc` handle is passed into your test function. Don't store it past the end of the test callback.
 
-> **The parameter must be named `tc`.** The `HEGEL_DRAW_*` macros expand to `hegel_draw_*((tc), …)` — they reference a variable literally spelled `tc` in the enclosing lexical scope. Naming your parameter `t`, `case_`, or anything else gives you a confusing "tc undeclared" compile error. The same rule applies to helper functions: if you factor a helper that needs to draw, name its TestCase parameter `tc` so the macros keep working.
->
-> ```c
-> /* Inline draws — `tc` is the test function's parameter: */
-> static void test_foo(hegel_testcase *tc) {
->     int n = HEGEL_DRAW_INT(0, 10);          /* OK */
-> }
->
-> /* Helper that draws — same name `tc` keeps macros working: */
-> static int draw_positive_n(hegel_testcase *tc) {
->     return HEGEL_DRAW_INT(1, 100);          /* OK */
-> }
->
-> /* If you really must use a different name, fall back to the function form: */
-> static int draw_positive_alt(hegel_testcase *case_) {
->     return hegel_draw_int(case_, 1, 100);   /* the underlying primitive */
-> }
-> ```
-
-The table below shows the standard ways to draw values and signal results. The `HEGEL_DRAW_*` macros are the idiomatic form for scalar draws — they capture `tc` from the enclosing scope and accept either zero arguments (full range of the type) or `(lo, hi)`.
+> **Name the parameter `tc`.** The `HEGEL_DRAW_*` shorthands expand to `hegel_draw_*((tc), …)` — they use a variable literally spelled `tc` in scope. Name helper functions' parameter `tc` too, or call the `hegel_draw_*` functions directly.
 
 | Macro / function | Purpose |
 |---|---|
-| `HEGEL_DRAW_INT()` / `HEGEL_DRAW_INT(lo, hi)` | Draw `int` (full range, or `[lo, hi]`) |
-| `HEGEL_DRAW_I64()` / `HEGEL_DRAW_I64(lo, hi)` | Draw `int64_t` |
-| `HEGEL_DRAW_U64()` / `HEGEL_DRAW_U64(lo, hi)` | Draw `uint64_t` |
-| `HEGEL_DRAW_FLOAT()` / `HEGEL_DRAW_FLOAT(lo, hi)` | Draw `float` |
-| `HEGEL_DRAW_DOUBLE()` / `HEGEL_DRAW_DOUBLE(lo, hi)` | Draw `double` |
-| `HEGEL_DRAW_BOOL()` | Draw `bool` (no range) |
-| `hegel_draw_text(tc, min, max, buf, cap)` | Write a null-terminated string of length in `[min, max]` into `buf` |
-| `hegel_draw_regex(tc, pattern, buf, cap)` | Write a null-terminated string matching `pattern` into `buf` |
+| `HEGEL_DRAW_INT()` / `HEGEL_DRAW_INT(lo, hi)` | Draw `int` (full range, or `[lo, hi]`) — `hegel_draw_int(tc, lo, hi)` |
+| `HEGEL_DRAW_I64()` / `HEGEL_DRAW_I64(lo, hi)` | Draw `int64_t` — `hegel_draw_i64` |
+| `HEGEL_DRAW_U64()` / `HEGEL_DRAW_U64(lo, hi)` | Draw `uint64_t` — `hegel_draw_u64` |
+| `HEGEL_DRAW_FLOAT()` / `HEGEL_DRAW_FLOAT(lo, hi)` | Draw `float` — `hegel_draw_float` |
+| `HEGEL_DRAW_DOUBLE()` / `HEGEL_DRAW_DOUBLE(lo, hi)` | Draw `double` — `hegel_draw_double` |
+| `HEGEL_DRAW_BOOL()` | Draw `bool` |
+| `hegel_draw_usize(tc, lo, hi)` | Draw `size_t` |
+| `hegel_draw_text(tc, min, max, buf, cap)` | Write a null-terminated string of length in `[min, max]` into `buf`; returns its length |
+| `hegel_draw_regex(tc, pattern, buf, cap)` | Write a null-terminated string that fully matches `pattern` into `buf` |
+| `hegel_draw_bytes(tc, min, max, buf, cap)` | Write arbitrary bytes (may include `0x00`) into `buf`; returns the length — one span, so the shrinker can drop the whole buffer |
 | `hegel_assume(tc, cond)` | Discard this case if `cond == 0` (not a failure) |
-| `hegel_note(tc, msg)` | Print `msg` only on the final replay of a failing case |
+| `hegel_note(tc, msg)` | Attach `msg` to the report of the minimal failing case |
+| `hegel_target(tc, score, label)` | Steer later cases toward higher `score` (needs ~1000 cases to get going) |
 | `hegel_fail(msg)` | Fail the test with `msg`; triggers shrinking |
-| `hegel_health_fail(msg)` | Fail with `"Health check failure: " + msg` — signals the test setup is broken, not the code under test |
-| `HEGEL_ASSERT(cond, fmt, ...)` | If `!cond`, format and call `hegel_fail` |
+| `hegel_health_fail(msg)` | Fail with `"Health check failure: " + msg` — the test setup is broken, not the code under test; no shrinking |
+| `HEGEL_ASSERT(cond, fmt, ...)` | If `!cond`, format (512-byte buffer) and fail; the origin is the assert's `file:line`, so distinct asserts are distinct bugs |
 
-The lower-level functions (`hegel_draw_int`, `hegel_draw_i64`, …) are what these macros call. You'll only see them surface in error messages or when reading older code — prefer the macros.
+Float draws with both bounds finite never produce NaN; infinities only come from an unbounded end. Text draws never contain NUL.
 
 ```c
 static void test_division(hegel_testcase *tc) {
     int64_t a = HEGEL_DRAW_I64();
     int64_t b = HEGEL_DRAW_I64();
     hegel_assume(tc, b != 0);
+    hegel_assume(tc, !(a == INT64_MIN && b == -1));   /* overflow, not the property */
     char buf[128];
     snprintf(buf, sizeof buf, "a=%lld b=%lld", (long long)a, (long long)b);
     hegel_note(tc, buf);
@@ -210,368 +186,163 @@ static void test_division(hegel_testcase *tc) {
 }
 ```
 
-`hegel_note` does nothing during generation and shrinking — it only prints on the final replay of the minimal counterexample. Don't use it for progress logging.
+`hegel_note` is dropped everywhere except the report of the minimal counterexample. Don't use it for progress logging.
 
 `hegel_fail` and `hegel_health_fail` differ in intent:
 
 - **`hegel_fail`** — the **code under test** is broken. Shrink, show the user a minimal counterexample.
-- **`hegel_health_fail`** — the **test setup** is broken (e.g., the schema's recursion probabilities mean every draw exhausts the depth bound). The user needs to fix the test, not the code.
+- **`hegel_health_fail`** — the **test setup** is broken (a fixture can't be built, an allocation for the harness failed). The user needs to fix the test, not the code.
 
-Most tests use `HEGEL_ASSERT` (which routes through `hegel_fail`) and never need to call `hegel_health_fail` directly — the schema system emits it automatically when the depth bound trips.
+## Writing Generators
 
-## Schema System
+A generator is a plain C function that fills a value from draws. Every draw is recorded by the engine, so the value shrinks without any shrink code from you. There is no separate "strategy" object: dependent generation, filtering and mapping are ordinary C.
 
-The schema system is the high-level API for describing C data structures. It handles allocation, span annotation, ownership tracking, and cleanup automatically. Use it for anything that isn't a one-shot scalar test.
+### Structs and dependent fields
 
-### Three-layer architecture
-
-A draw with the schema API touches three things:
-
-1. **Schema tree** (`hegel_schema_t`) — a description of the type. Built once by the user, refcounted, lives across many test cases.
-2. **Shape tree** (`hegel_shape *`) — per-run metadata. Built automatically on each draw. Owns the value memory.
-3. **Value memory** — the actual C struct (or scalar) passed to the function under test. Allocated and filled in by the draw, freed when the shape is freed.
-
-A test loop looks like this:
+Draw fields in order; a field that depends on another is a bound computed from what was already drawn:
 
 ```c
-static hegel_schema_t TREE_SCHEMA;   /* built once, in main() */
+typedef struct {
+    int  nvert;
+    int  u, v;          /* an edge: u < v < nvert */
+} Edge;
 
-static void test_tree(hegel_testcase *tc) {
-    Tree *t = NULL;
-    hegel_shape *sh = hegel_schema_draw(tc, TREE_SCHEMA, (void **)&t);
-    /* ... call function under test on t ... */
-    hegel_shape_free(sh);             /* frees value memory + shape tree */
-}
-
-int main(void) {
-    TREE_SCHEMA = HEGEL_STRUCT(Tree,
-        HEGEL_INT      (-1000, 1000),
-        HEGEL_OPTIONAL (hegel_schema_text(0, 8)),
-        HEGEL_SELF     (),
-        HEGEL_SELF     ());
-    hegel_run_test(test_tree);
-    hegel_schema_free(TREE_SCHEMA);
-    return 0;
+static void gen_edge(hegel_testcase *tc, Edge *e) {
+    e->nvert = HEGEL_DRAW_INT(2, 50);
+    e->u     = HEGEL_DRAW_INT(0, e->nvert - 2);
+    e->v     = HEGEL_DRAW_INT(e->u + 1, e->nvert - 1);
 }
 ```
 
-### Wrapper type
+Prefer this to drawing wide and repairing afterwards (`u % nvert`, swapping, stripping): the repair hides from the shrinker which choice mattered, and the counterexample comes out larger.
 
-`hegel_schema_t` is a thin newtype wrapper around an internal `hegel_schema *` — distinct C type from raw pointers, zero runtime cost. You never touch the internal pointer; pass `hegel_schema_t` values around by value.
-
-### Refcount-transfer ownership
-
-Schemas are reference-counted. The rules:
-
-- A schema returned by any constructor (`HEGEL_INT`, `hegel_schema_text`, `HEGEL_STRUCT`, etc.) starts with refcount = 1.
-- **Passing a schema as an argument to a parent transfers the reference** — no bump, no copy. Don't free it after.
-- To use the same schema in multiple parents (or in two slots of the same parent), call `hegel_schema_ref(s)` to bump the refcount before each extra use.
-- `hegel_schema_free(s)` decrements; the actual free happens at zero.
-
-```c
-hegel_schema_t rgb = HEGEL_STRUCT(RGB, HEGEL_U8(), HEGEL_U8(), HEGEL_U8());
-hegel_schema_ref(rgb);                 /* bump for the second use */
-hegel_schema_t pal = HEGEL_STRUCT(Palette,
-    HEGEL_INLINE_REF(RGB, rgb),
-    HEGEL_INLINE_REF(RGB, rgb));
-/* rgb is now held by pal twice; do not free it separately. */
-hegel_schema_free(pal);                /* drops both refs to rgb */
-```
-
-This contrasts with most other PBT libraries where generators are values you can copy freely. The motivation is to keep heap allocations bounded for deeply-nested schemas.
-
-### Positional macro layout
-
-`HEGEL_STRUCT(T, entry1, entry2, ...)` takes a list of field schemas in **declaration order** — one entry per struct field, in the same order the C compiler lays them out. The macro:
-
-1. Computes byte offsets the way the C compiler does (size + alignment per kind).
-2. Asserts at runtime that `sizeof(T) == computed_total`. If a field is reordered or its type changes, the assert fires at schema-build time with a clear diagnostic.
-
-Some entries occupy more than one slot:
-
-- `HEGEL_ARRAY_INLINE` — pointer slot + count slot.
-- `HEGEL_UNION` / `HEGEL_VARIANT` — one cluster slot (tag + body / tag + ptr).
-
-The non-positional `HEGEL_LET` / `HEGEL_LET_ARR` entries occupy zero slots — they declare bindings without consuming a struct field.
-
-## Schema Reference
-
-### Scalar schemas
-
-Bounded ranges:
-
-| Macro | C type | Inferred from |
-|---|---|---|
-| `HEGEL_INT(lo, hi)` / `HEGEL_INT()` | `int` | full `int` range when no args |
-| `HEGEL_I8(lo, hi)` / `HEGEL_I8()` | `int8_t` | |
-| `HEGEL_I16(lo, hi)` / `HEGEL_I16()` | `int16_t` | |
-| `HEGEL_I32(lo, hi)` / `HEGEL_I32()` | `int32_t` | |
-| `HEGEL_I64(lo, hi)` / `HEGEL_I64()` | `int64_t` | |
-| `HEGEL_U8(lo, hi)` / `HEGEL_U8()` | `uint8_t` | |
-| `HEGEL_U16(lo, hi)` / `HEGEL_U16()` | `uint16_t` | |
-| `HEGEL_U32(lo, hi)` / `HEGEL_U32()` | `uint32_t` | |
-| `HEGEL_U64(lo, hi)` / `HEGEL_U64()` | `uint64_t` | |
-| `HEGEL_LONG(lo, hi)` / `HEGEL_LONG()` | `long` | |
-| `HEGEL_FLOAT(lo, hi)` / `HEGEL_FLOAT()` | `float` | |
-| `HEGEL_DOUBLE(lo, hi)` / `HEGEL_DOUBLE()` | `double` | |
-| `HEGEL_BOOL()` | `bool` | |
-
-The zero-arg form generates the full representable range of the type. Prefer it — broad generators find more bugs (see `SKILL.md` § Generator Discipline).
-
-Pure-value scalar constructors (no positional context — useful when composing into combinators, optionals, and one-of):
-
-```c
-hegel_schema_t s_int   = hegel_schema_int_range(0, 100);
-hegel_schema_t s_text  = hegel_schema_text(0, 64);
-hegel_schema_t s_float = hegel_schema_float_range(-1.0, 1.0);
-```
-
-The `hegel_schema_*` functions cover every primitive (`i8`/`i16`/`i32`/`i64`/`u8`/`u16`/`u32`/`u64`/`int`/`long`, `float`/`double`, plus full-range variants without `_range`).
-
-### Text and regex
-
-```c
-HEGEL_TEXT(min_len, max_len)   /* char * field, pointer-sized slot */
-HEGEL_REGEX(pattern, capacity)
-```
-
-`HEGEL_REGEX` allocates a `capacity`-byte buffer and writes a null-terminated string matching `pattern`. The pattern is a Hypothesis-flavored regex (most ERE / PCRE features supported); see https://hypothesis.readthedocs.io/en/latest/strategies.html#hypothesis.strategies.from_regex.
-
-### Composing structs
-
-```c
-typedef struct { int x, y; } Point;
-hegel_schema_t pt = HEGEL_STRUCT(Point, HEGEL_INT(), HEGEL_INT());
-```
-
-Nested-by-value sub-structs use `HEGEL_INLINE` (fresh) or `HEGEL_INLINE_REF` (shared):
-
-```c
-typedef struct { uint8_t r, g, b; } RGB;
-typedef struct { RGB fg; RGB bg; } Palette;
-
-hegel_schema_t pal = HEGEL_STRUCT(Palette,
-    HEGEL_INLINE(RGB, HEGEL_U8(), HEGEL_U8(), HEGEL_U8()),
-    HEGEL_INLINE(RGB, HEGEL_U8(), HEGEL_U8(), HEGEL_U8()));
-```
-
-Sub-struct storage is carved out of the parent's allocation — no extra `malloc` per field. Each `HEGEL_INLINE` runs its own `sizeof(T)` assert at schema-build time.
-
-### Optionals and recursion
-
-```c
-HEGEL_OPTIONAL(inner)   /* 50/50 nullable pointer; 1 slot */
-HEGEL_SELF()            /* optional recursive pointer; 1 slot */
-```
-
-`HEGEL_SELF` is allowed only inside a `HEGEL_STRUCT` and refers to that struct's own schema. Recursive draws are bounded by `HEGEL_DEFAULT_MAX_DEPTH` (50). Exceeding the depth calls `hegel_health_fail` — the schema is malformed, not the data. Override the depth via `hegel_schema_draw_n(tc, schema, &out, max_depth)`.
-
-```c
-typedef struct Tree {
-    int val;
-    char *label;
-    struct Tree *left, *right;
-} Tree;
-
-hegel_schema_t tree = HEGEL_STRUCT(Tree,
-    HEGEL_INT      (-1000, 1000),
-    HEGEL_OPTIONAL (hegel_schema_text(0, 8)),
-    HEGEL_SELF     (),
-    HEGEL_SELF     ());
-```
-
-### Arrays
-
-Four array shapes, each occupying different slot patterns in the parent struct:
-
-| Macro | Slots | Layout |
-|---|---|---|
-| `HEGEL_ARR_OF(length, elem)` | 1 (pointer) | `T *items` — length stored elsewhere via `HEGEL_LET` |
-| `HEGEL_LEN_PREFIXED_ARRAY(length, elem)` | 1 (pointer) | Pascal-style: `[n, elem_0, …, elem_{n-1}]`, slot 0 holds `n` cast to `elem`'s int type |
-| `HEGEL_TERMINATED_ARRAY(length, elem, sentinel)` | 1 (pointer) | C-string-style: `[elem_0, …, elem_{n-1}, sentinel]` |
-| `HEGEL_ARRAY_INLINE(elem, elem_sz, lo, hi)` | 2 (`void *` + `int`) | Pointer field + count field, in that order |
-
-The length parameter of `HEGEL_ARR_OF` / `_LEN_PREFIXED_ARRAY` / `_TERMINATED_ARRAY` must be **either a binding read** (`HEGEL_USE` / `HEGEL_USE_AT` / `HEGEL_USE_PATH`) **or a literal** (`HEGEL_CONST(N)`). Raw `HEGEL_INT(lo, hi)` is rejected at schema-build time — wrap it in `HEGEL_LET` first. This is enforced because the length must be readable from outside the array (e.g., to fill in a sibling count field).
-
-`HEGEL_ARR_OF` element kinds: `INTEGER`, `STRUCT`, `OPTIONAL_PTR` (enables `HEGEL_SELF()` inside arrays for recursive trees), `ONE_OF_STRUCT`, `MAP_INT` / `FILTER_INT` / `FLAT_MAP_INT`.
-
-`HEGEL_LEN_PREFIXED_ARRAY` and `HEGEL_TERMINATED_ARRAY` element kind: `INTEGER` only (any width). For `_TERMINATED_ARRAY`, if the element is a bounded integer, the constructor checks at schema-build time that the sentinel could not collide with a drawn element; for derived element schemas (uses, maps), the check fires at runtime on first collision.
-
-### Bindings — the array-with-count pattern
-
-The canonical "pointer field + count field" idiom uses bindings to keep the two coherent:
+### Arrays: a drawn length and list spans
 
 ```c
 typedef struct { int *items; int n; } Bag;
 
-HEGEL_BINDING(n);   /* declare the binding id (function-local scope) */
-
-hegel_schema_t bag = HEGEL_STRUCT(Bag,
-    HEGEL_LET    (n, HEGEL_INT(0, 10)),                /* draws + caches */
-    HEGEL_ARR_OF (HEGEL_USE(n), HEGEL_INT(0, 100)),    /* int *items */
-    HEGEL_USE    (n));                                  /* int n */
-```
-
-The pieces:
-
-| Macro | Purpose |
-|---|---|
-| `HEGEL_BINDING(name)` | Declare a compile-time binding id. Function-local scope is the pit of success. |
-| `HEGEL_LET(name, inner)` | Non-positional: draw `inner` and cache under `name`. Inner must be a scalar integer (4 or 8 bytes) or float. |
-| `HEGEL_USE(name)` | Read cached scalar; writes to the current slot. Width / sign / float-ness must match the LET inner. |
-| `HEGEL_USE_I64(name)` / `_U64` / `_FLOAT` / `_DOUBLE` | Same but for non-`int` widths/types. |
-| `HEGEL_LET_ARR(name, length, elem)` | Non-positional: draw an `int[]` and cache. |
-| `HEGEL_USE_AT(name)` | Read `arr[current_index]` of the scope where `name` was declared (for "sizes drives groups" patterns inside `HEGEL_ARR_OF`). |
-| `HEGEL_USE_PATH(<HEGEL_PARENT>*, name [, HEGEL_INDEX_HERE])` | Variadic explicit-path resolver. Each `HEGEL_PARENT` skips one scope outward; trailing `HEGEL_INDEX_HERE` indexes into a `LET_ARR`. |
-| `HEGEL_CONST(N)` | Compile-time integer constant, no byte-stream draw. Usable as an `HEGEL_ARR_OF` length. |
-
-Because `HEGEL_LET` is non-positional, the `HEGEL_USE` that writes to the count field can appear anywhere in the layout — before, between, or after the array. Per-struct-instance scoping means nested arrays-of-structs each draw their own value. **Jagged 2D arrays** are the canonical use case:
-
-```c
-typedef struct { int *items; int n; } Row;          /* a row */
-typedef struct { Row *rows; int rowcnt; } Matrix;   /* outer */
-
-static hegel_schema_t build_matrix(void) {
-    HEGEL_BINDING(rowcnt);                          /* outer scope */
-    HEGEL_BINDING(n);                               /* inner scope, redeclared per row */
-    hegel_schema_t row = HEGEL_STRUCT(Row,
-        HEGEL_LET    (n, HEGEL_INT(0, 8)),          /* fresh n per row instance */
-        HEGEL_ARR_OF (HEGEL_USE(n), HEGEL_INT()),
-        HEGEL_USE    (n));
-    return HEGEL_STRUCT(Matrix,
-        HEGEL_LET    (rowcnt, HEGEL_INT(0, 5)),
-        HEGEL_ARR_OF (HEGEL_USE(rowcnt), row),      /* row schema reused per slot */
-        HEGEL_USE    (rowcnt));
+static void gen_bag(hegel_testcase *tc, Bag *b) {
+    hegel_start_span(tc, HEGEL_SPAN_LIST);
+    b->n = HEGEL_DRAW_INT(0, 100);
+    b->items = malloc((size_t)(b->n ? b->n : 1) * sizeof *b->items);
+    for (int i = 0; i < b->n; i++) {
+        hegel_start_span(tc, HEGEL_SPAN_LIST_ELEMENT);
+        b->items[i] = HEGEL_DRAW_INT();
+        hegel_stop_span(tc, 0);
+    }
+    hegel_stop_span(tc, 0);
 }
 ```
 
-Each row drawn inside the outer `HEGEL_ARR_OF` opens its own scope and draws its own `n`, producing a jagged `Row[]` where every row can have a different length.
+The spans tell the shrinker where each element starts and ends, so it can delete whole elements instead of nudging values. A drawn length covers the whole range — use it when large inputs matter.
 
-`HEGEL_USE_PATH` exists for the rare case where you need to bypass a same-named binding in an inner scope to reach an outer one — it's the only case `HEGEL_USE_AT` / `HEGEL_USE` can't express.
-
-### Unions and variants
-
-Three flavors for tagged sums:
+### Arrays: engine-owned length (collections)
 
 ```c
-HEGEL_UNION         (HEGEL_CASE(...), HEGEL_CASE(...), ...)  /* int tag + union body */
-HEGEL_UNION_UNTAGGED(HEGEL_CASE(...), HEGEL_CASE(...), ...)  /* union body only; tag in shape tree */
-HEGEL_VARIANT       (case_struct_schema, case_struct_schema, ...) /* int tag + void * ptr */
-```
-
-`HEGEL_CASE(field_entries...)` is used inside `HEGEL_UNION` / `_UNTAGGED`. It contains layout entries (scalars, inlines, etc.), **not bindings**.
-
-For an "or" choice of pointer-typed elements (e.g., the element type of an array of variants):
-
-```c
-HEGEL_ONE_OF_STRUCT(struct_schema_a, struct_schema_b, ...)  /* pointer-producing */
-HEGEL_ONE_OF       (scalar_schema_a, scalar_schema_b, ...)  /* 1 slot, size from first case */
-```
-
-`HEGEL_ONE_OF_STRUCT` is what you put inside `HEGEL_OPTIONAL` or as the element of `HEGEL_ARR_OF` to get heterogeneous lists.
-
-To pull a `HEGEL_UNION` / `HEGEL_VARIANT` layout entry out as a standalone schema (e.g., to use it as the element type of a `HEGEL_ARRAY_INLINE`), wrap it in `hegel_schema_of(entry)`.
-
-### Combinators — map / filter / flat_map
-
-```c
-HEGEL_MAP_INT     (source, fn, ctx)   /* int (*fn)(int, void *) */
-HEGEL_FILTER_INT  (source, pred, ctx) /* int (*pred)(int, void *) */
-HEGEL_FLAT_MAP_INT(source, fn, ctx)   /* hegel_schema_t (*fn)(int, void *) */
-```
-
-Same for `_I64` and `_DOUBLE` suffixes. Each takes a source schema (ownership transferred), a callback, and a `void *` context that the caller manages — `ctx` must outlive the schema.
-
-Use `map` to transform a drawn primitive, `filter` to reject (retries up to 3 times, then discards), and `flat_map` for dependent generation. Prefer narrowing through bounds rather than `filter` when you can — high rejection rates trip the `FilterTooMuch` health check.
-
-`map` / `filter` / `flat_map` do **not** degrade shrinking quality — hegel uses integrated shrinking on the underlying byte stream, so the shrinker works the same regardless of how the value is transformed.
-
-## Drawing and Lifecycle
-
-There are two entry points for getting a value out of a schema. Pick by use case.
-
-### `HEGEL_DRAW(&addr, schema)` — write at address
-
-Unified draw for any schema kind. Writes the produced value at `addr`:
-
-- `STRUCT` kind allocates and writes the pointer at `*addr`.
-- Scalar / text / optional / union / variant kinds write the value directly at `addr`.
-- `ARRAY` / `ARRAY_INLINE` / `SELF` / `ONE_OF_STRUCT` abort at the top level (they only compose inside a struct).
-
-Returns a `hegel_shape *` you must free. The schema is **not** consumed — build it once and keep it for the whole run:
-
-```c
-/* Built once in main(): */
-static hegel_schema_t SMALL_INT;   /* = hegel_schema_int_range(0, 100); */
-
-static void test_foo(hegel_testcase *tc) {
-    int x;
-    hegel_shape *sh = HEGEL_DRAW(&x, SMALL_INT);
-    /* use x */
-    hegel_shape_free(sh);
+hegel_collection c = hegel_collection_new(tc, 0, 100);    /* min, max */
+while (hegel_collection_more(tc, c)) {
+    int x = HEGEL_DRAW_INT(0, 1000);
+    if (seen(set, x)) { hegel_collection_reject(tc, c); continue; }   /* unique elements */
+    add(set, x);
 }
-/* hegel_schema_free(SMALL_INT) at the end of main() */
+hegel_collection_free(tc, c);
 ```
 
-`HEGEL_DRAW` shines for **composed scalars** (`HEGEL_MAP_INT`, `HEGEL_FILTER_INT`, `HEGEL_FLAT_MAP_INT`) and for top-level draws of optionals / unions / variants. For a plain bounded int, the macros below are simpler:
+The engine decides when to stop and shrinks by deleting elements; `hegel_collection_reject` says the last element was invalid (a duplicate) so it doesn't count. The engine aims for **about 5 elements whatever the max** — fine for "a few things", wrong when the code under test only misbehaves on large inputs. Use a drawn length then.
+
+### Optionals and one-of
+
+An optional is a coin and then the value; a one-of is a drawn tag and a `switch`. A span around each keeps the alternatives apart for the shrinker:
 
 ```c
-int    x  = HEGEL_DRAW_INT();              /* full int range */
-int    y  = HEGEL_DRAW_INT(0, 100);        /* bounded */
-int64_t z = HEGEL_DRAW_I64();
-double  d = HEGEL_DRAW_DOUBLE(-1.0, 1.0);
-bool    b = HEGEL_DRAW_BOOL();
+static char *gen_maybe_name(hegel_testcase *tc, char *buf, int cap) {
+    char *name = NULL;
+    hegel_start_span(tc, HEGEL_SPAN_OPTIONAL);
+    if (HEGEL_DRAW_BOOL()) {
+        hegel_draw_text(tc, 0, 16, buf, cap);
+        name = buf;
+    }
+    hegel_stop_span(tc, 0);
+    return name;
+}
+
+typedef struct { int kind; union { int i; double d; } as; } Value;
+
+static void gen_value(hegel_testcase *tc, Value *v) {
+    hegel_start_span(tc, HEGEL_SPAN_ONE_OF);
+    v->kind = HEGEL_DRAW_INT(0, 1);
+    switch (v->kind) {
+    case 0:  v->as.i = HEGEL_DRAW_INT();             break;
+    default: v->as.d = HEGEL_DRAW_DOUBLE(-1e9, 1e9); break;
+    }
+    hegel_stop_span(tc, 0);
+}
 ```
 
-(Same pattern for `_U64` / `_FLOAT`.) These dispatch directly to the underlying primitives — there is no schema or shape to free. Use them for any plain bounded scalar draw.
+Order the cases simplest first: the shrinker moves the tag toward 0.
 
-There is intentionally **no** `HEGEL_DRAW_ARRAY` — top-level arrays don't have a meaningful place to live without a containing struct. Wrap arrays in a struct.
+### Recursive values
 
-### `hegel_schema_draw(tc, schema, &ptr)` — allocate a struct
-
-For struct schemas. Allocates the struct, fills it in, returns a `hegel_shape *`:
+Trees and expressions go through the engine's recursion protocol, which owns the branch probabilities, the depth cap and a leaf budget. Each sub-value asks `hegel_recursion_branch`; a leaf calls `hegel_recursion_leaf` first, and a non-zero return means the attempt outgrew its budget — unwind without drawing anything more, free the half-built value, and start again from the root:
 
 ```c
-Tree *t;
-hegel_shape *sh = hegel_schema_draw(tc, TREE_SCHEMA, (void **)&t);
-/* use t */
-hegel_shape_free(sh);
+typedef struct Node { struct Node *left, *right; int value; } Node;   /* leaf: both NULL */
+
+static void node_free(Node *n) {
+    if (!n) return;
+    node_free(n->left); node_free(n->right); free(n);
+}
+
+/* NULL means "over the leaf budget: unwind". */
+static Node *gen_node(hegel_testcase *tc, hegel_recursion rec, uint64_t depth) {
+    Node *n = calloc(1, sizeof *n);
+    if (hegel_recursion_branch(tc, rec, depth)) {
+        n->left = gen_node(tc, rec, depth + 1);
+        if (n->left)
+            n->right = gen_node(tc, rec, depth + 1);
+        if (!n->left || !n->right) { node_free(n); return NULL; }
+        return n;
+    }
+    if (hegel_recursion_leaf(tc, rec)) { free(n); return NULL; }
+    n->value = HEGEL_DRAW_INT(0, 9);
+    return n;
+}
+
+static Node *gen_tree(hegel_testcase *tc) {
+    hegel_recursion rec = hegel_recursion_new(tc, 6, 20);   /* max depth, max leaves */
+    Node *root;
+    for (;;) {
+        root = gen_node(tc, rec, 0);
+        if (!root) { hegel_recursion_retry(tc, rec); continue; }   /* discards the case when exhausted */
+        if (hegel_recursion_finish(tc, rec) == 0) break;
+        node_free(root);                                          /* rejected: start again */
+    }
+    hegel_recursion_free(tc, rec);
+    return root;
+}
 ```
 
-`hegel_schema_draw_n` and `hegel_schema_draw_at_n` accept a `max_depth` override for `HEGEL_SELF`-recursive schemas:
+A coin flip per child with a hand-written depth cap also works, but makes much smaller trees (around 5 nodes on average) than the protocol (dozens), and the protocol's values shrink the way every other Hegel frontend's do.
 
-```c
-hegel_shape *sh = hegel_schema_draw_n(tc, TREE_SCHEMA, (void **)&t, 100);
-```
+### map / filter / flat_map
 
-### Lifecycle
+There are no combinator objects — write the C:
 
-| Function | Frees |
-|---|---|
-| `hegel_shape_free(sh)` | Walks shape tree, frees value memory + shape. NULL-safe. |
-| `hegel_schema_free(s)` | Refcount-decrement; actual free at zero. NULL-safe. |
-| `hegel_schema_ref(s)` | Refcount-increment. Use before sharing across multiple parents. |
+- **map:** transform after drawing — `int even = 2 * HEGEL_DRAW_INT(0, 50);`
+- **filter:** draw, then `hegel_assume(tc, pred(x));` — but narrow the range instead whenever you can. A predicate that rejects most draws trips the `FilterTooMuch` health check.
+- **flat_map:** draw, then draw again with bounds or a shape taken from the first value — the dependent-fields pattern above.
 
-Build the schema once (in `main`), draw inside the test function, free the shape at the end of the test, and free the schema after `hegel_run_test*` returns.
+None of these degrade shrinking: the engine shrinks the recorded choices and replays your code.
 
-### Shape accessors
+### Spans
 
-For data-driven assertions or untagged-union dispatch:
-
-| Function | Purpose |
-|---|---|
-| `hegel_shape_tag(sh)` | Variant index (which case was drawn) |
-| `hegel_shape_array_len(sh)` | Drawn array length |
-| `hegel_shape_is_some(sh)` | `true` if optional was present |
-| `hegel_shape_field(sh, i)` | Positional access to a struct field's sub-shape |
-
-Named field accessors are not yet available — use positional indexes matching the `HEGEL_STRUCT` entry order.
+Spans group the draws that make one logical thing — a list element, a struct, a variant — so the shrinker can treat them as a unit. Use the `HEGEL_SPAN_*` constants for the usual shapes, or `hegel_label("mylib.thing")` for your own (distinct generators should get distinct labels). Spans nest; always pair `hegel_start_span` / `hegel_stop_span`. `hegel_stop_span(tc, 1)` marks the span a dead end (e.g. an element you rejected).
 
 ## C-Specific Examples
 
 ### Wrapping a library that needs setup, teardown, and valid input
 
-Most real C libraries need more than a struct draw. They have multi-step setup (init handle, configure, allocate buffers), input invariants the schema can't easily encode (graph symmetry, tree acyclicity, sorted arrays, no duplicate keys), and matching teardown. The pattern: **draw raw scalars, construct a valid value imperatively, assert, clean up with `goto cleanup`.**
+Most real C libraries need more than a draw. They have multi-step setup (init handle, configure, allocate buffers), input invariants (graph symmetry, tree acyclicity, sorted arrays, no duplicate keys), and matching teardown. The pattern: **draw, construct a valid value, assert, clean up with `goto cleanup`.**
 
 ```c
 /* Hypothetical hash-set library:
@@ -613,8 +384,8 @@ cleanup:
 
 Key patterns:
 
-- **`goto cleanup`** is the C-idiomatic answer to nested early-returns. Every fail path lands at the same label; the cleanup block frees in reverse order of acquisition. Multi-step library setup gets messy fast without it — three or four early returns each duplicating the cleanup is a maintenance trap.
-  - For libraries that initialize multiple objects each with their own destructor (a common shape: handle + strategy + buffer), keep an `_inited` int per object. Destroy in reverse order:
+- **`goto cleanup`** is the C-idiomatic answer to nested early-returns. Every fail path lands at the same label; the cleanup block frees in reverse order of acquisition.
+  - For libraries that initialize multiple objects each with their own destructor (handle + strategy + buffer), keep an `_inited` int per object and destroy in reverse order:
     ```c
     int g_init = 0, s_init = 0;
     if (mylib_graph_init(&g) != 0) { ...; goto cleanup; }
@@ -626,225 +397,144 @@ Key patterns:
         if (s_init) mylib_strat_exit(&s);
         if (g_init) mylib_graph_exit(&g);
     ```
-    The pattern scales to any number of init/exit pairs without nested branches.
-- **`hegel_health_fail` for setup failures**, `HEGEL_ASSERT` for the actual property check. The agent can tell "library is unusable" apart from "library has a bug." Pick *one* place per test to call `hegel_health_fail` so the cleanup story stays uniform.
-- **NULL-safe destructors** (`myset_free`, `free`) keep the cleanup block branch-free. If your library's destructor isn't NULL-safe, wrap it: `if (s) myset_free(s);`.
-- **Document preconditions in comments** at the top of the test, not in the assertion message. This makes the contract you're respecting visible at a glance.
+- **`hegel_health_fail` for setup failures**, `HEGEL_ASSERT` for the actual property check — "the harness is broken" stays distinguishable from "the library has a bug."
+- **NULL-safe destructors** (`myset_free`, `free`) keep the cleanup block branch-free.
+- **Document preconditions in comments** at the top of the test, not in the assertion message.
+
+In fork mode a failing case's child exits, so leaks on failure paths don't matter; free on the passing path so nofork runs and sanitizers stay quiet.
 
 #### When the *input* itself has a non-local invariant
 
-For libraries that take structured input with cross-field constraints — symmetric adjacency lists, sorted arrays, balanced trees, valid UTF-8, file-format magic numbers — the schema API often can't express the invariant directly. **Don't use `hegel_assume` to filter random structs**: the rejection rate kills the test. Instead, draw scalar bits and *construct* a valid value:
+For structured input with cross-element constraints — symmetric adjacency lists, sorted arrays, balanced trees, valid UTF-8, file-format magic numbers — **don't `hegel_assume` the invariant over random input**: the rejection rate kills the test. Draw choices and *construct* a valid value:
 
 ```c
-/* Symmetric-adjacency-list construction sketch:
+/* Symmetric-adjacency construction sketch:
 **   for each unordered pair (i, j):
-**     if HEGEL_DRAW_INT(0, 1): add edge i-j
+**     if HEGEL_DRAW_BOOL(): add edge i-j
 **   build CSR / adjacency list from the resulting matrix.
 **
-** Every output is a valid graph — no rejection, no high-rejection
-** health-check trips.
+** Every output is a valid graph — no rejection.
 */
 ```
 
-The `HEGEL_DRAW_INT(0, 1)` per pair gives hegel one shrinkable bit per potential edge — the shrinker can independently delete each edge to find the minimal counterexample. This is the canonical PBT pattern for libraries with non-local input invariants; a schema-based draw of `int *edges` with a `hegel_assume(is_symmetric(...))` filter would reject 99% of inputs and fail the FilterTooMuch health check.
+One shrinkable choice per potential edge lets the shrinker delete each edge independently to reach the minimal counterexample.
 
-### Dependent generation with sequential draws
-
-Like all hegel bindings, hegel-c is imperative — dependent generation is just sequential code:
-
-```c
-typedef struct { int *items; int n; } Bag;
-
-static hegel_schema_t BAG;     /* built in main with the binding pattern */
-
-static void test_index_in_range(hegel_testcase *tc) {
-    Bag *bag;
-    hegel_shape *sh = hegel_schema_draw(tc, BAG, (void **)&bag);
-    if (bag->n > 0) {
-        int idx = HEGEL_DRAW_INT(0, bag->n - 1);
-        (void)bag->items[idx];   /* always valid */
-    }
-    hegel_shape_free(sh);
-}
-```
-
-### Custom struct with the schema API
+### A config struct
 
 ```c
 typedef struct {
     uint32_t max_retries;
     uint64_t timeout_ms;
-    char    *name;
+    char     name[65];
 } Config;
 
-static hegel_schema_t CONFIG;
+static void gen_config(hegel_testcase *tc, Config *c) {
+    hegel_start_span(tc, hegel_label("myapp.config"));
+    c->max_retries = (uint32_t)HEGEL_DRAW_U64(0, UINT32_MAX);
+    c->timeout_ms  = HEGEL_DRAW_U64();
+    hegel_draw_text(tc, 0, 64, c->name, sizeof c->name);
+    hegel_stop_span(tc, 0);
+}
 
 static void test_config_merge(hegel_testcase *tc) {
-    Config *base, *override;
-    hegel_shape *s1 = hegel_schema_draw(tc, CONFIG, (void **)&base);
-    hegel_shape *s2 = hegel_schema_draw(tc, CONFIG, (void **)&override);
-    Config merged = config_merge(base, override);
-    HEGEL_ASSERT(strcmp(merged.name, override->name) == 0,
-                 "merged.name should equal override->name");
-    hegel_shape_free(s1);
-    hegel_shape_free(s2);
-}
-
-int main(void) {
-    CONFIG = HEGEL_STRUCT(Config,
-        HEGEL_U32 (),
-        HEGEL_U64 (),
-        HEGEL_TEXT(0, 64));
-    hegel_run_test(test_config_merge);
-    hegel_schema_free(CONFIG);
-    return 0;
+    Config base, override;
+    gen_config(tc, &base);
+    gen_config(tc, &override);
+    Config merged = config_merge(&base, &override);
+    HEGEL_ASSERT(strcmp(merged.name, override.name) == 0,
+                 "merged.name should equal override.name");
 }
 ```
-
-### Large collections
-
-The default array length distribution is small. To exercise deep tree paths or multi-level structures, draw the size separately and use it as the array length:
-
-```c
-typedef struct { int *keys; int n; } KeySet;
-static hegel_schema_t KEYSET;
-
-static hegel_schema_t build_keyset(void) {
-    HEGEL_BINDING(n);
-    return HEGEL_STRUCT(KeySet,
-        HEGEL_LET   (n, HEGEL_INT(0, 300)),                  /* large upper bound */
-        HEGEL_ARR_OF(HEGEL_USE(n), HEGEL_INT(0, 1000000)),
-        HEGEL_USE   (n));
-}
-
-static void test_keyset(hegel_testcase *tc) {
-    KeySet *k;
-    hegel_shape *sh = hegel_schema_draw(tc, KEYSET, (void **)&k);
-    /* ... call function under test on k->keys, k->n ... */
-    hegel_shape_free(sh);
-}
-
-int main(void) {
-    KEYSET = build_keyset();
-    hegel_run_test(test_keyset);
-    hegel_schema_free(KEYSET);
-    return 0;
-}
-```
-
-Hegel can shrink `n` to the minimal failing size — the broad range doesn't hurt the counterexample. Wrapping the `HEGEL_STRUCT` call in a helper is the idiomatic place for `HEGEL_BINDING` because the binding id has function-local scope.
 
 ### Roundtrip on a JSON-like tree
 
-A canonical PBT property: `parse(format(x)) == x`. The full example lives in `tests/selftest/test_schema_recursive_tree_json_roundtrip.c`:
+A canonical PBT property: `parse(format(x)) == x`. A complete example, with a recursive generator and spans per node and per optional field, is `tests/selftest/test_span_tree_json_passes.c` in the hegel-c repo; its deliberately buggy twin `test_span_tree_json_shrinks.c` shows the shrinker reducing a failure to one node with two different leaf children.
+
+## Crash Isolation
+
+In **fork mode** every case already runs in its own child: a crash anywhere in the test is a shrinkable failure.
+
+In **nofork mode**, isolate just the code under test with `HEGEL_ISOLATED`. Generate first, then call the code in the block:
 
 ```c
-static void test_json_roundtrip(hegel_testcase *tc) {
-    Tree *t;
-    hegel_shape *sh = hegel_schema_draw(tc, TREE_SCHEMA, (void **)&t);
-    char buf[8192];
-    json_format(t, buf, sizeof buf);
-    Tree *parsed = json_parse(buf);
-    HEGEL_ASSERT(tree_equal(t, parsed), "roundtrip mismatch");
-    tree_free(parsed);
-    hegel_shape_free(sh);
+static void test_build(hegel_testcase *tc) {
+    Graph g;
+    gen_graph(tc, &g);                 /* draws: outside the block */
+    HEGEL_ISOLATED(tc) {               /* forked; sees g copy-on-write */
+        HEGEL_ASSERT(graph_build(&g) == 0, "build failed");
+    }
 }
+
+int main(void) { hegel_run_test_nofork(test_build); return 0; }
 ```
 
-### Fork-mode caveats
+Rules: no draws, spans or collection calls inside the block (a health failure says so), no nesting, and don't leave it with `break` / `return` / `goto`. Every failure inside one block — crash, abort, `HEGEL_ASSERT` — counts as one bug, so code whose bug sometimes crashes and sometimes returns garbage shrinks as a single failure.
 
-In fork mode the **parent** process holds the Hegel server connection. For each test case it forks a child, the child runs your test function, and draw calls travel back to the parent over a pipe. Implications:
+Fork-mode notes:
 
-- **Child crashes are caught** (SIGSEGV, SIGABRT) and reported to hegel as failures, which then shrink the input. This is what makes hegel-c crash-safe by default.
-- **Global state changes in the child are not visible to the next case** — the child exits after each case. If the library under test expects to be initialized once per process, register a setup callback with `hegel_set_case_setup`.
-- **stdout from inside the test function is per-child** — order may be interleaved across cases. Use `hegel_note` for per-case debug output that should show up only on the final replay.
-- **MPI** code that calls `MPI_Init` in the test body works only with `MPI_Comm_spawn`-style singletons; see `docs/mpi-testing.md` in the hegel-c repo.
-
-If you need to run without forking (e.g., the library forks internally), use `hegel_run_test_nofork*` — but understand that a SIGSEGV will kill the test runner with no shrinking.
+- **Global state changes in the child are not visible to the next case** — the child exits after each case. Use `hegel_set_case_setup` for per-case initialization.
+- **stdout from inside the test is per-child** and may interleave across cases. Use `hegel_note` for output that belongs to the counterexample.
+- **Code that reads uninitialized or freed memory** can behave differently from case to case, because each child inherits the parent's heap as it is at fork time. `hegel_set_fork_mode(HEGEL_FORK_CLEAN)` (or `HEGEL_C_FORK=clean`) re-executes the binary for each case so the same input sees the same memory — slower, but replays and shrinking become deterministic.
 
 ## Gotchas
 
-1. **The schema layout assert fires at schema-build time.** If `HEGEL_STRUCT(T, ...)` aborts with a size mismatch, you've reordered a field, changed a type, or forgotten an entry. The diagnostic prints the declared `sizeof(T)` and the computed total — diff them to find the mismatch.
-
-2. **Refcount-transfer is the default.** When you pass a schema into a parent (`HEGEL_STRUCT`, `HEGEL_OPTIONAL`, `HEGEL_INLINE_REF`, etc.), the reference is moved, not copied. To share a schema across two parents, call `hegel_schema_ref(s)` first. Forgetting this causes a use-after-free; double-bumping leaks.
-
-3. **`HEGEL_BINDING(name)` is function-local.** It expands to `enum { name = __COUNTER__ };`. Per-translation-unit `__COUNTER__` values don't match across files, so don't put `HEGEL_BINDING` declarations in headers.
-
-4. **Length schemas for arrays must be bindings or constants.** Raw `HEGEL_INT(0, 10)` as the length of `HEGEL_ARR_OF` is rejected at schema-build time. Wrap drawn lengths in `HEGEL_LET` so the count is reachable from a sibling field.
-
-5. **`hegel_note` only prints on the final replay.** Don't use it for progress logging.
-
-6. **Width / sign / float-ness mismatches in `HEGEL_USE` are hard aborts.** If you `HEGEL_LET(n, HEGEL_INT(...))` and write `HEGEL_USE_I64(n)`, the runtime aborts. The kinds must match.
-
-7. **Recursive draws are bounded by `HEGEL_DEFAULT_MAX_DEPTH = 50`.** If your schema recurses deeper, switch to `hegel_schema_draw_n` with a higher cap. If every draw bottoms out at the cap, your schema's recursion probability is too high — restructure rather than raise the cap, or you'll get a `hegel_health_fail`.
-
-8. **`HEGEL_ASSERT` formats into a 512-byte buffer.** Long format strings get truncated. For longer messages, format yourself and call `hegel_fail` directly.
-
-9. **Top-level `HEGEL_DRAW` of `ARRAY` / `ARRAY_INLINE` / `SELF` / `ONE_OF_STRUCT` aborts.** These compose only inside a struct. Wrap them.
-
-10. **`target()` is not yet available** in hegel-c. The underlying `hegeltest` 0.4.3 crate doesn't expose Hypothesis's `target()` primitive yet; this is blocked upstream.
-
-11. **No `Settings` struct yet.** Case count is the only configurable knob in v0 (via `_n` runner variants). Seed control, verbosity, and database control are not exposed on the C side.
-
-12. **Add `.hegel/` to `.gitignore`.** First run downloads the server here.
-
-13. **The legacy `hegel_gen_*` combinator API is slated for removal.** Don't write new tests against it. If you find existing tests that use it, migrate them to the schema API.
+1. **Name the test-case parameter `tc`** — the `HEGEL_DRAW_*` shorthands rely on it.
+2. **`hegel_note` only appears with the minimal counterexample.** Don't use it for progress logging.
+3. **`HEGEL_ASSERT` formats into a 512-byte buffer.** Longer messages are truncated; format yourself and call `hegel_fail` for more.
+4. **Don't put drawn values in an origin.** `HEGEL_ASSERT` uses `file:line` as the bug's identity; if you call `hegel_fail_with_origin`, derive the origin from the location, never from a message containing drawn values — the shrinker would see every case as a new bug.
+5. **Collections stay small** (about 5 elements whatever the max). Draw the length yourself when size matters.
+6. **Repair-after-drawing costs shrink quality.** Draw within the right bounds instead of clamping or `%`-folding.
+7. **No draws inside `HEGEL_ISOLATED`.** Generate first.
+8. **`hegel_target` needs a budget**: the targeting phase starts late, so ask for ~1000 cases.
+9. **A case may make about a million choices** before the engine stops it (overrun); generators that loop on draws should have bounds.
 
 ## Stateful Testing
 
-**hegel-c does not yet have a stateful testing primitive.** Sister bindings (hegel-rust) ship a `#[hegel::state_machine]` macro with `#[rule]` and `#[invariant]` annotations; hegel-c has no equivalent. There is also no shape-tree-aware shrinking of operation sequences as a coherent unit.
-
-This matters because for any stateful data structure (map, BTree, freelist, allocator, transactional store, etc.), the highest-value PBT is a **model test**: run a sequence of operations against both the subject and a known-good reference, assert they agree after every step. The skill's main `SKILL.md` ranks this **first** in the Tier 1 patterns.
-
-### What to do instead
-
-You can hand-roll the operation loop inside a regular hegel-c test. Pick a rule, dispatch, optionally check invariants, repeat. The test's draw calls give you the rule choice and any rule arguments; integrated shrinking will minimize the rule sequence as a flat byte stream (one byte per rule pick, plus rule arguments).
-
-A sketch for a freelist:
+For stateful subjects (maps, B-trees, allocators, freelists, caches, transactional stores), the highest-value test is a **model test**: run a sequence of operations against both the subject and a known-good reference, and check they agree after every step. hegel-c drives this with the engine's state machine — it picks the rules, applies up to ~50 per case, and shrinks the sequence by dropping rules and simplifying their operands:
 
 ```c
-enum Op { OP_ALLOC = 0, OP_FREE = 1, OP_USE = 2, OP_END = 3 };
+typedef struct { Stack *subject; int model[256]; int n; } State;
 
-static void test_freelist_model(hegel_testcase *tc) {
-    Freelist *fl = freelist_new(64);
-    int alloc_log[64];
-    int alloc_n = 0;
+static void *setup(void)      { State *s = calloc(1, sizeof *s); s->subject = stack_new(); return s; }
+static void teardown(void *p) { State *s = p; stack_free(s->subject); free(s); }
 
-    int n_steps = HEGEL_DRAW_INT(0, 100);
-    for (int step = 0; step < n_steps; step++) {
-        int op = HEGEL_DRAW_INT(0, OP_END - 1);
-        switch (op) {
-        case OP_ALLOC: {
-            int h = freelist_alloc(fl);
-            if (h >= 0 && alloc_n < 64) alloc_log[alloc_n++] = h;
-            break;
-        }
-        case OP_FREE: {
-            if (alloc_n == 0) continue;            /* skip rule, don't discard case */
-            int idx = HEGEL_DRAW_INT(0, alloc_n - 1);
-            freelist_free(fl, alloc_log[idx]);
-            alloc_log[idx] = alloc_log[--alloc_n];
-            break;
-        }
-        case OP_USE: {
-            if (alloc_n == 0) continue;
-            int idx = HEGEL_DRAW_INT(0, alloc_n - 1);
-            HEGEL_ASSERT(freelist_is_live(fl, alloc_log[idx]),
-                         "alloc_log[%d]=%d should be live", idx, alloc_log[idx]);
-            break;
-        }
-        }
-    }
-    freelist_free_all(fl);
+static bool can_push(const void *p) { return ((const State *)p)->n < 256; }
+static bool can_pop (const void *p) { return ((const State *)p)->n > 0; }
+
+static void rule_push(void *p, hegel_testcase *tc) {
+    State *s = p;
+    int x = HEGEL_DRAW_INT();
+    stack_push(s->subject, x);
+    s->model[s->n++] = x;
+}
+
+static void rule_pop(void *p, hegel_testcase *tc) {
+    (void)tc;                                  /* no draws in this rule */
+    State *s = p;
+    int got = stack_pop(s->subject);
+    int want = s->model[--s->n];
+    HEGEL_ASSERT(got == want, "pop returned %d, expected %d", got, want);
+}
+
+static void inv_size(const void *p, hegel_testcase *tc) {
+    (void)tc;
+    const State *s = p;
+    HEGEL_ASSERT(stack_size(s->subject) == s->n, "size %d, model %d",
+                 stack_size(s->subject), s->n);
+}
+
+int main(void) {
+    hegel_state_machine *sm = hegel_state_machine_new(setup, teardown);
+    hegel_state_machine_add_rule_with_precondition(sm, "push", can_push, rule_push);
+    hegel_state_machine_add_rule_with_precondition(sm, "pop",  can_pop,  rule_pop);
+    hegel_state_machine_add_invariant(sm, "size", inv_size);
+    hegel_state_machine_run_n(sm, 200);        /* fork per case; _run_nofork_n without */
+    hegel_state_machine_free(sm);
+    return 0;
 }
 ```
 
-This works, but has limitations vs. a real stateful framework:
-
-- **No invariants are run between steps automatically.** You have to call them by hand.
-- **Shrinking is byte-level**, not operation-aware. Hegel will shrink the byte stream, which collapses to "delete a rule" most of the time, but it can't swap or re-order rules cleanly.
-- **No "Variables" pool** for tracking dynamically created handles — you write the bookkeeping yourself (`alloc_log` above).
-
-For a non-stateful subject (encoder/decoder, parser, normalizer, pure function), a regular schema-based hegel-c test is often enough — sequential `hegel_draw_*` / `hegel_schema_draw` calls give you everything you need without a state machine. Reserve the hand-rolled approach for genuinely stateful subjects, and reach for hegel-rust if a heavy stateful test is the highest-value next step for the project.
-
-When stateful testing lands in hegel-c, this section will be updated with the rule / invariant API.
+- **Invariants run after every rule.**
+- **Preconditions are pure observations** — no state changes, no draws. A rule whose precondition is false, or that calls `hegel_assume(tc, 0)`, is rejected: it doesn't count as a step.
+- **Up to 64 rules and 64 invariants** per state machine.
+- **Handles created by earlier rules:** a variable pool (`hegel_pool_new` / `_add` / `_draw(tc, pool, consume)` / `_restore` / `_free`) lets the engine pick — and shrink — which earlier handle a rule acts on. Pool ids are opaque `int64_t`s chosen by the engine: map them to your handles, don't index arrays with them.

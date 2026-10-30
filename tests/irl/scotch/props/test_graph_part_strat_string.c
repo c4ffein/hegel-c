@@ -17,7 +17,6 @@
 #include <string.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 #include "scotch.h"
 #include "graph_gen.h"
 #include "scotch_helpers.h"

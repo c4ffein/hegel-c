@@ -6,6 +6,26 @@
 
 ## Next up (2026-10-21)
 
+- **Imperative helpers (2026-10-30).** Main is plain generators now (the
+  schema layer moved to `experiments/`, see its README). What the
+  harnesses read while deciding would have used:
+  - *Per-case allocation:* `hegel_alloc (tc, size)`, freed at the end of
+    the case and on any jump out of it — every Scotch prop has a
+    `goto cleanup` chain. `core/`'s `hegel__draws_abandoned` hook already
+    runs at those points (end of a nofork case, a stateful rule that
+    assumed); fork children just exit.
+  - *A recursion helper* for hand-written generators: runs the branch /
+    leaf / retry / finish loop around a user's node function, unwinding
+    and freeing an over-budget attempt — the tricky, repetitive part of
+    `tests/selftest/test_recursion_{tree,nary_tree}.c`. The schema layer's
+    `hegel__rec` (allocation tracking + longjmp unwind,
+    `experiments/schema-with-callbacks/hegel_gen.c`) is the starting point,
+    including its fix for engine calls that jump out mid-unwind.
+  - *An average-size knob for collections:* the engine aims for ~5
+    elements whatever the max (`length_p_continue` in libhegel's
+    `native/core/state.rs` derives the average from min/max only), and
+    `hegel_new_collection` takes no average. Ask upstream for one; until
+    then a drawn length is the way to get large lists.
 - **Remote-board transport.** The wire protocol in `core/hegel_internal.h`
   is transport-shaped on purpose: run it over serial/TCP with a board in
   the child's role and a watchdog reset in fork's.
@@ -19,9 +39,6 @@
   tests built with `-fsanitize=address,undefined`.
 - **Case teardown.** `hegel_set_case_setup` has no partner; add
   `hegel_set_case_teardown` (from NEXT.md item D, deepstate's `TEST_F`).
-- **Refresh the local C skill reference** (`.claude/skills/hegel/references/c/`):
-  drop the deleted `hegel_gen_*` API, add `hegel_run_options` and
-  `HEGEL_C_REPRODUCE`.
 - **Skill update for the missed bug classes** (2026-05-25 rediscovery,
   targets in `docs/corpus.toml`, pins in `tests/irl/linux/pins/`). Done
   2026-10-26 in `.claude/skills/hegel/SKILL.md`, not yet validated:
@@ -199,14 +216,14 @@
 
 | Item | Status |
 |---|---|
-| Embedded-systems demo | **TODO** — pick a target (Modbus / ring buffer / MQTT-SN / reviewer's choice), build 2–3 schemas, host-compiled |
+| Embedded-systems demo | **TODO** — pick a target (Modbus / ring buffer / MQTT-SN / reviewer's choice), write 2–3 generators, host-compiled |
 | `docs/review-framing.md` (one-page packet) | **TODO** — per-reviewer specific questions |
-| `HEGEL_SELF` rename / `OPTIONAL_SELF` alias | deferred — cosmetic, not a rejection issue |
 
 ### Real-world README / quickstart
 
-`docs/schema-api.md` is the reference, `docs/patterns.md` is the
-catalog, but there's no "here's your first 5-minute test" walkthrough.
+`docs/shrinking.md` walks through one real harness and CLAUDE.md's
+"Writing generators" lists the conventions, but there's no "here's
+your first 5-minute test" walkthrough.
 For a library that might get adopted by strangers, a focused
 getting-started doc is worth 30 minutes of writing time.
 
@@ -214,11 +231,10 @@ getting-started doc is worth 30 minutes of writing time.
 
 1. Named "batteries-included" generators. Go ships Binary, Dates, Datetimes, Emails, URLs, Domains, IPAddresses().IPv4()/IPv6().
 C has none. Binary(min, max) is the biggest one for a C library — people test serializers, binary formats, wire protocols, MPI
-buffers. You have hegel_schema_text ([a-z] only) but no raw-byte generator. If hegel-c wants "official" status, parity on at
-least binary is table stakes.
+buffers. Binary is covered now (`hegel_draw_bytes`); the rest are still missing.
 
 2. Float control. Go has .Min().Max().ExcludeMin().ExcludeMax().AllowNaN(false).AllowInfinity(false). C has
-hegel_schema_float_range(lo, hi) — inclusive only, no NaN/Inf opt-out. For numerical code (Scotch-adjacent, scientific C), NaN
+hegel_draw_float / _double (lo, hi) — inclusive only, no NaN/Inf opt-in (bounded draws never give NaN). For numerical code (Scotch-adjacent, scientific C), NaN
 handling is where bugs live. This is a real gap, not an aesthetic one.
 
 (Run options and regex fullmatch, items 3 and 4 here before, are done: `hegel_run_options`,
@@ -265,20 +281,18 @@ But the *patterns* they encode are general:
 
 - CSR construction from a logical `(nvert, edges[])` list is a
   reusable pattern anyone wiring a graph-library test would
-  need — maps cleanly to a `hegel_gen.h`-level helper that
-  takes a schema-drawn logical graph and produces a canonical
-  CSR.
+  need — a library helper that takes a drawn logical graph and
+  produces a canonical CSR.
 - The strategy string generator is a focused example of
-  building a valid DSL string from a schema — useful as a
+  building a valid DSL string from draws — useful as a
   pattern reference even if the specific DSL is Scotch's.
 - Symmetry / dedup / self-loop-free post-processing is a
   recurring "structural invariant across array elements"
-  pattern that came up as a schema-layer gap in the V0
-  milestone.
+  pattern.
 
 Decision to make: extract into hegel-c as library helpers, keep
-them Scotch-specific but document the patterns in
-`docs/patterns.md`, or leave alone entirely.  Leaning toward
+them Scotch-specific but document the patterns in `docs/`, or
+leave alone entirely.  Leaning toward
 documenting the patterns first (cheap) and only extracting once
 a second IRL target hits the same needs and we can see the real
 shape of the abstraction.

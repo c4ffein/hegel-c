@@ -19,61 +19,12 @@ HEGEL_TEST_ULIMIT ?= 0
 # Tests that should PASS (exit 0)
 TESTS_PASS = test_pass_simple \
              test_assume \
-             test_gen_map \
-             test_schema_filter_ints \
-             test_schema_filter_floats \
-             test_schema_ints \
-             test_schema_floats \
-             test_gen_flatmap \
-             test_schema_oneof \
-             test_schema_optional \
-             test_schema_array_of_ints \
-             test_gen_map_ctx \
-             test_gen_composed \
              test_result_api \
              test_suite_api \
              test_strategy_gen \
              test_span_basic \
              test_span_tree_json_passes \
-             test_schema_recursive_tree_json_roundtrip \
-             test_schema_union_variant_tagged_untagged \
-             test_schema_array_of_variant_struct_pointers \
-             test_schema_nested_array_of_arrays_matrix \
-             test_schema_array_all_composition_patterns \
-             test_schema_array_inline_of_tagged_unions \
-             test_schema_array_of_raw_struct_pointers_by_kind \
-             test_schema_array_inline_of_bare_unions_common_prefix \
-             test_schema_functional_combinators \
-             test_schema_shape_get_and_reuse \
-             test_schema_inline_struct \
-             test_schema_facets_nonadjacent \
-             test_schema_facets_reversed \
-             test_schema_facets_nested \
-             test_schema_facets_self_recursion \
-             test_schema_top_level_draw \
-             test_schema_map_of_one_of \
-             test_binding_basic \
-             test_binding_scope_walk \
-             test_binding_arr_of \
-             test_binding_jagged_2d \
-             test_binding_const_length \
-             test_binding_shadowing \
-             test_binding_arr_shadow \
-             test_binding_shrink_bag \
              test_shrink_failure_found_while_shrinking \
-             test_binding_shrink_jagged \
-             test_binding_shrink_shadow \
-             test_binding_shrink_arr_of_structs \
-             test_binding_shrink_use_in_cases \
-             test_binding_use_in_union \
-             test_binding_use_in_variant \
-             test_binding_use_in_optional \
-             test_binding_widths \
-             test_binding_let_arr \
-             test_binding_jagged_3d \
-             test_binding_use_path \
-             test_array_len_prefixed \
-             test_array_terminated \
              test_stateful_smoke \
              test_stateful_precond \
              test_draw_bytes_smoke \
@@ -81,7 +32,6 @@ TESTS_PASS = test_pass_simple \
              test_collection_basic \
              test_recursion_tree \
              test_pool_basic \
-             test_schema_self_limits \
              test_run_options \
              test_reproduce_blob \
              test_target \
@@ -101,15 +51,7 @@ TESTS_FAIL = test_shrink_boundary \
 TESTS_CRASH = test_crash_segfault \
               test_isolated_crash \
               test_crash_abort \
-              test_crash_stackoverflow \
-              test_binding_unresolved \
-              test_binding_overflow \
-              test_binding_width_mismatch \
-              test_binding_use_at_no_iter \
-              test_binding_relet_abort \
-              test_arr_of_raw_int_abort \
-              test_terminated_sentinel_abort \
-              test_array_len_prefixed_overflow
+              test_crash_stackoverflow
 
 # Tests that should fail via a health check (an engine one such as
 # filter_too_much, or hegel_health_fail) — must exit non-zero AND

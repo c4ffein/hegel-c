@@ -263,7 +263,7 @@ The method is still PBT, unchanged — checkout the buggy commit, build the user
 Class distribution drives recipe priorities. In the kernel corpus, **leaks are the largest reachable class** (~90/999) and **error-path bugs** (~24) hide behind allocation failures the happy path never takes. So a corpus-calibrated harness needs, beyond the usual generators:
 
 - **LSAN-visible ownership**: the shim layer must not hide leaks behind arenas or interned pools — every allocation the target leaks must be one LSAN can report.
-- **Failable allocator stubs**: give the stub `malloc`/`kmalloc` a drawn fail-at-N counter (`HEGEL_LET(fail_at, HEGEL_INT(0, 50))`, decrement per allocation, return NULL at zero). Every drawn case then also probes one error path, and shrinking minimizes *which* allocation failing triggers the bug. Without this, the ~25% of reachable bugs that live on cleanup paths are invisible by construction.
+- **Failable allocator stubs**: give the stub `malloc`/`kmalloc` a drawn fail-at-N counter (`int fail_at = hegel_draw_int (tc, 0, 50)`, decrement per allocation, return NULL at zero). Every drawn case then also probes one error path, and shrinking minimizes *which* allocation failing triggers the bug. Without this, the ~25% of reachable bugs that live on cleanup paths are invisible by construction.
 
 ## Anti-patterns
 

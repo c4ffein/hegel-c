@@ -31,7 +31,6 @@
 #include <linux/bch.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 
 /* ------------------------------------------------------------------- */
 /* (m, t) sweep helpers                                                */

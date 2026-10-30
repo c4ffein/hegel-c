@@ -19,7 +19,6 @@
 #include <string.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 #include "scotch.h"
 
 static void test_arch_cmpltw (hegel_testcase * tc)

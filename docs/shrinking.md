@@ -526,9 +526,8 @@ hegel-c can do for a real C library, that's the one to read.
 
 - [`hegel_c.h`](../hegel_c.h) — `hegel_note`, `hegel_fail`,
   `HEGEL_ASSERT`
-- [`hegel_gen.h`](../hegel_gen.h) — schema API for declarative
-  input description
-- [`docs/schema-api.md`](schema-api.md) — schema API reference
-- [`docs/patterns.md`](patterns.md) — schema patterns by C layout
+- [`experiments/`](../experiments/README.md) — the declarative
+  schema layer this walkthrough was first written with, and why
+  generators are plain C now
 - Hypothesis docs on integrated shrinking:
   https://hypothesis.readthedocs.io/en/latest/details.html#how-hypothesis-handles-failures

@@ -14,9 +14,9 @@ A property-based testing library for C, built on top of [Hegel](https://hegel.de
 
 hegel-c is the C frontend: your tests include a header, link a `.a`, and get integrated shrinking + rich structured-data generation with no Python / Rust visible at the source level.
 
-## Two API layers
+## The API
 
-**Primitive API** (`hegel_c.h`) — scalar draws, assertions, spans, test runners, plus thin wrappers over the engine's own protocols: engine-sized collections (shrink by deleting elements), recursion, variable pools, and stateful state machines. For simple tests that hand-roll everything.
+`hegel_c.h` — draws, assertions, spans, test runners, plus thin wrappers over the engine's own protocols: engine-sized collections (shrink by deleting elements), recursion, variable pools, and stateful state machines. Generators are plain C functions over these draws.
 
 Small example — addition commutes:
 ```c
@@ -42,36 +42,23 @@ static void test_build (hegel_testcase *tc) {
 int main (void) { hegel_run_test_nofork (test_build); return 0; }
 ```
 
-**Schema API** (`hegel_gen.h`) — describe your C struct declaratively and get generation, allocation, span-based structural shrinking, and cleanup for free. Typed in terms of `hegel_schema_t` (a zero-cost newtype wrapper). See [docs/schema-api.md](docs/schema-api.md) for the reference and [docs/patterns.md](docs/patterns.md) for a catalog mapping common C memory layouts to the test files that demonstrate each one.
-
-Small example:
+A generator for a structured value is a function that fills it, drawing each field in turn — a field that depends on another is just a variable, and spans tell the shrinker where an element starts and ends:
 ```c
-typedef struct Tree {
-  int val;
-  char *label;
-  struct Tree *left, *right;
-} Tree;
-
-static hegel_schema_t tree_schema;
-
-static void test_roundtrip (hegel_testcase *tc) {
-  Tree *t;
-  hegel_shape *sh = hegel_schema_draw (tc, tree_schema, (void **) &t);
-  HEGEL_ASSERT (tree_to_json (t) && json_to_tree (tree_to_json (t)), "...");
-  hegel_shape_free (sh);
-}
-
-int main (void) {
-  tree_schema = HEGEL_STRUCT (Tree,
-      HEGEL_INT      (-1000, 1000),
-      HEGEL_OPTIONAL (hegel_schema_text (0, 8)),
-      HEGEL_SELF     (),
-      HEGEL_SELF     ());
-  hegel_run_test (test_roundtrip);
-  hegel_schema_free (tree_schema);
-  return 0;
+static void gen_graph (hegel_testcase *tc, Graph *g) {
+  g->nvert = hegel_draw_int (tc, 3, MAX_VERT);
+  hegel_start_span (tc, HEGEL_SPAN_LIST);
+  g->nedges = hegel_draw_int (tc, 0, MAX_EDGES);
+  for (int i = 0; i < g->nedges; i++) {
+    hegel_start_span (tc, HEGEL_SPAN_LIST_ELEMENT);
+    g->edges[i].u = hegel_draw_int (tc, 0, g->nvert - 1);   /* bounded by nvert */
+    g->edges[i].v = hegel_draw_int (tc, 0, g->nvert - 1);
+    hegel_stop_span (tc, 0);
+  }
+  hegel_stop_span (tc, 0);
 }
 ```
+
+Until 2026-10 hegel-c also had a declarative schema layer (`hegel_gen.h`: describe a C struct, get generation and cleanup for free). It moved to [experiments/](experiments/README.md) with the measurements that retired it: for the harnesses this repository writes, plain generators were shorter and shrank as well.
 
 ## Design decisions
 
@@ -80,8 +67,6 @@ int main (void) {
 
 ## Documentation
 
-- **[docs/schema-api.md](docs/schema-api.md)** — schema system reference (constructors, macros, refcounting, draw/free)
-- **[docs/patterns.md](docs/patterns.md)** — pattern catalog mapping C memory layouts to schema tests
 - **[docs/shrinking.md](docs/shrinking.md)** — integrated shrinking explained, with a worked example finding a real bug in Scotch and shrinking to the theoretical minimum
 - **[docs/testing.md](docs/testing.md)** — selftest suite three-layer pattern and test categories
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
@@ -89,26 +74,25 @@ int main (void) {
 - **[docs/fuzzing-comparison.md](docs/fuzzing-comparison.md)** — property-based testing vs. AFL/libFuzzer: where each tool is strong, where each hits a wall, and how to choose
 - **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
 - **[TODO.md](TODO.md)** — deferred items
+- **[experiments/](experiments/README.md)** — designs we built, measured and did not keep (the schema layer, view callbacks)
 
 ## Test suites
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 38 (26 PASS, 5 FAIL, 3 CRASH, 4 HEALTH) | `make selftest-test` |
-| from-hegel-rust | 19 binaries covering 26 Rust tests (13 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
+| selftest | 34 (19 PASS, 8 FAIL, 4 CRASH, 3 HEALTH) | `make selftest-test` |
+| from-hegel-rust | 11 (5 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
-| Scotch IRL | 4 (2 sequential, 1 reducer demo, 1 PT-Scotch MPI) | `make scotch-test` |
+| Scotch IRL | 3 (1 sequential, 1 reducer demo, 1 PT-Scotch MPI) + a 29-test property suite | `make scotch-test` |
 
 MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [docs/mpi-testing.md](docs/mpi-testing.md).
 
-The selftest suite doubles as example code — 11 of the 38 tests are focused schema-pattern demonstrations (`test_schema_*.c`). See [docs/patterns.md](docs/patterns.md) for the index.
-
-The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/test_graph_part_schema.c`](tests/irl/scotch/test_graph_part_schema.c) shows the schema API generating graphs for `SCOTCH_graphPart`; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from a random schema and shrinks to a 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
+The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/props/`](tests/irl/scotch/props/) holds one property per Scotch API area over shared graph generators; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from random graphs and shrinks to the 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
 
 ## License
 
-hegel-c itself — the library (`hegel_c.h`, `hegel_gen.*`, `core/`), its
-tests, tools and docs — is MIT, see [LICENSE](LICENSE). Nothing under any
+hegel-c itself — the library (`hegel_c.h`, `core/`), its tests,
+experiments, tools and docs — is MIT, see [LICENSE](LICENSE). Nothing under any
 other license is compiled into `libhegel_c.a`.
 
 The bug-hunting harnesses under `tests/irl/` don't vendor their targets: each

@@ -23,7 +23,7 @@ VERDICT: <MATCH|MISMATCH> — <one sentence reason>
 **MATCH** — The C test exercises the same property with equivalent generators and assertions.
 - Using `int` for Rust `i32` is fine (same width)
 - Using `hegel_draw_int(tc, min, max)` for Rust `tc.draw(gs::integers::<i32>().min_value(min).max_value(max))` is fine
-- Using `hegel_gen_*` combinators for Rust `.map()/.filter()/.flat_map()` is fine
+- Translating Rust `.map()/.filter()/.flat_map()` into a draw followed by plain C (`hegel_assume` for `.filter()`) is fine
 - Minor syntactic differences between C and Rust are expected and fine
 
 **MISMATCH** — The C test does NOT faithfully represent the Rust test.

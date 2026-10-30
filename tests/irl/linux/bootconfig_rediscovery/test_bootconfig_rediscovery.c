@@ -47,7 +47,6 @@
 #include <linux/bootconfig.h>
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 
 /* The userspace stub copies XBC_DATA_MAX = XBC_VALUE - 1 = 32767. */
 

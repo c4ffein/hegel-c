@@ -3,8 +3,9 @@
 ** Part of hegel-c — see hegel/LICENSE for terms.
 **
 ** Third A/B/C variant of the ts_kmp differential test.  Same property
-** as test_ts_kmp_vs_memmem.c (primitives) and test_ts_kmp_vs_memmem_schema.c
-** (schema HEGEL_ARR_OF), but using the new hegel_draw_bytes primitive.
+** as test_ts_kmp_vs_memmem.c (primitives) and the schema variant (now in
+** experiments/schema-with-let/irl/linux/ts_kmp/), but using the
+** hegel_draw_bytes primitive.
 **
 ** Compare the random_bytes test body against:
 **   - primitives:  per-byte for-loop of hegel_draw_int(tc, 0, 255).

@@ -53,7 +53,6 @@ Each generator is a function that takes `hegel_testcase *tc` plus shape paramete
 #define GRAPH_GEN_H
 
 #include "hegel_c.h"
-#include "hegel_gen.h"
 #include <scotch.h>
 
 typedef struct {
