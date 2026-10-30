@@ -74,6 +74,12 @@ cleanup:
 
 int main (void)
 {
-    hegel_run_test_n (test_graph_part_strat_fuzz, 1000);
+    /* 5000, not 1000: the kgraphMapFm over-read (pin kgraphMapFmDomnnbr)
+    ** needs SCOTCH_STRATBALANCE, a balance >= 0.67 and one of about half
+    ** the other flag sets, on a graph and part count where the mapping
+    ** goes out of balance — rare enough that 1000 cases found it on only
+    ** ~70% of runs (10 of 14, 2026-10-30).  Once triggered, ASan catches
+    ** it every time and it shrinks to the same case. */
+    hegel_run_test_n (test_graph_part_strat_fuzz, 5000);
     return 0;
 }
