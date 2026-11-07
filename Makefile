@@ -65,6 +65,10 @@ LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel_c.so
 # checksums below (the release's .sha256 assets), rerun the suites.
 LIBHEGEL_VERSION   = 0.48.0
 LIBHEGEL_RELEASE   = https://github.com/hegeldev/hegel/releases/download/libhegel/$(LIBHEGEL_VERSION)
+# Where releases are tagged (libhegel/<version>): check-libhegel and
+# check-libhegel-upstream read its tags.  Override it to exercise the
+# "could not check" path, e.g. LIBHEGEL_UPSTREAM=https://invalid.example/x.git
+LIBHEGEL_UPSTREAM  = https://github.com/hegeldev/hegel.git
 LIBHEGEL_SHA256_linux-amd64 = 7662636b658065f08962ead44d0cd4e5d1e93dde09bc4117f7cee0320f42561e
 LIBHEGEL_SHA256_linux-arm64 = ef654e8f552a09a5adfe26cb2bc270a3efa3160327763e38d9077407cec4a879
 LIBHEGEL_PLATFORM  = $(shell uname -s | tr A-Z a-z)-$(shell uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
@@ -76,7 +80,7 @@ PREBUILT ?=
 LIBHEGEL_FLAVOR    = $(if $(PREBUILT),prebuilt,source)
 LIBHEGEL_TAGGED    = $(BUILD)/libhegel-$(LIBHEGEL_VERSION)-$(LIBHEGEL_FLAVOR).so
 
-.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-reuse findings runs findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-libhegel-upstream check-reuse findings runs findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -86,6 +90,7 @@ help:
 	@echo "  inspiration                   Clone/update third-party repos into inspiration/{hegel,existing-pbt-in-c,targets,kernel-review}/"
 	@echo "  clean-inspiration             Remove inspiration/"
 	@echo "  check-libhegel                Check the engine pin: submodule, installed .so, newer upstream releases"
+	@echo "  check-libhegel-upstream       Fail only if hegeldev/hegel released a libhegel newer than LIBHEGEL_VERSION (CI release watch)"
 	@echo "  check-sashiko                 Report whether upstream sashiko moved past our pinned SHA (see docs/sashiko-gap-analysis.md)"
 	@echo "  check-reuse                   Lint per-file licensing against REUSE.toml + LICENSES/ (needs reuse or uvx)"
 	@echo "  findings                      List the bugs hegel-c found (docs/findings.toml); FINDINGS_ARGS=\"--open\" etc."
@@ -330,7 +335,7 @@ check-libhegel:
 			*) echo "build/libhegel.so -> $$inst, expected $(LIBHEGEL_VERSION) (run: make libhegel)"; rc=1;; \
 		esac; \
 	fi; \
-	latest=$$(git ls-remote --tags https://github.com/hegeldev/hegel.git 'refs/tags/libhegel/*' \
+	latest=$$(git ls-remote --tags $(LIBHEGEL_UPSTREAM) 'refs/tags/libhegel/*' \
 		| sed -n 's|.*refs/tags/libhegel/\([0-9.]*\)$$|\1|p' | sort -V | tail -1); \
 	if [ -z "$$latest" ]; then \
 		echo "upstream: could not reach hegeldev/hegel"; rc=1; \
@@ -342,6 +347,60 @@ check-libhegel:
 		rc=1; \
 	fi; \
 	exit $$rc
+
+# Only the upstream third of check-libhegel, for the scheduled release
+# watch (.github/workflows/libhegel-release-watch.yml) and for humans;
+# needs no submodule and no build.  A release is a libhegel/X.Y.Z tag
+# with digits only (a suffixed tag, e.g. a pre-release, is ignored),
+# ordered with sort -V.  Exit 1 with "OUTDATED" if a release newer than
+# LIBHEGEL_VERSION exists; also exit 1, with a different message, if the
+# tags can't be listed ("COULD NOT CHECK") or the newest is older than the
+# pin ("PIN NOT PUBLISHED") — neither is ever reported as an update.
+# Under GitHub Actions it also emits ::error:: and the step summary.
+check-libhegel-upstream:
+	@pinned='$(LIBHEGEL_VERSION)'; url='$(LIBHEGEL_UPSTREAM)'; \
+	say() { [ -n "$$GITHUB_STEP_SUMMARY" ] && printf "$$@" >> "$$GITHUB_STEP_SUMMARY"; :; }; \
+	err() { [ -n "$$GITHUB_ACTIONS" ] && echo "::error title=libhegel release watch::$$1"; :; }; \
+	if ! refs=$$(GIT_TERMINAL_PROMPT=0 timeout 120 git ls-remote --tags "$$url" 'refs/tags/libhegel/*' 2>&1); then \
+		echo "COULD NOT CHECK: git ls-remote $$url failed (network or upstream problem, not a new release):"; \
+		printf '%s\n' "$$refs" | sed 's/^/  /'; \
+		err "could not list the libhegel tags of $$url - a network or upstream problem, NOT a new release; re-run"; \
+		say '## libhegel release watch: could not check\n\n`git ls-remote %s` failed: a network or upstream problem, not a new release. Re-run the workflow.\n' "$$url"; \
+		exit 1; \
+	fi; \
+	versions=$$(printf '%s\n' "$$refs" \
+		| sed -n 's|.*refs/tags/libhegel/\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$$|\1|p' | sort -uV); \
+	latest=$$(printf '%s\n' "$$versions" | tail -1); \
+	if [ -z "$$latest" ]; then \
+		echo "COULD NOT CHECK: no libhegel/X.Y.Z tag on $$url (did upstream change its tag scheme?)"; \
+		err "no libhegel/X.Y.Z tag on $$url - did upstream change its tag scheme? (not a new release)"; \
+		say '## libhegel release watch: could not check\n\nNo `libhegel/X.Y.Z` tag on %s: did upstream change its tag scheme?\n' "$$url"; \
+		exit 1; \
+	fi; \
+	if [ "$$latest" = "$$pinned" ]; then \
+		echo "up to date: libhegel/$$pinned is the latest release on $$url"; \
+		say '## libhegel release watch: up to date\n\n`LIBHEGEL_VERSION = %s` is the latest `libhegel/*` release.\n' "$$pinned"; \
+		exit 0; \
+	fi; \
+	if [ "$$(printf '%s\n%s\n' "$$pinned" "$$latest" | sort -V | tail -1)" = "$$pinned" ]; then \
+		echo "PIN NOT PUBLISHED: LIBHEGEL_VERSION = $$pinned, but the newest libhegel release on $$url is $$latest"; \
+		err "LIBHEGEL_VERSION = $$pinned is ahead of the newest libhegel release ($$latest): a Makefile typo, or a deleted tag?"; \
+		say '## libhegel release watch: pin not published\n\n`LIBHEGEL_VERSION = %s` is ahead of the newest `libhegel/*` release (%s): a Makefile typo, or a tag deleted upstream?\n' "$$pinned" "$$latest"; \
+		exit 1; \
+	fi; \
+	newer=$$(printf '%s\n%s\n' "$$versions" "$$pinned" | sort -uV \
+		| awk -v p="$$pinned" 'f { s = s (s == "" ? "" : " ") $$0 } $$0 == p { f = 1 } END { print s }'); \
+	echo "OUTDATED: libhegel/$$latest is out, LIBHEGEL_VERSION is $$pinned (newer releases: $$newer)"; \
+	echo "  To bump: read libhegel/CHANGELOG.md in hegeldev/hegel, check out libhegel/$$latest in deps/hegel,"; \
+	echo "  set LIBHEGEL_VERSION and both LIBHEGEL_SHA256_* (the release's .sha256 assets) in the Makefile,"; \
+	echo "  then make libhegel (and PREBUILT=1), make check-libhegel, rerun the suites, and update the"; \
+	echo "  pinned version in CLAUDE.md (\"libhegel (the engine)\")."; \
+	err "libhegel $$latest is out (pinned: $$pinned) - bump LIBHEGEL_VERSION, the sha256 pins and deps/hegel, re-verify (see CLAUDE.md)"; \
+	say '## libhegel release watch: OUTDATED\n\n| | version |\n|---|---|\n| pinned `LIBHEGEL_VERSION` | %s |\n| latest `libhegel/*` release | **%s** |\n\nNewer releases: %s\n\n' "$$pinned" "$$latest" "$$newer"; \
+	say 'To bump:\n1. Read `libhegel/CHANGELOG.md` in hegeldev/hegel (%s to %s).\n2. Check out tag `libhegel/%s` in `deps/hegel`.\n' "$$pinned" "$$latest" "$$latest"; \
+	say '3. In the Makefile set `LIBHEGEL_VERSION = %s` and both `LIBHEGEL_SHA256_*` (the release'"'"'s `.sha256` assets).\n' "$$latest"; \
+	say '4. `make libhegel`, `make libhegel PREBUILT=1`, `make check-libhegel`, rerun the suites.\n5. Update the pinned version in CLAUDE.md ("libhegel (the engine)").\n'; \
+	exit 1
 
 # The findings ledger: bugs hegel-c found itself (tools/findings.py, Python 3.11+).
 findings:

@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein — see hegel/LICENSE for terms.
+
+name: libhegel release watch
+
+# Goes red when hegeldev/hegel has tagged a libhegel release (libhegel/X.Y.Z)
+# newer than the Makefile's LIBHEGEL_VERSION, so a new engine can't go
+# unnoticed; green otherwise.  The check is `make check-libhegel-upstream`,
+# the same command a human runs (only the upstream third of
+# `make check-libhegel`: no submodule, no build, no toolchain — seconds).
+#
+# A failed scheduled run is the whole notification: GitHub emails the
+# workflow's last committer, as for any failed scheduled run.  No issue is
+# opened and nothing is posted — the token is read-only.  The log, an
+# ::error:: annotation and the run summary give the pinned version, the
+# latest release and the bump steps.  A network failure says "COULD NOT
+# CHECK" instead (also red, never reported as an update): re-run it.
+#
+# It stays red until the pin is bumped (LIBHEGEL_VERSION + both sha256 pins
+# + deps/hegel, re-verified as CLAUDE.md describes).
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # every 6 hours
+  push:
+    branches: [main]
+    paths:
+      - "Makefile"
+      - ".github/workflows/libhegel-release-watch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-watch:
+    name: "Upstream libhegel releases vs the pinned LIBHEGEL_VERSION"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Only the Makefile is needed: no submodules, no history.
+      - uses: actions/checkout@v5
+
+      - name: Compare the newest libhegel/X.Y.Z tag with LIBHEGEL_VERSION
+        run: make -s check-libhegel-upstream
