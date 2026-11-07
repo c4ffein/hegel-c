@@ -313,7 +313,9 @@ What hegel-c costs or hides:
   shows the engine's phase/case trace for raw, nothing for hegel-c);
   `HEGEL_STATISTICS` is likewise inert, and `hegel_event` isn't exposed.
 - **Diagnostics**: misuse messages drop the engine's details (pair 6).
-- **ABI coverage**: hegel-c binds 69 of libhegel 0.50.0's 157 functions.
+- **ABI coverage**: hegel-c binds 69 of libhegel 0.50.0's 157 functions
+  (the other 88, each classified, in `tools/libhegel-coverage.toml`;
+  `make check-libhegel-coverage`).
   Not reachable from hegel-c: date/time/datetime/uuid/ipv4/ipv6/email/
   url/domain and grammar generators, `hegel_repeat_*`, test-case clones
   (multi-threaded generation), events/statistics, the pretty printer,

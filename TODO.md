@@ -12,6 +12,30 @@
   state-machine creation in `core/hegel_server.c` ported to its
   declare-then-start ABI). Then say so in the README, so
   pyscotch can point its hegel-c witnesses at the tag.
+- **libhegel coverage (2026-11-06).** hegel-c binds 69 of libhegel 0.50.0's
+  157 functions; the 88 others are listed in `tools/libhegel-coverage.toml`,
+  19 as deliberate (getters, our own context / label / note / replay, the
+  Unicode version), 69 as gaps. `make check-libhegel-coverage` fails on a
+  function in neither list, so a bump can't add an unclassified one
+  (`LIBHEGEL_VERSION=<new>` runs it against the new header before bumping).
+  The gaps, roughly by value:
+  - *Value generators*: date, time, datetime, uuid, ipv4, ipv6, and the
+    email / url / domain string generators — draws like the others.
+  - *Repeat loops* (`hegel_new_repeat` / `_more` / `_failed`): a body run as
+    many times as the engine wants, shrinking to the fewest repetitions.
+  - *Settings as code*: `stop_on_first_failure`, `derandomize`,
+    `show_statistics`, `print_blob`, `nondeterminism_strictness`,
+    `unbounded_choices`, `backend`, `test_location`, profiles,
+    `set_from_string` — today only through `HEGEL_*` env vars and
+    `hegel.toml`, which `hegel_settings_new` reads.
+  - *Events* (`hegel_event`, `_value`), with statistics reporting
+    (verbosity is forced QUIET, so `HEGEL_STATISTICS` is inert).
+  - *Grammars* (13 functions): strings from a Lark grammar.
+  - *Multi-threaded generation* (`test_case_clone` / `set_worker` / `block`):
+    needs a design for fork mode, where the engine is in the parent.
+  - *Pretty printer* (25 functions): the engine's counterexample printer;
+    hegel-c prints its own report, so low priority.
+  - `hegel_label_combine`.
 - **Imperative helpers (2026-10-30).** Main is plain generators now (the
   schema layer moved to `experiments/`, see its README). What the
   harnesses read while deciding would have used:

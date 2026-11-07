@@ -30,3 +30,7 @@ once as a harness.
 
 Cost: hegel-c fork mode runs 24x (graph) to 41x (tree) the raw wall time
 (every draw is a pipe round trip); nofork is 1.1–1.2x.
+
+Coverage: hegel-c binds 69 of libhegel 0.50.0's 157 functions; the other 88
+are classified in [`tools/libhegel-coverage.toml`](../tools/libhegel-coverage.toml)
+(`make check-libhegel-coverage`, gaps in [`TODO.md`](../TODO.md)).

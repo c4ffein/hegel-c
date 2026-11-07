@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 c4ffein
+# Part of hegel-c — see hegel/LICENSE for terms.
+#
+# Every libhegel function hegel-c does NOT bind, and why.  Bound functions
+# are read from core/hegel_engine.c (its BIND lines); the header from the
+# libhegel version checked.  `make check-libhegel-coverage` fails when the
+# header declares a function that is neither bound nor listed here — i.e. a
+# new upstream feature nobody has looked at yet — or when a listed or bound
+# function is gone from the header.  Run it against a version before bumping
+# to it:  make check-libhegel-coverage LIBHEGEL_VERSION=<new>
+#
+# status: deliberate  hegel-c does not need it (say why)
+#         gap         a feature hegel-c lacks (see TODO.md, "libhegel coverage")
+#
+# Classified 2026-11-06 against libhegel 0.50.0: 157 declared, 69 bound,
+# 88 listed below.
+
+[[group]]
+name = "settings getters"
+status = "deliberate"
+why = "hegel-c only sets settings; nothing reads them back"
+functions = ["hegel_settings_get_backend", "hegel_settings_get_database",
+  "hegel_settings_get_derandomize", "hegel_settings_get_nondeterminism_strictness",
+  "hegel_settings_get_phases", "hegel_settings_get_print_blob",
+  "hegel_settings_get_report_multiple_failures", "hegel_settings_get_seed",
+  "hegel_settings_get_show_statistics", "hegel_settings_get_stop_on_first_failure",
+  "hegel_settings_get_suppress_health_check", "hegel_settings_get_test_cases",
+  "hegel_settings_get_unbounded_choices", "hegel_settings_get_verbosity"]
+
+[[group]]
+name = "own equivalents"
+status = "deliberate"
+why = "hegel-c has its own: one process-wide context for the process lifetime; hegel_label is the same FNV-1a in pure C; notes are captured by hegel-c's runner; replay goes through hegel_run_start_blob"
+functions = ["hegel_context_free", "hegel_label_from_name", "hegel_note",
+  "hegel_test_case_from_blob"]
+
+[[group]]
+name = "unicode version"
+status = "deliberate"
+why = "C has no host Unicode version, so generators use the engine's newest tables (CLAUDE.md)"
+functions = ["hegel_set_unicode_version"]
+
+[[group]]
+name = "settings setters"
+status = "gap"
+why = "not settable from C (several are reachable through HEGEL_* environment variables, which hegel_settings_new reads)"
+functions = ["hegel_settings_set_backend", "hegel_settings_set_derandomize",
+  "hegel_settings_set_from_string", "hegel_settings_set_nondeterminism_strictness",
+  "hegel_settings_set_print_blob", "hegel_settings_set_show_statistics",
+  "hegel_settings_set_stop_on_first_failure", "hegel_settings_set_test_location",
+  "hegel_settings_set_unbounded_choices", "hegel_settings_new_for_profile",
+  "hegel_settings_register_profile", "hegel_set_default_profile"]
+
+[[group]]
+name = "value generators"
+status = "gap"
+why = "dates, times, uuids, IP addresses, domains, emails, URLs: no hegel-c draw for them"
+functions = ["hegel_generate_date", "hegel_generate_datetime", "hegel_generate_time",
+  "hegel_generate_uuid", "hegel_generate_ipv4", "hegel_generate_ipv6",
+  "hegel_string_generator_domain", "hegel_string_generator_email",
+  "hegel_string_generator_url"]
+
+[[group]]
+name = "grammars"
+status = "gap"
+why = "strings from a Lark grammar (and splicing generated values into them)"
+functions = ["hegel_generate_grammar", "hegel_grammar_builder_file",
+  "hegel_grammar_builder_free", "hegel_grammar_builder_new",
+  "hegel_grammar_builder_provide", "hegel_grammar_draw_free", "hegel_grammar_draw_new",
+  "hegel_grammar_draw_next", "hegel_grammar_draw_provide", "hegel_grammar_draw_result",
+  "hegel_grammar_free", "hegel_grammar_new", "hegel_grammar_placeholder"]
+
+[[group]]
+name = "repeat loops"
+status = "gap"
+why = "run a body as many times as the engine wants, shrinking to the fewest repetitions"
+functions = ["hegel_new_repeat", "hegel_repeat_failed", "hegel_repeat_free",
+  "hegel_repeat_more"]
+
+[[group]]
+name = "events"
+status = "gap"
+why = "per-case events and values for the engine's statistics"
+functions = ["hegel_event", "hegel_event_value"]
+
+[[group]]
+name = "labels"
+status = "gap"
+why = "combining span labels (hegel_label covers single names)"
+functions = ["hegel_label_combine"]
+
+[[group]]
+name = "multi-threaded generation"
+status = "gap"
+why = "test-case blocks and clones handed to worker threads"
+functions = ["hegel_test_case_block", "hegel_test_case_clone", "hegel_test_case_set_worker"]
+
+[[group]]
+name = "pretty printer"
+status = "gap"
+why = "the engine's counterexample printer (hegel-c prints its own report: Draw N lines, notes, the assert message)"
+functions = ["hegel_test_case_printer", "hegel_reflow_options_free", "hegel_reflow_options_new",
+  "hegel_printer_abort_speculative", "hegel_printer_begin_group",
+  "hegel_printer_begin_speculative", "hegel_printer_breakable", "hegel_printer_comment",
+  "hegel_printer_commit_speculative", "hegel_printer_deferred", "hegel_printer_end_group",
+  "hegel_printer_free", "hegel_printer_hard_break", "hegel_printer_if_break",
+  "hegel_printer_is_live", "hegel_printer_new", "hegel_printer_options_free",
+  "hegel_printer_options_new", "hegel_printer_options_set_max_width", "hegel_printer_reflow",
+  "hegel_printer_resolve", "hegel_printer_shift_indent", "hegel_printer_text",
+  "hegel_printer_value", "hegel_printer_value_result_free"]

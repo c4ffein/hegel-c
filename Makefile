@@ -61,7 +61,8 @@ LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel_c.so
 
 # The engine version — must be what deps/hegel is checked out at
 # (tag libhegel/<version>; `make check-libhegel` verifies).  Bumping it:
-# check out the new tag in deps/hegel, update the version and the two
+# make check-libhegel-coverage LIBHEGEL_VERSION=<new> (new functions to
+# classify or bind), check out the new tag in deps/hegel, update the version and the two
 # checksums below (the release's .sha256 assets), rerun the suites.
 LIBHEGEL_VERSION   = 0.50.0
 LIBHEGEL_RELEASE   = https://github.com/hegeldev/hegel/releases/download/libhegel/$(LIBHEGEL_VERSION)
@@ -80,7 +81,7 @@ PREBUILT ?=
 LIBHEGEL_FLAVOR    = $(if $(PREBUILT),prebuilt,source)
 LIBHEGEL_TAGGED    = $(BUILD)/libhegel-$(LIBHEGEL_VERSION)-$(LIBHEGEL_FLAVOR).so
 
-.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-libhegel-upstream check-reuse findings runs findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-libhegel-upstream check-libhegel-coverage check-reuse findings runs findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -91,6 +92,8 @@ help:
 	@echo "  clean-inspiration             Remove inspiration/"
 	@echo "  check-libhegel                Check the engine pin: submodule, installed .so, newer upstream releases"
 	@echo "  check-libhegel-upstream       Fail only if hegeldev/hegel released a libhegel newer than LIBHEGEL_VERSION (CI release watch)"
+	@echo "  check-libhegel-coverage       Fail if libhegel declares a function hegel-c neither binds nor lists as unbound"
+	@echo "                                (tools/libhegel-coverage.toml); LIBHEGEL_VERSION=<new> before a bump, COVERAGE_ARGS=--list"
 	@echo "  check-sashiko                 Report whether upstream sashiko moved past our pinned SHA (see docs/sashiko-gap-analysis.md)"
 	@echo "  check-reuse                   Lint per-file licensing against REUSE.toml + LICENSES/ (needs reuse or uvx)"
 	@echo "  findings                      List the bugs hegel-c found (docs/findings.toml); FINDINGS_ARGS=\"--open\" etc."
@@ -393,14 +396,27 @@ check-libhegel-upstream:
 	echo "OUTDATED: libhegel/$$latest is out, LIBHEGEL_VERSION is $$pinned (newer releases: $$newer)"; \
 	echo "  To bump: read libhegel/CHANGELOG.md in hegeldev/hegel, check out libhegel/$$latest in deps/hegel,"; \
 	echo "  set LIBHEGEL_VERSION and both LIBHEGEL_SHA256_* (the release's .sha256 assets) in the Makefile,"; \
+	echo "  run make check-libhegel-coverage LIBHEGEL_VERSION=$$latest (new functions to classify or bind),"; \
 	echo "  then make libhegel (and PREBUILT=1), make check-libhegel, rerun the suites, and update the"; \
 	echo "  pinned version in CLAUDE.md (\"libhegel (the engine)\")."; \
 	err "libhegel $$latest is out (pinned: $$pinned) - bump LIBHEGEL_VERSION, the sha256 pins and deps/hegel, re-verify (see CLAUDE.md)"; \
 	say '## libhegel release watch: OUTDATED\n\n| | version |\n|---|---|\n| pinned `LIBHEGEL_VERSION` | %s |\n| latest `libhegel/*` release | **%s** |\n\nNewer releases: %s\n\n' "$$pinned" "$$latest" "$$newer"; \
 	say 'To bump:\n1. Read `libhegel/CHANGELOG.md` in hegeldev/hegel (%s to %s).\n2. Check out tag `libhegel/%s` in `deps/hegel`.\n' "$$pinned" "$$latest" "$$latest"; \
 	say '3. In the Makefile set `LIBHEGEL_VERSION = %s` and both `LIBHEGEL_SHA256_*` (the release'"'"'s `.sha256` assets).\n' "$$latest"; \
-	say '4. `make libhegel`, `make libhegel PREBUILT=1`, `make check-libhegel`, rerun the suites.\n5. Update the pinned version in CLAUDE.md ("libhegel (the engine)").\n'; \
+	say '4. `make check-libhegel-coverage LIBHEGEL_VERSION=%s`: classify or bind every new function.\n' "$$latest"; \
+	say '5. `make libhegel`, `make libhegel PREBUILT=1`, `make check-libhegel`, rerun the suites.\n6. Update the pinned version in CLAUDE.md ("libhegel (the engine)").\n'; \
 	exit 1
+
+# Every function the libhegel header declares is either bound in
+# core/hegel_engine.c or listed, with a reason, in tools/libhegel-coverage.toml
+# (deliberate, or a gap tracked in TODO.md).  Fails on a function that is
+# neither — a new upstream feature — and on bound or listed functions the
+# header no longer declares.  Run it with LIBHEGEL_VERSION=<new> before a
+# bump; the header comes from deps/hegel when it is at that tag, otherwise
+# it is downloaded once into build/.  COVERAGE_ARGS=--list prints the groups.
+COVERAGE_ARGS ?=
+check-libhegel-coverage:
+	@python3 tools/libhegel-coverage.py $(LIBHEGEL_VERSION) $(COVERAGE_ARGS)
 
 # The findings ledger: bugs hegel-c found itself (tools/findings.py, Python 3.11+).
 findings:
