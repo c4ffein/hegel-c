@@ -72,6 +72,7 @@ Until 2026-10 hegel-c also had a declarative schema layer (`hegel_gen.h`: descri
 - **[docs/testing.md](docs/testing.md)** — selftest suite three-layer pattern and test categories
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
 - **[docs/benchmarking.md](docs/benchmarking.md)** — fork vs nofork overhead, methodology and measured numbers
+- **[docs/libhegel-vs-hegel-c.md](docs/libhegel-vs-hegel-c.md)** — the same properties on libhegel's C ABI alone and on hegel-c, one row per pair, both files linked
 - **[docs/fuzzing-comparison.md](docs/fuzzing-comparison.md)** — property-based testing vs. AFL/libFuzzer: where each tool is strong, where each hits a wall, and how to choose
 - **[CLAUDE.md](CLAUDE.md)** — project overview and code conventions
 - **[TODO.md](TODO.md)** — deferred items

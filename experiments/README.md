@@ -13,6 +13,7 @@ against main's library, so a claim below can be re-checked instead of trusted.
 | [`schema-with-let/`](schema-with-let/) | The declarative schema layer main shipped until 2026-10-30: `HEGEL_STRUCT`, `LET` / `USE` bindings, unions, arrays, `HEGEL_SELF` on the recursion protocol | Retired from main |
 | [`schema-with-callbacks/`](schema-with-callbacks/) | A proof of concept on top of it: fields whose schema comes from a callback reading the value drawn so far (`HEGEL_DEPENDS`, `HEGEL_DERIVED`, `HEGEL_LEN_OF`, `HEGEL_LEN`) | Never merged |
 | [`TODO-schema.md`](TODO-schema.md) | The schema-layer backlog, moved out of the main `TODO.md` verbatim | Archived |
+| [`libhegel-vs-hegel-c/`](libhegel-vs-hegel-c/) | The same properties written directly against libhegel's C ABI and with hegel-c, on the same engine (0.50.0): lines of code, behaviour on crashes, reports, speed | A measurement, kept to re-run |
 
 Main is now imperative: generators are plain C over the `hegel_c.h`
 primitives and engine protocols. The reasons are below.
