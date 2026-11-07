@@ -49,7 +49,7 @@ static void * need (void * handle, const char * name, int * ok)
   void * p = dlsym (handle, name);
   if (!p) {
     fprintf (stderr, "hegel-c: libhegel is missing symbol %s (%s) — is it older than "
-             "hegeltest-c 0.47?\n", name, dlerror ());
+             "libhegel 0.50.0, the oldest this hegel-c runs on?\n", name, dlerror ());
     *ok = 0;
   }
   return p;
@@ -130,6 +130,9 @@ const hg_engine * hg_engine_get (void)
   BIND (pool_restore,               "hegel_pool_restore");
   BIND (pool_free,                  "hegel_pool_free");
   BIND (new_state_machine,          "hegel_new_state_machine");
+  BIND (sm_add_rule,                "hegel_state_machine_add_rule");
+  BIND (sm_add_invariant,           "hegel_state_machine_add_invariant");
+  BIND (sm_start,                   "hegel_state_machine_start");
   BIND (sm_next_group,              "hegel_state_machine_next_group");
   BIND (sm_next_rule,               "hegel_state_machine_next_rule");
   BIND (sm_rule_rejected,           "hegel_state_machine_rule_rejected");

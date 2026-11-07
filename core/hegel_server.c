@@ -501,9 +501,7 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
       int64_t steps = RD (&r, int64_t);
       uint32_t n = nrules + ninvs;
       hg_str * names = calloc (n ? n : 1, sizeof *names);
-      int64_t * groups = calloc (nrules ? nrules : 1, sizeof *groups);
-      bool * always = calloc (ninvs ? ninvs : 1, sizeof *always);
-      if (!names || !groups || !always) abort ();
+      if (!names) abort ();
       for (uint32_t i = 0; i < n && !r.bad; i++) {
         uint32_t l = RD (&r, uint32_t);
         if (r.left < l) { r.bad = 1; break; }
@@ -511,23 +509,29 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
         r.p += l;
         r.left -= l;
       }
-      /* Invariants run after every rule — the hegel-c contract. */
-      for (uint32_t i = 0; i < ninvs; i++) always[i] = true;
       hg_sm * h = NULL;
       int64_t conc = 0;
       if (r.bad) {
         st = usage_error (resp, "hegel-c: malformed state machine request");
       } else {
-        rc = e->new_state_machine (x, t, names, groups, NULL, nrules, names + nrules, always,
-                                   ninvs, 1, 1, steps, &h, &conc);
+        /* Sequential (concurrency 1), every rule unweighted in one group 0,
+        ** and invariants after every rule — the hegel-c contract. */
+        static const int64_t group0 = 0;
+        rc = e->new_state_machine (x, t, 1, 1, steps, &h);
+        for (uint32_t i = 0; rc == 0 && i < nrules; i++)
+          rc = e->sm_add_rule (x, t, h, names[i], 1.0, &group0, 1);
+        for (uint32_t i = 0; rc == 0 && i < ninvs; i++)
+          rc = e->sm_add_invariant (x, t, h, names[nrules + i], true);
+        if (rc == 0)
+          rc = e->sm_start (x, t, h, &conc);
         if ((st = eng_status (c, rc, "new_state_machine", resp)) == HEGEL_RESP_OK) {
           int64_t id = add_handle (c, H_SM, h);
           HEGEL_BUF_PUT (resp, id);
+        } else if (h) {
+          e->sm_free (x, h);          /* created, but declaring or starting it failed */
         }
       }
       free (names);
-      free (groups);
-      free (always);
       break;
     }
     case HEGEL_OP_SM_GROUP:

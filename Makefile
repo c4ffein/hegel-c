@@ -63,14 +63,14 @@ LIBHEGEL_BUILT     = $(LIBHEGEL_CRATE_DIR)/target/release/libhegel_c.so
 # (tag libhegel/<version>; `make check-libhegel` verifies).  Bumping it:
 # check out the new tag in deps/hegel, update the version and the two
 # checksums below (the release's .sha256 assets), rerun the suites.
-LIBHEGEL_VERSION   = 0.48.0
+LIBHEGEL_VERSION   = 0.50.0
 LIBHEGEL_RELEASE   = https://github.com/hegeldev/hegel/releases/download/libhegel/$(LIBHEGEL_VERSION)
 # Where releases are tagged (libhegel/<version>): check-libhegel and
 # check-libhegel-upstream read its tags.  Override it to exercise the
 # "could not check" path, e.g. LIBHEGEL_UPSTREAM=https://invalid.example/x.git
 LIBHEGEL_UPSTREAM  = https://github.com/hegeldev/hegel.git
-LIBHEGEL_SHA256_linux-amd64 = 7662636b658065f08962ead44d0cd4e5d1e93dde09bc4117f7cee0320f42561e
-LIBHEGEL_SHA256_linux-arm64 = ef654e8f552a09a5adfe26cb2bc270a3efa3160327763e38d9077407cec4a879
+LIBHEGEL_SHA256_linux-amd64 = e290467dfa8b2fca4bc099c557fe43cc1d2e166e4bf70c758151d588fce56298
+LIBHEGEL_SHA256_linux-arm64 = 211e6522bbe5a633fcce10131fa09051a1db327ee8c3b5fec43dd4749c7d7e9f
 LIBHEGEL_PLATFORM  = $(shell uname -s | tr A-Z a-z)-$(shell uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 # Set PREBUILT=1 to download the release artifact (checksum-verified)
 # instead of building with cargo.

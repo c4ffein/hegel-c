@@ -431,3 +431,186 @@ note = "ASan heap read at hgraph_order_kp.c:141, as on 7.0.17"
 target = "scotch-graphpart-strat-f-d-segv"
 verdict = "hit"
 note = "SIGSEGV without ASan, as on 7.0.17"
+
+[[run]]
+id = "2026-11-06-scotch-pins-libhegel-0-50"
+date = "2026-11-06"
+kind = "pins"
+project = "scotch"
+summary = "every Scotch pin after the libhegel 0.48.0 -> 0.50.0 bump: 9 pins, all as expected"
+hegel_c = "11b87e3"
+libhegel = "0.50.0"
+notes = "Ran on 11b87e3 plus the then-uncommitted generator helpers and the 0.50.0 port of the state-machine creation (core/hegel_server.c). make test-props: 24 green."
+
+[[run.result]]
+target = "tests/irl/scotch/pins/archBuildBase.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/archBuildPairing.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/archSubSingle.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/current.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/graphGeomLoadChac.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/hgraphOrderCp.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/hgraphOrderKpDefault.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/kgraphMapFmDomnnbr.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/kgraphRefineNoMapping.conf"
+verdict = "as-expected"
+
+[[run]]
+id = "2026-11-06-linux-pins-libhegel-0-50"
+date = "2026-11-06"
+kind = "pins"
+project = "linux"
+summary = "every Linux pin after the libhegel 0.48.0 -> 0.50.0 bump: 31 pins; one unexpected, already so on 0.48.0"
+hegel_c = "11b87e3"
+libhegel = "0.50.0"
+notes = "Same tree as 2026-11-06-scotch-pins-libhegel-0-50. bunzip2 and glob first failed to build (a glibc 2.41 header clash, not the engine) and were re-run after their Makefiles moved the kernel headers to -idirafter."
+
+[[run.result]]
+target = "tests/irl/linux/pins/asn1.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bch.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bch_mod8.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bitmap.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bootconfig_rediscovery.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bql.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/btree.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bunzip2.conf"
+verdict = "as-expected"
+note = "red on the parent, green on the fix, after its Makefile moved the kernel headers to -idirafter (it did not build on glibc 2.41: the kernel include/linux/types.h shadowed the system one)"
+
+[[run.result]]
+target = "tests/irl/linux/pins/glob.conf"
+verdict = "as-expected"
+note = "green, after the same -idirafter fix as bunzip2 (same build break)"
+
+[[run.result]]
+target = "tests/irl/linux/pins/group_cpus.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/idr.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/idr_rediscovery.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/interval_tree.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/kfifo.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/llist.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/lzo.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_destroy_walk.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_prealloc.conf"
+verdict = "unexpected"
+note = "buggy green, as on 2026-10-19 (0.48.0): the test never reaches the bug; not an engine change"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_store_root.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_tree.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_tree_rediscovery.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/objagg.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/packing_roundtrip.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/parman.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/plist.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/scatterlist.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/sg_split.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/sg_split_v2.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/ts_kmp.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/xarray.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/xarray_pause.conf"
+verdict = "as-expected"

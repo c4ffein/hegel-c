@@ -6,6 +6,12 @@
 
 ## Next up (2026-10-21)
 
+- **First tag (v0.1.0), which pyscotch waits for** (`PYSCOTCH_HANDOFF.md`,
+  phase 2): once the pending work is committed and `make test` plus every
+  Scotch pin pass. The libhegel bump is done (2026-11-06: 0.50.0, the
+  state-machine creation in `core/hegel_server.c` ported to its
+  declare-then-start ABI). Then say so in the README, so
+  pyscotch can point its hegel-c witnesses at the tag.
 - **Imperative helpers (2026-10-30).** Main is plain generators now (the
   schema layer moved to `experiments/`, see its README). What the
   harnesses read while deciding would have used:

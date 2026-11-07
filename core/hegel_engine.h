@@ -5,7 +5,7 @@
 /*
 ** dlopen binding to libhegel — the official C ABI of Hegel's native
 ** in-process engine (the `hegeltest-c` crate in the hegeldev/hegel
-** monorepo, header `hegel.h`; verified against libhegel 0.48.0).
+** monorepo, header `hegel.h`; verified against libhegel 0.50.0).
 **
 ** We bind at runtime via dlopen/dlsym rather than linking -lhegel,
 ** for two reasons:
@@ -178,12 +178,14 @@ typedef struct {
   int (*pool_restore)  (hg_context *, hg_tc *, hg_pool *, int64_t id);
   int (*pool_free)     (hg_context *, hg_pool *);
 
-  int (*new_state_machine) (hg_context *, hg_tc *,
-                            const hg_str * rule_names, const int64_t * rule_groups,
-                            const double * rule_weights, size_t num_rules,
-                            const hg_str * inv_names, const bool * inv_always,
-                            size_t num_invs, int64_t min_conc, int64_t max_conc,
-                            int64_t step_count, hg_sm ** out, int64_t * out_conc);
+  /* libhegel >= 0.50: create an empty machine, declare its rules and
+  ** invariants (numbered in declaration order from 0), then start it. */
+  int (*new_state_machine) (hg_context *, hg_tc *, int64_t min_conc, int64_t max_conc,
+                            int64_t step_count, hg_sm ** out);
+  int (*sm_add_rule)       (hg_context *, hg_tc *, hg_sm *, hg_str name, double weight,
+                            const int64_t * groups, size_t num_groups);
+  int (*sm_add_invariant)  (hg_context *, hg_tc *, hg_sm *, hg_str name, bool always_check);
+  int (*sm_start)          (hg_context *, hg_tc *, hg_sm *, int64_t * out_conc);
   int (*sm_next_group)          (hg_context *, hg_tc *, hg_sm *, int64_t * out_group);
   int (*sm_next_rule)           (hg_context *, hg_tc *, hg_sm *, int64_t worker, int64_t * out);
   int (*sm_rule_rejected)       (hg_context *, hg_tc *, hg_sm *, int64_t worker);
