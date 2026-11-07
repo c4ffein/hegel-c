@@ -342,3 +342,92 @@ notes = "Ran on bfa9e65 plus the then-uncommitted harness. Written knowing the b
 target = "df831e977394"
 verdict = "as-expected"
 note = "shrunk to numgrps = 0: ASan SEGV at 0x10 in cpumask_copy"
+
+# ------------------------------------------------------------- 2026-10-30 ----
+
+[[run]]
+id = "2026-10-30-scotch-pins"
+date = "2026-10-30"
+kind = "pins"
+project = "scotch"
+summary = "Scotch pins re-run while the schema layer moved to experiments/: witnesses on primitive draws, one flaky witness made reliable"
+hegel_c = "3c327bb"
+libhegel = "0.48.0"
+notes = "Not a full make test-pins: the pins whose witnesses changed that day. hgraphOrderCp ran on the tree that became c5f5e25 (witness ported to primitive draws), kgraphMapFmDomnnbr on 3c327bb (5000 cases), current on 11b87e3 plus the then-uncommitted generator helpers. Master is Scotch b4801dbf (v7.0.17)."
+
+[[run.result]]
+target = "tests/irl/scotch/pins/current.conf"
+verdict = "as-expected"
+note = "make test-props: 24 property tests green (without ASan)"
+
+[[run.result]]
+target = "scotch-hgraphordercp-disconnected"
+verdict = "as-expected"
+note = "witness now on primitive draws (endpoints drawn in [0, nvert), no % fold): red and shrunk to nvert=3 nedges=1 on 5 runs of 5 (the schema version: about 2 in 5); green on the fix"
+
+[[run.result]]
+target = "scotch-kgraphmapfm-domnnbr"
+verdict = "as-expected"
+note = "at 1000 cases the witness was flaky: red on 1 of 3 test-pin runs, 10 of 14 direct runs (main's own build too); the trigger is rare, detection deterministic. At 5000 cases: red 11 of 11, green on the fix"
+
+[[run.result]]
+target = "scotch-archsub-off-by-one"
+verdict = "as-expected"
+note = "both witnesses (test_arch_sub, and experiments/schema-with-callbacks' test_arch_sub_view): red on b4801dbf without ASan 5 of 5, shrunk to archCmplt(2) keep {1}; green on the fixed state with ASan 3 of 3. The buggy state was not re-run under ASan"
+
+[[run]]
+id = "2026-10-30-linux-pins"
+date = "2026-10-30"
+kind = "pins"
+project = "linux"
+summary = "the two Linux pins whose harness include changed with the schema layer's removal: buggy red, fixed green"
+hegel_c = "11b87e3"
+libhegel = "0.48.0"
+notes = "Checks that test_bch_random.c and test_bootconfig_rediscovery.c, whose #include \"hegel_gen.h\" went away (the HEGEL_DRAW_* shorthands moved to hegel_c.h), still build and discriminate. First run on this machine: the kernel store and four sparse worktrees were created by pin-worktree.sh; liburcu unpacked into ~/.local/urcu_extract."
+
+[[run.result]]
+target = "39ebc8d7f561"
+verdict = "as-expected"
+note = "bootconfig_rediscovery: red on the parent (HEGEL_ASSERT at test_bootconfig_rediscovery.c:420), green on the fix"
+
+[[run.result]]
+target = "010d7d984650"
+verdict = "as-expected"
+note = "bch_mod8: red on the parent (UBSan: left shift of 128 by 24 places in build_mod8_tables), green on the fix"
+
+# ------------------------------------------------------------- 2026-11-06 ----
+
+[[run]]
+id = "2026-11-06-scotch-v7-0-18"
+date = "2026-11-06"
+kind = "harness"
+project = "scotch"
+summary = "the five open Scotch witnesses on the new release v7.0.18: all five still red, archsub with a changed symptom"
+hegel_c = "11b87e3"
+libhegel = "0.48.0"
+notes = "v7.0.18 is commit 275a92121f8a (tag object 7f9dadde). Run through temporary pin files (PIN_REF = v7.0.18, PIN_EXPECT = red), the original pins' tests, ASan and environment unchanged; the temporary files were deleted. Done for the pyscotch handoff (PYSCOTCH_HANDOFF.md): pyscotch tracks 7.0.18, hegel-c's pins stop at 7.0.17."
+
+[[run.result]]
+target = "scotch-archsub-off-by-one"
+verdict = "hit"
+note = "changed, not fixed: no wild write any more; SCOTCH_archSub refuses archCmplt(2) keep {1} with rc 2. arch_sub.c:466 still passes vnumnbr; with our patch the witness is green on v7.0.18 under ASan"
+
+[[run.result]]
+target = "scotch-graphgeomloadchac-cleanup"
+verdict = "hit"
+note = "ASan heap write at graph_io_chac.c:230, as on 7.0.17"
+
+[[run.result]]
+target = "scotch-kgraphmapfm-domnnbr"
+verdict = "hit"
+note = "ASan heap read in kgraphMapFmTablGet (kgraph_map_fm.c:130), as on 7.0.17"
+
+[[run.result]]
+target = "scotch-strat-k-sigabrt"
+verdict = "hit"
+note = "ASan heap read at hgraph_order_kp.c:141, as on 7.0.17"
+
+[[run.result]]
+target = "scotch-graphpart-strat-f-d-segv"
+verdict = "hit"
+note = "SIGSEGV without ASan, as on 7.0.17"
