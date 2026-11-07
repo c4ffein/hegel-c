@@ -42,7 +42,15 @@
 #   checked     last time someone confirmed it's still upstream, and where
 #   found_by    hegel-c | by-hand | sashiko | upstream   (default hegel-c)
 #   related     [{ to = "<finding id>", rel = "introduced-by" | "masked-by" |
-#               "same-root-cause" | "covered-by" }]
+#               "same-root-cause" | "covered-by" | "incomplete-fix-of" }]
+#               introduced-by: the other one's fix CREATED this bug (a
+#               regression). incomplete-fix-of: the other one was fixed
+#               upstream, but the SAME defect is still reachable another way
+#               (input, path, caller); this entry is that residue, with its
+#               own status and pin (whose buggy state is the other one's
+#               fix). The original stays fixed-upstream: its pin still proves
+#               the case it reported. A fix of ours that falls short before
+#               it is merged is a new version of its submission, not this.
 #   notes       anything else
 #
 # [[submission]] — a patch series or bug report we sent (or drafted) upstream.

@@ -57,7 +57,7 @@ LEVELS = {"high", "medium", "low"}
 REACH = {"live", "latent", "unknown"}
 SOURCES = {"repo", "transcript", "memory"}
 FOUND_BY = {"hegel-c", "by-hand", "sashiko", "upstream"}
-RELS = {"introduced-by", "masked-by", "same-root-cause", "covered-by"}
+RELS = {"introduced-by", "masked-by", "same-root-cause", "covered-by", "incomplete-fix-of"}
 PROJECTS = {"linux", "scotch"}
 REQUIRED = ["id", "project", "where", "title", "kind", "found", "how", "confidence", "reach",
             "status", "since", "source"]
@@ -273,10 +273,43 @@ def check_folders(errors: list[str], led: dict) -> None:
 
 # ---------------------------------------------------------------- lint ----
 
+def pin_vars(ref: str) -> dict[str, str]:
+    """KEY="value" assignments of a pin file (tests/irl/<p>/pins/<pin>.conf)."""
+    out = {}
+    try:
+        text = (ROOT / path_of(ref)[0]).read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        m = re.match(r'^([A-Z_]+)="([^"]*)"', line.strip())
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def check_incomplete_fix(bad, f: dict, orig: dict) -> None:
+    """f says the fix of `orig` was incomplete: the same defect, still reachable.
+    So orig was fixed upstream, f was found after that fix, and f's pin (when it
+    names its own buggy ref) starts from orig's fix."""
+    if orig.get("status") != "fixed-upstream":
+        bad(f"incomplete-fix-of '{orig['id']}': that finding is not fixed-upstream "
+            "(an unmerged fix of ours that falls short is a new version of its submission)")
+        return
+    if f.get("found") and orig.get("since") and str(f["found"]) < str(orig["since"]):
+        bad(f"incomplete-fix-of '{orig['id']}': found {f['found']}, before that fix "
+            f"landed ({orig['since']})")
+    if f.get("pin") and orig.get("fixed_by"):
+        ref = pin_vars(f["pin"]).get("PIN_BUGGY_REF", "")
+        if ref and not (ref.startswith(orig["fixed_by"]) or orig["fixed_by"].startswith(ref)):
+            bad(f"incomplete-fix-of '{orig['id']}': the pin's PIN_BUGGY_REF ({ref}) should be "
+                f"that finding's fix ({orig['fixed_by']}), the state the residual bug lives in")
+
+
 def lint(led: dict) -> list[str]:
     errors: list[str] = []
     tracked = git_tracked()
     ids = {f.get("id") for f in led["findings"]}
+    by_id = {x["id"]: x for x in led["findings"] if x.get("id")}
     seen: set[str] = set()
 
     def check_path(bad, k: str, ref: str) -> None:
@@ -348,6 +381,8 @@ def lint(led: dict) -> list[str]:
                 bad(f"related rel '{r['rel']}' not in {sorted(RELS)}")
             elif r["to"] not in ids or r["to"] == f.get("id"):
                 bad(f"related to '{r['to']}' is not another finding")
+            elif r["rel"] == "incomplete-fix-of":
+                check_incomplete_fix(bad, f, by_id[r["to"]])
         for k in FILE_KEYS:
             if f.get(k):
                 check_path(bad, k, f[k])
@@ -843,6 +878,10 @@ def cmd_show(led: dict, args) -> int:
                 ("found", f"{x['found']} by {x['found_by']} — {x['how']}"), ("source", x["source"])]
         for r in x.get("related", []):
             rows.append(("related", f"{r['rel']} {r['to']}"))
+        for y in led["findings"]:
+            if any(r.get("to") == x["id"] and r.get("rel") == "incomplete-fix-of"
+                   for r in y.get("related", [])):
+                rows.append(("fix incomplete", f"{y['id']} ({y.get('status')})"))
         for s in submissions_of(led, x["id"]):
             rows.append(("submitted", f"{s['id']} ({s['state']})"))
         for k in ("introduced", "fixed_by"):
@@ -953,6 +992,24 @@ def submission_files(s: dict) -> dict | None:
     return {"versions": vers, "compare": cmps}
 
 
+def runs_by_finding(led: dict) -> dict[str, list[dict]]:
+    """For each finding, the runs whose results target it (by id, or by its pin
+    file), newest first: what the page shows as the finding's reports."""
+    out: dict[str, list[dict]] = {}
+    for f in led["findings"]:
+        names = {f["id"]} | ({path_of(f["pin"])[0]} if f.get("pin") else set())
+        rows = []
+        for r in led["runs"]:
+            for res in r.get("result", []):
+                if res.get("target") in names:
+                    rows.append({"run": r["id"], "date": str(r.get("date", "")),
+                                 "kind": r.get("kind", ""), "verdict": res.get("verdict", ""),
+                                 "note": res.get("note", "")})
+        if rows:
+            out[f["id"]] = sorted(rows, key=lambda x: x["date"], reverse=True)
+    return out
+
+
 def build_page(led: dict) -> tuple[str, dict]:
     """The whole page, and the linked files it knows about (path -> entry)."""
     files = {}
@@ -971,7 +1028,7 @@ def build_page(led: dict) -> tuple[str, dict]:
             "commit_url": COMMIT_URL, "lore_url": LORE_URL,
             "findings": sorted(led["findings"], key=sort_key),
             "submissions": sorted(led["submissions"], key=sub_key), "files": files,
-            "sub_files": sub_files}
+            "sub_files": sub_files, "runs_by_finding": runs_by_finding(led)}
     blob = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     blob = blob.replace("<", "\\u003c")          # no "</script>" or "<!--" can end the block
     page = UI_TEMPLATE.read_text(encoding="utf-8").replace("/*__DATA__*/", blob, 1)
