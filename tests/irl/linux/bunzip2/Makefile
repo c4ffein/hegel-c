@@ -15,8 +15,11 @@ PIN            = bunzip2
 PIN_FILES      = lib/decompress_bunzip2.c:decompress_bunzip2_pinned.c
 include ../pin.mk
 
+# Kernel headers after the system's (-idirafter): <signal.h> pulls in the
+# system's <linux/types.h>, which a plain -I would shadow with the kernel's
+# internal one (conflicting uint64_t, dev_t, ... on glibc 2.41).
 INCLUDES = -I$(REPO_ROOT) \
-           -I$(LINUX)/include
+           -idirafter $(LINUX)/include
 
 CFLAGS  ?= -O2 -g -Wall -Wextra -funwind-tables -fexceptions \
            -Wno-unused-function -Wno-unused-parameter \

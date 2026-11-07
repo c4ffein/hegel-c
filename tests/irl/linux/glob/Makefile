@@ -11,8 +11,11 @@ REPO_ROOT = $(abspath ../../../..)
 PIN       = glob
 include ../pin.mk
 
+# Kernel headers after the system's (-idirafter): a system header pulls in
+# <linux/types.h>, which a plain -I would shadow with the kernel's internal
+# one (conflicting uint64_t, dev_t, ... on glibc 2.41).
 INCLUDES = -I$(REPO_ROOT) \
-           -I$(LINUX)/include \
+           -idirafter $(LINUX)/include \
            -I$(LINUX)/lib
 
 GLOB_PRECLUDES = -include glob_compat.h
