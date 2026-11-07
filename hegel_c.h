@@ -98,7 +98,17 @@ typedef struct {
   uint32_t            skip_phases;      /* HEGEL_SKIP_* bits */
   int                 has_seed;         /* nonzero: use seed below */
   uint64_t            seed;
+  int                 report_multiple;  /* nonzero: report every distinct failure */
 } hegel_run_options;
+
+/* report_multiple: by default a run stops at its first failure (one bug
+** per run: a second one stays hidden until the first is fixed).  With it,
+** the engine keeps looking and shrinks every failure with a distinct
+** origin (each HEGEL_ASSERT's file:line, each crash signal, each
+** HEGEL_ISOLATED block); each is reported with its own reproduce line.
+** HEGEL_REPORT_MULTIPLE_FAILURES=1 in the environment does the same
+** without a code change.  Costs shrinking time per extra bug, and a crash
+** whose signal varies counts as several unless HEGEL_C_MERGE_ORIGINS=1. */
 
 /* Health checks a run may suppress (bits, as the engine's). */
 #define HEGEL_SUPPRESS_FILTER_TOO_MUCH          (1u << 0)

@@ -138,7 +138,9 @@ hegel_run_options o = { .test_cases = 1000,
 int rc = hegel_run_test_with(test_foo, &o);
 ```
 
-Fields: `test_cases`, `has_seed` + `seed`, `suppress_health` (`HEGEL_SUPPRESS_*` bits), `skip_phases` (`HEGEL_SKIP_*` bits, e.g. `HEGEL_SKIP_SHRINK`). Zero fields keep the engine default. The engine also reads `HEGEL_*` environment variables (`HEGEL_TEST_CASES`, `HEGEL_SEED`, `HEGEL_DATABASE`, ...); a field set in code wins.
+Fields: `test_cases`, `has_seed` + `seed`, `suppress_health` (`HEGEL_SUPPRESS_*` bits), `skip_phases` (`HEGEL_SKIP_*` bits, e.g. `HEGEL_SKIP_SHRINK`), `report_multiple`. Zero fields keep the engine default.
+
+By default a run reports its first failure only: a second bug in the same property stays hidden until the first is fixed. `.report_multiple = 1` (or `HEGEL_REPORT_MULTIPLE_FAILURES=1`) keeps looking and reports every failure with a distinct origin — each `HEGEL_ASSERT` location, each crash signal — shrunk, with its own reproduce line. Worth turning on when hunting bugs; it costs shrinking time per extra bug. The engine also reads `HEGEL_*` environment variables (`HEGEL_TEST_CASES`, `HEGEL_SEED`, `HEGEL_DATABASE`, ...); a field set in code wins.
 
 ### Replaying a failure
 

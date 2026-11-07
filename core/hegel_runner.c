@@ -462,7 +462,11 @@ static int report (const hg_engine * e, const hg_result * result, uint64_t run_i
       fputs (cap->lines, stdout);
       fflush (stdout);
     }
-    fprintf (stderr, "\n=== hegel-c: property test FAILED ===\n");
+    if (nf > 1)
+      fprintf (stderr, "\n=== hegel-c: property test FAILED (failure %zu of %zu) ===\n",
+               i + 1, nf);
+    else
+      fprintf (stderr, "\n=== hegel-c: property test FAILED ===\n");
     fprintf (stderr, "origin: %.*s\n", (int) origin.len, origin.data);
     if (cap && cap->msg[0]) fprintf (stderr, "message: %s\n", cap->msg);
     print_str (stderr, "caveat: ", caveat);
@@ -559,7 +563,13 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *),
   if (o->suppress_health) e->settings_set_suppress_health_check (x, s, o->suppress_health);
   if (o->skip_phases) e->settings_set_phases (x, s, HG_PHASE_ALL & ~o->skip_phases);
   e->settings_set_verbosity (x, s, HG_VERBOSITY_QUIET);
-  e->settings_set_report_multiple_failures (x, s, false);
+  /* One failure per run unless asked: the run option, or the engine's own
+  ** HEGEL_REPORT_MULTIPLE_FAILURES (left as hegel_settings_new read it). */
+  const char * multi_env = getenv ("HEGEL_REPORT_MULTIPLE_FAILURES");
+  if (o->report_multiple)
+    e->settings_set_report_multiple_failures (x, s, true);
+  else if (!(multi_env && *multi_env))
+    e->settings_set_report_multiple_failures (x, s, false);
   /* The example database is opt-in (HEGEL_DATABASE): replaying stored
   ** failures first would make runs depend on what earlier runs saw. */
   const char * db_env = getenv ("HEGEL_DATABASE");

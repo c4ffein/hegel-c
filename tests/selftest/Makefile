@@ -35,6 +35,7 @@ TESTS_PASS = test_pass_simple \
              test_run_options \
              test_reproduce_blob \
              test_target \
+             test_report_multiple \
              test_recursion_nary_tree \
              test_alloc_lifetime \
              test_recursive_tree
