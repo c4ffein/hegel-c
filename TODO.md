@@ -12,6 +12,13 @@
   state-machine creation in `core/hegel_server.c` ported to its
   declare-then-start ABI). Then say so in the README, so
   pyscotch can point its hegel-c witnesses at the tag.
+- **Engine bug: float draw between two drawn floats hits an internal error**
+  (`FloatChoice::simplest: no valid float for this choice`) in ~3% of runs,
+  on libhegel 0.48.0, 0.49.0 and 0.50.0 (`HEGEL_SEED=40` reproduces). It makes
+  `tests/from-hegel-rust/test_floats_f64_bounds` fail now and then, so
+  `make test` is red about one run in thirty for reasons not ours. Draft
+  report: `docs/upstream/float-simplest-nonzero-internal-error.md` (not
+  posted). Keep the test as is: it is the witness.
 - **libhegel coverage (2026-11-06).** hegel-c binds 69 of libhegel 0.50.0's
   157 functions; the 88 others are listed in `tools/libhegel-coverage.toml`,
   19 as deliberate (getters, our own context / label / note / replay, the
@@ -52,8 +59,9 @@
   - *An average-size knob for collections:* the engine aims for ~5
     elements whatever the max (`length_p_continue` in libhegel's
     `native/core/state.rs` derives the average from min/max only), and
-    `hegel_new_collection` takes no average. Ask upstream for one; until
-    then a drawn length is the way to get large lists.
+    `hegel_new_collection` takes no average. Issue drafted in
+    `docs/upstream/collection-average-size.md` (not posted); until then a
+    drawn length is the way to get large lists.
 - **Remote-board transport.** The wire protocol in `core/hegel_internal.h`
   is transport-shaped on purpose: run it over serial/TCP with a board in
   the child's role and a watchdog reset in fork's.

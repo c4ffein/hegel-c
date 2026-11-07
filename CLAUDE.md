@@ -29,6 +29,7 @@ Until 2026-10-30 there was a second layer, `hegel_gen.h`: a declarative schema s
 - `tests/irl/linux/` — Linux kernel bug-hunt harnesses, one per target, each built against a pinned kernel checkout (`pins/`)
 - `docs/shrinking.md` — integrated shrinking, with the Scotch reducer walkthrough
 - `docs/mpi-testing.md` — MPI integration guide
+- `docs/upstream/` — drafts of requests to upstream (hegeldev/hegel), never posted automatically: `collection-average-size.md`, `float-simplest-nonzero-internal-error.md`
 - `TODO.md` — deferred items
 - `docs/findings.toml` — ledger of bugs hegel-c found itself (Linux, Scotch) and their upstream status, plus every submission (patch series or report) with its versions and, while it waits on us, a `next` step; `make findings` / `findings-html` / `findings-serve` (0.0.0.0:8080, only the page and the files it links, rebuilt per load) / `lint-findings` (`tools/findings.py`, Python 3.11+, no deps; the page is `tools/findings_ui.html`, plain HTML/JS with the ledger and the files it links inlined as JSON: open submissions first under "to do", per-version patch tabs with colored diffs, and what changed between versions). Names bugs, so blind bug-hunt sandboxes never get it.
 - `docs/findings/<id>.md` — the write-up of a finding that has no better home (a submission or a pin): one file per finding, named after its ledger id. Lint requires a `writeup` to be there, in `submissions/` or in `tests/irl/`, and every file in `docs/findings/` to be linked, so no stray write-up lands at the root.
