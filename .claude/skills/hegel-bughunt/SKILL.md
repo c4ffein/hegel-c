@@ -206,6 +206,8 @@ Real-world example pattern: an audit that paired random strategies with a sweep 
 
 The default 100 cases is not enough for bug-hunting. Use `hegel_run_test_n(fn, 1000)` for normal runs and `make test-loop` for overnight discovery. PBT bugs that fire 5–25% of the time will surface within a few hundred to a few thousand cases — but only if the test actually runs that many.
 
+Set `HEGEL_REPORT_MULTIPLE_FAILURES=1` when hunting (or `.report_multiple = 1` in `hegel_run_options`). By default a run reports one failure — the one that shrinks smallest — and every other distinct failure the run found stays hidden until that one is fixed. With it, each distinct failure (each `HEGEL_ASSERT` site, each crash signal, each `HEGEL_ISOLATED` block) is shrunk and reported on its own, numbered "failure i of n", each with its own `reproduce:` line. Log each one as its own finding; two reports from one test are often two bugs.
+
 Watch for:
 
 - **Hard failures**: assertion fired, hegel shrunk, you have a counterexample.
