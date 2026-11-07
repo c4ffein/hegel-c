@@ -21,7 +21,8 @@ Until 2026-10-30 there was a second layer, `hegel_gen.h`: a declarative schema s
   - `hegel_runtime.c` — the public primitives as requests; `hegel__call` picks the transport (INPROC = direct call into the server, CHILD = fork parent's pipe). Also `HEGEL_ISOLATED`.
   - `hegel_runner.c` — run drivers (fork + nofork), the fork parent's serve loop, capture-by-origin failure reporting, suite API.
   - `hegel_stateful.c` — stateful driver on the engine's state machine (`hegel_new_state_machine`), shaped like hegel-rust's `run_sequential`; preconditions map onto `rule_rejected`. Works in fork and nofork mode.
-- `tests/selftest/` — 34 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK): draws, spans, shrinking, stateful, isolation and engine-protocol tests
+  - `hegel_alloc.c` — generator helpers that live in the body's process, never on the wire: `hegel_alloc` / `_realloc` / `_free` (per-case blocks linked into the test case with serial numbers; the case drivers release them after the cleanup hook) and `hegel_draw_recursive` / `hegel_recursive_child` (the recursion protocol around a node function; an over-budget attempt longjmps back and its blocks are released by serial).
+- `tests/selftest/` — 39 self-tests (PASS/FAIL/CRASH/HEALTH-CHECK/SHRINK): draws, spans, shrinking, stateful, isolation, engine-protocol and generator-helper tests
 - `tests/from-hegel-rust/` — 11 tests ported from hegel-rust (5 PASS, 6 SHRINK)
 - `tests/mpi/` — 3 MPI tests (mpiexec + MPI_Comm_spawn patterns)
 - `tests/irl/scotch/` — 3 Scotch integration tests (sequential, the `hgraphOrderCp` reducer demo, PT-Scotch MPI), a 29-test property suite (`props/`: 24 green on current master via `make test-props` / pin `current`, 5 witnesses of open bugs run by their pins) + bug pins (`pins/`; `PIN_ASAN=1` in a pin forces an ASan Scotch)
@@ -53,8 +54,7 @@ make help                       # all targets and proxy commands
 make lib                        # build build/libhegel_c.a (pure C, seconds)
 make libhegel                   # build the engine into build/libhegel.so (cargo; PREBUILT=1 downloads it)
 make check-libhegel             # engine pin: submodule tag, installed version, newer upstream release
-
-make selftest-test              # 34 tests (PASS/FAIL/CRASH/HEALTH-CHECK)
+make selftest-test              # 39 tests (PASS/FAIL/CRASH/HEALTH-CHECK/SHRINK)
 make from-hegel-rust-test       # 11 tests (5 PASS, 6 SHRINK)
 make mpi-test                   # 3 tests (needs mpicc)
 make scotch-test                # Scotch tests (needs Scotch — clone via make inspiration)
@@ -81,12 +81,16 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 
 **Draw shorthands:** `HEGEL_DRAW_INT(lo, hi)` / `HEGEL_DRAW_INT()` (full range), same for `_I64` / `_U64` / `_FLOAT` / `_DOUBLE`, and `HEGEL_DRAW_BOOL()` — the primitives for a test case named `tc` in scope; same choices, so they shrink the same.
 
-**Spans:** `hegel_start_span(tc, label)`, `hegel_stop_span(tc, discard)` — structural shrinking hints; derive labels with `hegel_label("lib.thing")` (FNV-1a, as libhegel's `hegel_label_from_name`). Users rarely call these directly; the schema API emits them automatically.
+**Spans:** `hegel_start_span(tc, label)`, `hegel_stop_span(tc, discard)` — structural shrinking hints; derive labels with `hegel_label("lib.thing")` (FNV-1a, as libhegel's `hegel_label_from_name`).
 
 **Engine protocols** (handles are `{ int64_t id; }` newtypes, ids into the server's per-case table — so they work across the fork pipe):
 - Collections: `hegel_collection_new(tc, min, max)` / `_more` / `_reject` / `_free` — engine owns the length; shrinks by element deletion.
-- Recursion: `hegel_recursion_new(tc, max_depth, max_leaves)` / `_branch` / `_leaf` / `_retry` / `_finish` / `_free` — engine owns branch probabilities and budgets (see `tests/selftest/test_recursion_tree.c`).
+- Recursion: `hegel_recursion_new(tc, max_depth, max_leaves)` / `_branch` / `_leaf` / `_retry` / `_finish` / `_free` — engine owns branch probabilities and budgets (see `tests/selftest/test_recursion_tree.c`). Prefer the helper below.
 - Pools: `hegel_pool_new` / `_add` / `_draw(consume)` / `_restore` / `_free` — ids are opaque int64s chosen by the engine (map them, don't index with them).
+
+**Generator helpers** (run in the body's process; nothing crosses the wire):
+- `hegel_alloc(tc, size)` (zeroed, max-aligned) / `hegel_realloc(tc, p, size)` (growth zeroed) / `hegel_free(tc, p)` — memory owned by the test case, freed when it ends however it ends (return, assert, assume, overrun, health failure; fork and nofork; a stateful rule's blocks last until the case ends, after teardown). Under nofork, a `HEGEL_ISOLATED` block's own blocks vanish with its child; don't `hegel_free` an earlier block inside one. See `tests/selftest/test_alloc_lifetime.c`.
+- `hegel_draw_recursive(tc, max_depth, max_leaves, node_fn, ctx)` + `hegel_recursive_child(tc)` — the recursion protocol run for you. `void *node_fn(tc, bool leaf, ctx)` builds ONE node with `hegel_alloc`; when `leaf` is false it calls `hegel_recursive_child` once per child slot. An over-budget attempt longjmps back to the top, its `hegel_alloc` blocks are freed and the engine closes its spans; each sub-value gets its own span. Rules: nodes from `hegel_alloc` only, hold nothing else across a child call, no child call from a leaf or outside a node function (health failures). Defaults `HEGEL_RECURSIVE_MAX_DEPTH` (50) / `_MAX_LEAVES` (100): ~80 nodes on average for a binary tree, same distribution as the raw protocol. See `tests/selftest/test_recursive_tree.c`, `test_recursive_shrinks.c`.
 
 **Crash isolation for a block:** `HEGEL_ISOLATED(tc) { ... }` — no draws inside (health failure), no nesting, no break/return out of it. Every failure inside a block (crash, `HEGEL_ASSERT`, `hegel_fail`) shares one origin, `HEGEL_ISOLATED at <file:line>`, so a bug that sometimes asserts and sometimes segfaults shrinks as one bug. If a plain test shrinks poorly, wrapping the code under test in a block is the fix. `HEGEL_C_MERGE_ORIGINS=1` merges every failure in a run into one origin.
 
@@ -97,9 +101,10 @@ For standalone compilation: `gcc -O2 -I. -o test test.c -Lbuild -lhegel_c -lpthr
 A generator is a C function that fills a value from draws: `void gen_graph (hegel_testcase *tc, Graph *g)`. Conventions the existing harnesses follow:
 
 - **Dependencies are variables.** Draw what a field depends on first and use it as a bound (`u = hegel_draw_int (tc, 0, g->nvert - 1)`) instead of drawing wide and clamping after (`% nvert` costs shrink quality).
-- **Spans for structure.** Wrap a list in `HEGEL_SPAN_LIST` and each element in `HEGEL_SPAN_LIST_ELEMENT` so the shrinker can delete whole elements; a struct or node in its own span (`hegel_label ("lib.thing")`). `hegel_stop_span (tc, 1)` discards a dead end.
+- **Case memory, no cleanup chains.** Allocate what the generator builds with `hegel_alloc (tc, size)` (zeroed); the case frees it on every exit path, so an assert or assume mid-generation leaks nothing in nofork mode. Keep `malloc` for memory the code under test will `free` itself.
+- **Spans for structure.** Wrap a list in `HEGEL_SPAN_LIST` and each element in `HEGEL_SPAN_LIST_ELEMENT`; a struct or node in its own span (`hegel_label ("lib.thing")`). `hegel_stop_span (tc, 1)` discards a dead end. Measured on 0.48.0 (`tests/selftest/test_span_list_shrinks.c`): a list failing on one element shrinks to that one element with or without spans; spans changed only the shrinker's work — ~40% fewer executions with variable-width elements, ~2.7x more with a nested list per element. A hint, not what makes lists shrink.
 - **Lengths:** a drawn length (`n = hegel_draw_int (tc, 0, MAX)`) gives sizes across the range; the collection protocol (`hegel_collection_*`) lets the engine own the length and reject elements (`_reject`, e.g. duplicates) but aims for ~5 elements whatever the max — use it when small lists are what you want.
-- **Recursive values** go through the recursion protocol (branch / leaf, then `_retry` when over the leaf budget and `_finish`); unwinding means freeing the half-built value. See `tests/selftest/test_recursion_tree.c` and `test_recursion_nary_tree.c`.
+- **Recursive values** go through `hegel_draw_recursive`: a node function that builds one node from `hegel_alloc` and calls `hegel_recursive_child` per child; the helper runs branch / leaf / retry / finish and frees abandoned attempts. The raw protocol, with its hand-written unwinding, is in `tests/selftest/test_recursion_tree.c` and `test_recursion_nary_tree.c`.
 - **Generate first, then isolate:** draws happen before `HEGEL_ISOLATED (tc) { ... }`, never inside.
 - **Notes for crash-prone code:** `hegel_note` the input's shape before calling the code under test, so a crash still reports it.
 

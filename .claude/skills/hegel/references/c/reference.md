@@ -5,7 +5,7 @@
 - [Setup](#setup) — vendor, static link, `gcc` flags, the engine library
 - [Test Structure](#test-structure) — runners, suites, per-case setup, run options, replaying a failure
 - [TestCase Functions](#testcase-functions) — `hegel_draw_*`, `HEGEL_DRAW_*`, `hegel_assume`, `hegel_note`, `hegel_fail`, `HEGEL_ASSERT`, `hegel_target`
-- [Writing Generators](#writing-generators) — dependent fields, arrays, spans, optionals, one-of, recursion, map / filter / flat_map
+- [Writing Generators](#writing-generators) — case memory (`hegel_alloc`), dependent fields, arrays, spans, optionals, one-of, recursion (`hegel_draw_recursive`), map / filter / flat_map
 - [C-Specific Examples](#c-specific-examples)
 - [Crash Isolation](#crash-isolation)
 - [Gotchas](#gotchas)
@@ -197,6 +197,24 @@ static void test_division(hegel_testcase *tc) {
 
 A generator is a plain C function that fills a value from draws. Every draw is recorded by the engine, so the value shrinks without any shrink code from you. There is no separate "strategy" object: dependent generation, filtering and mapping are ordinary C.
 
+### Case memory: `hegel_alloc`
+
+Allocate what a generator builds from the test case, not from `malloc`:
+
+| Function | Purpose |
+|---|---|
+| `hegel_alloc(tc, size)` | Zeroed memory, aligned for any type, owned by the test case |
+| `hegel_realloc(tc, p, size)` | Grow / shrink a block (`NULL` = alloc); new bytes are zeroed |
+| `hegel_free(tc, p)` | Release one early (optional; `NULL` is a no-op) |
+
+The case frees every block when it ends, **however** it ends — normal return, a failed `HEGEL_ASSERT`, `hegel_assume`, an overrun, a health failure — in fork and nofork mode. So generators need no cleanup code, and a failure halfway through generation leaks nothing.
+
+- Zeroed memory means no leftover garbage that differs from case to case (a source of flaky failures).
+- Don't pass a block to code that will `free()` it (a library that takes ownership): `malloc` that one yourself.
+- Don't keep a block past the test function's return.
+- In a stateful test, blocks made by a rule live until the end of the case (teardown can still read them).
+- Inside `HEGEL_ISOLATED` you may read earlier blocks and allocate new ones; don't `hegel_free` an earlier block there.
+
 ### Structs and dependent fields
 
 Draw fields in order; a field that depends on another is a bound computed from what was already drawn:
@@ -224,7 +242,7 @@ typedef struct { int *items; int n; } Bag;
 static void gen_bag(hegel_testcase *tc, Bag *b) {
     hegel_start_span(tc, HEGEL_SPAN_LIST);
     b->n = HEGEL_DRAW_INT(0, 100);
-    b->items = malloc((size_t)(b->n ? b->n : 1) * sizeof *b->items);
+    b->items = hegel_alloc(tc, (size_t)b->n * sizeof *b->items);   /* freed with the case */
     for (int i = 0; i < b->n; i++) {
         hegel_start_span(tc, HEGEL_SPAN_LIST_ELEMENT);
         b->items[i] = HEGEL_DRAW_INT();
@@ -234,7 +252,7 @@ static void gen_bag(hegel_testcase *tc, Bag *b) {
 }
 ```
 
-The spans tell the shrinker where each element starts and ends, so it can delete whole elements instead of nudging values. A drawn length covers the whole range — use it when large inputs matter.
+The spans mark where each element starts and ends. They are a hint: a list that fails because of one element shrinks to that single element with or without them, and they mostly change how much work the shrinker does to get there. A drawn length covers the whole range — use it when large inputs matter.
 
 ### Arrays: engine-owned length (collections)
 
@@ -283,46 +301,37 @@ Order the cases simplest first: the shrinker moves the tag toward 0.
 
 ### Recursive values
 
-Trees and expressions go through the engine's recursion protocol, which owns the branch probabilities, the depth cap and a leaf budget. Each sub-value asks `hegel_recursion_branch`; a leaf calls `hegel_recursion_leaf` first, and a non-zero return means the attempt outgrew its budget — unwind without drawing anything more, free the half-built value, and start again from the root:
+Trees and expressions go through `hegel_draw_recursive`. Write a node function that builds **one** node; where the node has a child, call `hegel_recursive_child(tc)`, which builds that sub-value (calling your function again) and returns it. The engine decides for every sub-value whether it is a branch or a leaf, and owns the branch probabilities, the depth cap and a leaf budget:
 
 ```c
 typedef struct Node { struct Node *left, *right; int value; } Node;   /* leaf: both NULL */
 
-static void node_free(Node *n) {
-    if (!n) return;
-    node_free(n->left); node_free(n->right); free(n);
-}
-
-/* NULL means "over the leaf budget: unwind". */
-static Node *gen_node(hegel_testcase *tc, hegel_recursion rec, uint64_t depth) {
-    Node *n = calloc(1, sizeof *n);
-    if (hegel_recursion_branch(tc, rec, depth)) {
-        n->left = gen_node(tc, rec, depth + 1);
-        if (n->left)
-            n->right = gen_node(tc, rec, depth + 1);
-        if (!n->left || !n->right) { node_free(n); return NULL; }
+static void *gen_node(hegel_testcase *tc, bool leaf, void *ctx) {
+    (void)ctx;
+    Node *n = hegel_alloc(tc, sizeof *n);          /* NOT malloc: see the rules */
+    if (leaf) {
+        n->value = HEGEL_DRAW_INT(0, 9);
         return n;
     }
-    if (hegel_recursion_leaf(tc, rec)) { free(n); return NULL; }
-    n->value = HEGEL_DRAW_INT(0, 9);
+    n->left  = hegel_recursive_child(tc);
+    n->right = hegel_recursive_child(tc);
     return n;
 }
 
-static Node *gen_tree(hegel_testcase *tc) {
-    hegel_recursion rec = hegel_recursion_new(tc, 6, 20);   /* max depth, max leaves */
-    Node *root;
-    for (;;) {
-        root = gen_node(tc, rec, 0);
-        if (!root) { hegel_recursion_retry(tc, rec); continue; }   /* discards the case when exhausted */
-        if (hegel_recursion_finish(tc, rec) == 0) break;
-        node_free(root);                                          /* rejected: start again */
-    }
-    hegel_recursion_free(tc, rec);
-    return root;
+static void test_tree(hegel_testcase *tc) {
+    Node *root = hegel_draw_recursive(tc, HEGEL_RECURSIVE_MAX_DEPTH,
+                                      HEGEL_RECURSIVE_MAX_LEAVES, gen_node, NULL);
+    /* ... property on root; no free: the case owns the nodes ... */
 }
 ```
 
-A coin flip per child with a hand-written depth cap also works, but makes much smaller trees (around 5 nodes on average) than the protocol (dozens), and the protocol's values shrink the way every other Hegel frontend's do.
+- **Arity is yours:** call `hegel_recursive_child` twice (binary), a drawn number of times (n-ary), or once per optional slot. A leaf can be a real node (above) or `NULL` when "leaf" means "absent child".
+- **Over budget, the attempt is thrown away:** `hegel_recursive_child` then does not return — it jumps back into `hegel_draw_recursive`, which frees every `hegel_alloc` block the attempt made and starts again from the root. Hence the rules: nodes from `hegel_alloc` only, and hold nothing else (a `malloc` buffer, a lock, an open file) across a child call.
+- Calling `hegel_recursive_child` from a leaf (`leaf == true`) or outside a node function is a health failure.
+- Pass per-tree context through `ctx` (e.g. a value pool or a symbol table).
+- Defaults (50 levels, 100 leaves) give dozens of nodes per tree (~80 on average for a binary tree); pass smaller budgets for small trees.
+
+Each sub-value gets its own span, so the shrinker can drop or swap whole subtrees. The raw protocol (`hegel_recursion_new` / `_branch` / `_leaf` / `_retry` / `_finish` / `_free`) is still there if you need control the helper doesn't give, but then the unwinding and freeing are yours. A coin flip per child with a hand-written depth cap also "works", but makes far smaller trees (around 5 nodes) and shrinks less like other Hegel frontends.
 
 ### map / filter / flat_map
 
@@ -336,7 +345,7 @@ None of these degrade shrinking: the engine shrinks the recorded choices and rep
 
 ### Spans
 
-Spans group the draws that make one logical thing — a list element, a struct, a variant — so the shrinker can treat them as a unit. Use the `HEGEL_SPAN_*` constants for the usual shapes, or `hegel_label("mylib.thing")` for your own (distinct generators should get distinct labels). Spans nest; always pair `hegel_start_span` / `hegel_stop_span`. `hegel_stop_span(tc, 1)` marks the span a dead end (e.g. an element you rejected).
+Spans group the draws that make one logical thing — a list element, a struct, a variant — so the shrinker can treat them as a unit (try them together, swap same-label spans). Use the `HEGEL_SPAN_*` constants for the usual shapes, or `hegel_label("mylib.thing")` for your own (distinct generators should get distinct labels). Spans nest; always pair `hegel_start_span` / `hegel_stop_span`. `hegel_stop_span(tc, 1)` marks the span a dead end (e.g. an element you rejected). They are cheap and conventional, but don't count on them to fix a poor shrink: the engine already reduces a one-bad-element list to one element without them. If a counterexample stays large, look at the generator first (draws that repair or clamp, values that depend on each other only through `%`).
 
 ## C-Specific Examples
 
@@ -357,13 +366,9 @@ Most real C libraries need more than a draw. They have multi-step setup (init ha
 static void test_inserted_keys_are_contained(hegel_testcase *tc) {
     int    cap  = HEGEL_DRAW_INT(1, 64);          /* respect library precondition */
     int    n    = HEGEL_DRAW_INT(0, 100);
-    int   *keys = NULL;
+    int   *keys = hegel_alloc(tc, (size_t)n * sizeof *keys);   /* the case frees it */
     MySet *s    = NULL;
 
-    if (n > 0) {
-        keys = malloc((size_t)n * sizeof *keys);
-        if (keys == NULL) { hegel_health_fail("keys malloc"); goto cleanup; }
-    }
     for (int i = 0; i < n; i++) keys[i] = HEGEL_DRAW_INT();
 
     s = myset_new(cap);
@@ -377,13 +382,13 @@ static void test_inserted_keys_are_contained(hegel_testcase *tc) {
     }
 
 cleanup:
-    myset_free(s);          /* NULL-safe */
-    free(keys);             /* NULL-safe per C standard */
+    myset_free(s);          /* NULL-safe; the library's own objects still need this */
 }
 ```
 
 Key patterns:
 
+- **Harness memory from `hegel_alloc`**, library objects through their own constructor / destructor. Only the latter need cleanup code.
 - **`goto cleanup`** is the C-idiomatic answer to nested early-returns. Every fail path lands at the same label; the cleanup block frees in reverse order of acquisition.
   - For libraries that initialize multiple objects each with their own destructor (handle + strategy + buffer), keep an `_inited` int per object and destroy in reverse order:
     ```c
@@ -401,7 +406,7 @@ Key patterns:
 - **NULL-safe destructors** (`myset_free`, `free`) keep the cleanup block branch-free.
 - **Document preconditions in comments** at the top of the test, not in the assertion message.
 
-In fork mode a failing case's child exits, so leaks on failure paths don't matter; free on the passing path so nofork runs and sanitizers stay quiet.
+A failed `HEGEL_ASSERT` leaves the test function without reaching `cleanup:` — `hegel_alloc` blocks are freed anyway; library objects are not. In fork mode the child exits, so that doesn't matter; in nofork runs, if a leak on the failing path bothers you or a sanitizer, record the verdict, clean up, then assert on the recorded verdict.
 
 #### When the *input* itself has a non-local invariant
 
@@ -487,6 +492,8 @@ Fork-mode notes:
 7. **No draws inside `HEGEL_ISOLATED`.** Generate first.
 8. **`hegel_target` needs a budget**: the targeting phase starts late, so ask for ~1000 cases.
 9. **A case may make about a million choices** before the engine stops it (overrun); generators that loop on draws should have bounds.
+10. **`hegel_alloc` blocks belong to the case.** Never `free()` one or hand it to code that will; never use one after the test function returns.
+11. **Recursive node functions allocate with `hegel_alloc` only** — an over-budget attempt is unwound with a jump, and only `hegel_alloc` blocks are reclaimed.
 
 ## Stateful Testing
 
@@ -537,4 +544,5 @@ int main(void) {
 - **Invariants run after every rule.**
 - **Preconditions are pure observations** — no state changes, no draws. A rule whose precondition is false, or that calls `hegel_assume(tc, 0)`, is rejected: it doesn't count as a step.
 - **Up to 64 rules and 64 invariants** per state machine.
+- **Rule memory:** `setup` has no test case, so it uses `malloc`/`calloc`; rules may `hegel_alloc` (e.g. a buffer they hang on the state). Those blocks live until the end of the case, even if the rule is rejected, and are freed after `teardown`.
 - **Handles created by earlier rules:** a variable pool (`hegel_pool_new` / `_add` / `_draw(tc, pool, consume)` / `_restore` / `_free`) lets the engine pick — and shrink — which earlier handle a rule acts on. Pool ids are opaque `int64_t`s chosen by the engine: map them to your handles, don't index arrays with them.

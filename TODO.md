@@ -9,18 +9,16 @@
 - **Imperative helpers (2026-10-30).** Main is plain generators now (the
   schema layer moved to `experiments/`, see its README). What the
   harnesses read while deciding would have used:
-  - *Per-case allocation:* `hegel_alloc (tc, size)`, freed at the end of
-    the case and on any jump out of it — every Scotch prop has a
-    `goto cleanup` chain. `core/`'s `hegel__draws_abandoned` hook already
-    runs at those points (end of a nofork case, a stateful rule that
-    assumed); fork children just exit.
-  - *A recursion helper* for hand-written generators: runs the branch /
-    leaf / retry / finish loop around a user's node function, unwinding
-    and freeing an over-budget attempt — the tricky, repetitive part of
-    `tests/selftest/test_recursion_{tree,nary_tree}.c`. The schema layer's
-    `hegel__rec` (allocation tracking + longjmp unwind,
-    `experiments/schema-with-callbacks/hegel_gen.c`) is the starting point,
-    including its fix for engine calls that jump out mid-unwind.
+  - ~~*Per-case allocation*~~ — done 2026-10-30: `hegel_alloc` /
+    `hegel_realloc` / `hegel_free` (`core/hegel_alloc.c`), released by the
+    case drivers on every exit path, in the body's process (no wire op);
+    `tests/selftest/test_alloc_lifetime.c`. Left: port the Scotch props'
+    `goto cleanup` chains where the memory isn't handed to Scotch.
+  - ~~*A recursion helper*~~ — done 2026-10-30: `hegel_draw_recursive` /
+    `hegel_recursive_child`, on `hegel_alloc` (an over-budget attempt
+    longjmps back and its blocks are released by serial; the engine closes
+    its spans). `tests/selftest/test_recursive_{tree,shrinks,misuse}.c`;
+    the raw-protocol tests stay as they are.
   - *An average-size knob for collections:* the engine aims for ~5
     elements whatever the max (`length_p_continue` in libhegel's
     `native/core/state.rs` derives the average from min/max only), and

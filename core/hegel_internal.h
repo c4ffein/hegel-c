@@ -211,6 +211,17 @@ struct HegelTestCase {
   ** (normal return or escape).  Cleared after invocation. */
   void           (* cleanup)(void * arg);
   void            * cleanup_arg;
+
+  /* hegel_alloc'd blocks of this case (hegel_alloc.c), newest first, and
+  ** the serial the next block gets.  They live in the BODY's process
+  ** (the fork child, or the runner in nofork mode) and never cross the
+  ** wire.  Released by the case driver after `cleanup`. */
+  struct hegel__alloc_hdr * allocs;
+  uint64_t                  alloc_serial;
+
+  /* Innermost hegel_draw_recursive running (hegel_alloc.c); its record
+  ** is itself a hegel_alloc block. */
+  struct hegel__recursive * recursive;
 };
 
 /* ---- Cross-file internals (hegel_runtime.c) ---- */
@@ -234,6 +245,12 @@ extern void (*hegel__case_setup)(void);
 ** case, a stateful rule that assumed) to free the draws that exit
 ** abandoned. */
 extern void (*hegel__draws_abandoned)(void);
+
+/* Per-case allocations (hegel_alloc.c).  hegel__alloc_release frees
+** every block with a serial >= mark (blocks made since tc->alloc_serial
+** read `mark`); mark 0 frees them all — the case drivers call that once
+** the case is over. */
+void hegel__alloc_release (hegel_testcase * tc, uint64_t mark);
 
 /* Terminal-outcome helpers shared by runtime + runner + stateful. */
 void hegel__escape (hegel_testcase * tc, int code);          /* longjmp or send+_exit */

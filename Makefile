@@ -43,7 +43,7 @@ CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -O2
 BUILD    = build
 CORE_SRC = core/hegel_engine.c core/hegel_server.c core/hegel_runtime.c \
-           core/hegel_runner.c core/hegel_stateful.c
+           core/hegel_runner.c core/hegel_stateful.c core/hegel_alloc.c
 CORE_OBJ = $(patsubst %.c,$(BUILD)/%.o,$(notdir $(CORE_SRC)))
 
 # Where the engine cdylib is built from.  The Hegel monorepo

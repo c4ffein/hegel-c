@@ -258,6 +258,7 @@ static int clean_child_run (uint64_t index, void (*test_fn)(hegel_testcase *))
   if (hegel__case_setup) hegel__case_setup ();
   test_fn (&tc);
   if (tc.cleanup) tc.cleanup (tc.cleanup_arg);
+  hegel__alloc_release (&tc, 0);
   fflush (NULL);
   hegel__send_terminal (tc.req_fd, tc.stop_seen ? HEGEL_OP_STOPPED : HEGEL_OP_DONE);
   _exit (0);
@@ -325,6 +326,9 @@ static void run_case_forked (hegel_case_srv * srv, void (*test_fn)(hegel_testcas
     if (hegel__case_setup) hegel__case_setup ();
     test_fn (&tc);
     if (tc.cleanup) tc.cleanup (tc.cleanup_arg);
+    /* Before the verdict, as in nofork mode.  An escape (_exit) skips
+    ** this: the process is going, and its heap with it. */
+    hegel__alloc_release (&tc, 0);
     fflush (NULL);
     hegel__send_terminal (tc.req_fd, tc.stop_seen ? HEGEL_OP_STOPPED : HEGEL_OP_DONE);
     _exit (0);
@@ -377,6 +381,10 @@ static void run_case_inproc (hegel_case_srv * srv, void (*test_fn)(hegel_testcas
     tc.cleanup = NULL;
     fn (tc.cleanup_arg);
   }
+  /* After the cleanup hook: a stateful teardown may still read blocks
+  ** its rules hung on the state. */
+  hegel__alloc_release (&tc, 0);
+  tc.recursive = NULL;
 
   switch (code) {
     case 0: break;

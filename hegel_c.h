@@ -426,7 +426,9 @@ void             hegel_collection_free   (hegel_testcase * tc, hegel_collection 
 **     exhausted), and start again from the root.
 **   - hegel_recursion_finish once the root is complete: 0 -> keep the
 **     value; 1 -> the engine discarded it: start again from the root
-**     (WITHOUT calling retry). */
+**     (WITHOUT calling retry).
+** hegel_draw_recursive (below) runs this loop for you; use the raw calls
+** only when you need control it doesn't give. */
 
 typedef struct { int64_t id; } hegel_recursion;
 
@@ -437,6 +439,109 @@ int             hegel_recursion_leaf   (hegel_testcase * tc, hegel_recursion r);
 void            hegel_recursion_retry  (hegel_testcase * tc, hegel_recursion r);
 int             hegel_recursion_finish (hegel_testcase * tc, hegel_recursion r);
 void            hegel_recursion_free   (hegel_testcase * tc, hegel_recursion r);
+
+/* ---- Per-case memory: hegel_alloc ----
+**
+** Memory owned by the test case: freed when the case ends, however it
+** ends — return, HEGEL_ASSERT / hegel_fail, hegel_assume, an engine
+** overrun, a health failure — so a generator needs no cleanup chain:
+**
+**   Graph * g   = hegel_alloc (tc, sizeof *g);
+**   g->nvert    = hegel_draw_int (tc, 1, 50);
+**   g->edges    = hegel_alloc (tc, (size_t) g->nvert * sizeof *g->edges);
+**   ...                                   // no free: the case owns them
+**
+** hegel_alloc returns zeroed memory (calloc-like: no garbage that could
+** change from case to case and make a failure flaky), aligned for any
+** type.  hegel_realloc grows or shrinks a block (NULL = hegel_alloc;
+** bytes past the old size are zeroed); hegel_free releases one early
+** (NULL is a no-op).  Out of memory, or a pointer hegel_alloc did not
+** return, is a health failure.
+**
+** Where the memory lives: in the process running the test body — the
+** forked child in fork mode (it never travels to the parent), the
+** runner in nofork mode, where a jump out of the case would otherwise
+** leak it.  In a stateful test the blocks a rule makes last until the
+** end of the case (a rule that assumes keeps them: it may have hung them
+** on the state); teardown runs before they are freed.  A HEGEL_ISOLATED
+** block may read earlier blocks and allocate its own; under the nofork
+** runner it is a forked child, which sees the earlier blocks
+** copy-on-write and whose own blocks vanish with it, while under the
+** fork runners it runs inline and its blocks are the case's.  So don't
+** hegel_free an earlier block inside one: it would be gone in one mode
+** and not the other.  A recursive generator's abandoned attempts are
+** freed as they are abandoned (see hegel_draw_recursive, below).
+**
+** Don't hand a block to code that will free() it, and don't use one
+** after the test function returns. */
+
+void * hegel_alloc   (hegel_testcase * tc, size_t size);
+void * hegel_realloc (hegel_testcase * tc, void * p, size_t size);
+void   hegel_free    (hegel_testcase * tc, void * p);
+
+/* ---- Recursive values: hegel_draw_recursive ----
+**
+** The protocol above, run for you.  Write one node function that builds
+** ONE node; where the node has a child, it calls hegel_recursive_child,
+** which runs the protocol for that sub-value (calling the node function
+** again) and returns what it built:
+**
+**   typedef struct Expr { int op; int val; struct Expr * a, * b; } Expr;
+**
+**   static void * gen_expr (hegel_testcase * tc, bool leaf, void * ctx)
+**   {
+**     Expr * e = hegel_alloc (tc, sizeof *e);       // case-owned, zeroed
+**     if (leaf) {                                   // no children here
+**       e->val = hegel_draw_int (tc, 0, 9);
+**       return e;
+**     }
+**     e->op = hegel_draw_int (tc, 1, 2);            // '+' or '*'
+**     e->a = hegel_recursive_child (tc);
+**     e->b = hegel_recursive_child (tc);
+**     return e;
+**   }
+**
+**   Expr * root = hegel_draw_recursive (tc, HEGEL_RECURSIVE_MAX_DEPTH,
+**                                       HEGEL_RECURSIVE_MAX_LEAVES, gen_expr, NULL);
+**
+** The engine decides, for the root and for every child, whether it is a
+** branch (leaf = false: the node may call hegel_recursive_child, any
+** number of times — a fixed arity, a drawn one, per optional slot) or a
+** leaf (leaf = true: build it without children; returning NULL is fine
+** when "leaf" means "absent").  It owns the branch probabilities, the
+** depth cap and the leaf budget, as in every Hegel frontend.  When an
+** attempt outgrows the leaf budget, hegel_recursive_child does not
+** return: it jumps back into hegel_draw_recursive, which frees every
+** hegel_alloc block made since the attempt began, has the engine close
+** the spans left open, and builds the value again from the root (the
+** engine discards the case once attempts run out).  Each sub-value is
+** wrapped in its own span, so the shrinker can drop or swap subtrees.
+**
+** Rules (the price of the unwind):
+**   - allocate nodes with hegel_alloc, never malloc: an unwound attempt
+**     frees its hegel_alloc blocks; anything else leaks.  The value is
+**     the test case's — don't free it (hegel_free is allowed);
+**   - across a hegel_recursive_child call, hold nothing the unwind would
+**     leak or leave half-done (a malloc'd buffer, a lock, a file, a
+**     global you restore afterwards);
+**   - call hegel_recursive_child only from inside a node function, and
+**     not when leaf is true (both are health failures);
+**   - a draw in a node function that discards the case (hegel_assume)
+**     discards the whole case, not just the node.
+** A node function may run a hegel_draw_recursive of its own (a tree of
+** trees); hegel_recursive_child always means the innermost one.
+** Defaults: 100 leaves is hegel-rust's recursive-generator budget, 50
+** levels the retired schema layer's HEGEL_SELF cap; with them a binary
+** tree averages ~80 nodes (tests/selftest/test_recursive_tree.c). */
+
+#define HEGEL_RECURSIVE_MAX_DEPTH   50
+#define HEGEL_RECURSIVE_MAX_LEAVES 100
+
+typedef void * (*hegel_recursive_fn) (hegel_testcase * tc, bool leaf, void * ctx);
+
+void * hegel_draw_recursive  (hegel_testcase * tc, uint64_t max_depth, uint64_t max_leaves,
+                              hegel_recursive_fn node, void * ctx);
+void * hegel_recursive_child (hegel_testcase * tc);
 
 /* ---- Variable pools ----
 **

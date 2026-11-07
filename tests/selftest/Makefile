@@ -35,7 +35,9 @@ TESTS_PASS = test_pass_simple \
              test_run_options \
              test_reproduce_blob \
              test_target \
-             test_recursion_nary_tree
+             test_recursion_nary_tree \
+             test_alloc_lifetime \
+             test_recursive_tree
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -64,9 +66,16 @@ TESTS_CRASH = test_crash_segfault \
 # ok" marker the test prints).
 TESTS_HEALTH = test_filter_too_much \
                test_filter_too_much_suite \
-               test_isolated_draw_inside
+               test_isolated_draw_inside \
+               test_recursive_misuse
 
-ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH)
+# Tests that should FAIL and report a specific shrunk result: exit
+# non-zero AND print a line "shrunk: <X>" where <X> is the text after
+# "EXPECTED_SHRINK:" in the test's header comment.
+TESTS_SHRINK = test_recursive_shrinks \
+               test_span_list_shrinks
+
+ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH) $(TESTS_SHRINK)
 
 .PHONY: FORCE help all clean test hegel-c-lib check-license
 
@@ -169,6 +178,26 @@ test: all check-license
 			errors=$$((errors + 1)); \
 		else \
 			echo "OK (exit $$rc, message visible)"; \
+			passed=$$((passed + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "==== SHRINK tests (must exit non-zero AND print the expected shrunk result) ===="; \
+	for t in $(TESTS_SHRINK); do \
+		total=$$((total + 1)); \
+		printf "  %-30s" "$$t"; \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
+		rc=$$?; \
+		got=$$(echo "$$output" | sed -n 's/^shrunk: *//p' | head -1); \
+		expected=$$(grep 'EXPECTED_SHRINK:' $(CURDIR)/$$t.c | head -1 | sed 's/.*EXPECTED_SHRINK: *//'); \
+		if [ $$rc -eq 0 ]; then \
+			echo "FAIL — expected non-zero exit but got 0"; \
+			errors=$$((errors + 1)); \
+		elif [ "$$got" != "$$expected" ]; then \
+			echo "WRONG SHRINK (got '$$got', expected '$$expected')"; \
+			errors=$$((errors + 1)); \
+		else \
+			echo "OK (shrunk: $$got)"; \
 			passed=$$((passed + 1)); \
 		fi; \
 	done; \

@@ -166,9 +166,14 @@ static int run_rule (hegel_state_machine * sm, int rule, void * state, hegel_tes
 {
   jmp_buf rule_env;
   jmp_buf * saved = tc->rule_escape;
+  struct hegel__recursive * saved_rec = tc->recursive;
   tc->rule_escape = &rule_env;
   if (setjmp (rule_env) != 0) {
     tc->rule_escape = saved;
+    /* A hegel_draw_recursive the rule was in is gone; its blocks (and
+    ** the rule's other hegel_alloc blocks) stay until the case ends —
+    ** the rule may have hung some on the state. */
+    tc->recursive = saved_rec;
     if (hegel__draws_abandoned) hegel__draws_abandoned ();
     return 0;
   }
