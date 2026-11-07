@@ -24,10 +24,10 @@ already built harnesses for (`harness_dir`), which we've *found ourselves*
 Sashiko's corpus is far larger and unbiased. Neither subsumes the other.
 
 Bugs hegel-c found itself are tracked with their upstream status in
-`docs/findings.toml`; their targets here point at it (`finding = ...`) and
-their `found-*` status mirrors it (lint checks). Each target's fields are
-documented in the file's header; `make lint-findings` checks them, that each
-harness has a pin and that the pin names the same fix.
+c4ffein/bugs (private); their targets here name the bug by uuid
+(`bug = "bugs:<uuid>"`), and their `found-*` status follows its state there.
+Each target's fields are documented in the file's header; `make lint-runs`
+checks them, that each harness has a pin and that the pin names the same fix.
 
 `status` in our corpus (hunter-visible, so it never describes the bug):
 
@@ -43,7 +43,7 @@ What each run found (the 2026-05-25 run, the 2026-07-12 re-run that found
 hints leaking through harness Makefile comments, the 2026-10-19 pin runs that
 exposed fake hits) is in `docs/runs.toml`, one verdict per target per run,
 keyed by the `fixed_by` SHA here; `make runs` shows the table. Runs name bugs,
-so like the findings ledger they never reach a hunter.
+so like the bug tracker they never reach a hunter.
 
 ## The pipeline
 

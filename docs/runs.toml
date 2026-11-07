@@ -5,10 +5,12 @@
 # Runs: each time we pointed hegel-c (and the bughunt skill) at bugs and
 # recorded what it found. The question it answers: does a newer hegel-c,
 # libhegel, skill or model still find what an older one found?
-# docs/findings.toml says what each bug is; this file says which runs found it.
+# c4ffein/bugs (private) says what each bug is; this file says which runs found
+# it, naming a bug as bugs:<uuid> (the slug next to it, in a comment, is for
+# reading). Until 2026-11-07 they were finding ids in docs/findings.toml.
 #
 # View it:   make runs              (targets x runs table, regressions flagged)
-# Check it:  make lint-findings     (also checks this file)
+# Check it:  make lint-runs         (tools/runs.py; also checks docs/corpus.toml)
 #
 # This file names bugs: blind bug-hunt sandboxes must never see it, nor
 # docs/runs/ (scripts/setup-bughunt-sandbox.sh copies an allow-list).
@@ -33,13 +35,13 @@
 #   hegel_c   hegel-c commit it ran on      libhegel   engine version
 #   model     model of the agents           skill      skill commit
 #   dir       docs/runs/<id>: report, briefs, anything needed to re-run it
-#   found     [finding ids] it turned up, targeted or not (withdrawn ones too:
+#   found     [bugs:<uuid>] it turned up, targeted or not (withdrawn ones too:
 #             a false positive is a result)
 #   notes
 #
 # [[run.result]] — one per target:
-#   target        a fixed_by SHA from docs/corpus.toml, a finding id from
-#                 docs/findings.toml, or a pin file (tests/irl/<p>/pins/x.conf)
+#   target        a fixed_by SHA from docs/corpus.toml, a bugs:<uuid>, or a pin
+#                 file (tests/irl/<p>/pins/x.conf)
 #   verdict       blind-recall, harness:
 #                   hit | partial | miss | false-positive
 #                   (false-positive: reported a bug that isn't one, and missed)
@@ -66,7 +68,11 @@ kind = "blind-recall"
 project = "linux"
 summary = "10 akpm-validated lib/ bugs, fixes reverted, one fresh agent each: 7 hit / 1 partial / 2 miss"
 blind = "leaked"
-found = ["linux-sg-split-overshoot", "linux-maple-prealloc-sticky-flag", "linux-maple-prealloc-leak"]
+found = [
+  "bugs:71acc20d-6b6a-442b-8cc0-eac58ec805dc",  # linux-sg-split-overshoot
+  "bugs:a133eb69-de84-41fd-bac5-806105954c99",  # linux-maple-prealloc-sticky-flag
+  "bugs:5c6805e8-3c75-45e9-8bb1-f1c820f6bed9",  # linux-maple-prealloc-leak
+]
 notes = "No judge stage, so blind credit was never assessed. The July re-run found that the harness Makefile comments described the bug for 7 of 10 targets, so the blind claim is overstated. The briefs were not kept."
 
 [[run.result]]
@@ -130,7 +136,12 @@ summary = "same 10 targets, hunters must also write the fix, informed judge per 
 blind = "leaked"
 baseline = "2026-05-25-blind"
 dir = "docs/runs/2026-07-12-blind-rerun"
-found = ["linux-ida-find-first-range", "linux-xa-store-range-ulong-max", "linux-bunzip2-get-bits-overread", "linux-maple-prealloc-leak"]
+found = [
+  "bugs:1b7c75d1-a6e7-46ce-b6d9-ef4d539aebad",  # linux-ida-find-first-range
+  "bugs:579dcf2b-d780-42cd-8fd7-533dd2145b0d",  # linux-xa-store-range-ulong-max
+  "bugs:949c9c0a-784a-4751-bab2-cd79e81c630c",  # linux-bunzip2-get-bits-overread
+  "bugs:5c6805e8-3c75-45e9-8bb1-f1c820f6bed9",  # linux-maple-prealloc-leak
+]
 notes = "Found the Makefile-comment leak (7 severe, 3 mild); only the 3 mild-leak targets can earn blind credit. Before the run, idr and maple_tree_rediscovery snapshots still had their fixes applied and were reverted to the buggy state."
 
 [[run.result]]
@@ -200,7 +211,9 @@ kind = "hunt"
 project = "linux"
 summary = "round-trip oracle sweep of lib/ (6 agents ranked targets), then a pilot on lib/packing.c"
 dir = "docs/runs/2026-07-12-roundtrip-hunt"
-found = ["linux-packing-le-oob"]
+found = [
+  "bugs:37ea9b3e-1401-4bc5-baa2-c92cfd7d1b16",  # linux-packing-le-oob
+]
 
 [[run]]
 id = "2026-07-12-harness"
@@ -215,7 +228,7 @@ verdict = "hit"
 note = "shrunk to alloc(0,1) on IDR_INIT_BASE(1): id=1 > max=0"
 
 [[run.result]]
-target = "linux-packing-le-oob"
+target = "bugs:37ea9b3e-1401-4bc5-baa2-c92cfd7d1b16"  # linux-packing-le-oob
 verdict = "hit"
 note = "ASan heap-buffer-overflow on a buffer whose size is not a multiple of 4"
 
@@ -293,38 +306,38 @@ verdict = "as-expected"
 note = "24 property tests green under ASan"
 
 [[run.result]]
-target = "scotch-archbuild-double-base"
+target = "bugs:8f156fba-4995-4a6e-be47-44584527394b"  # scotch-archbuild-double-base
 verdict = "as-expected"
 note = "upstream's first fix still red"
 
 [[run.result]]
-target = "scotch-archbuild-pairing"
+target = "bugs:712f9873-3006-408a-a11d-ef29ad67df60"  # scotch-archbuild-pairing
 verdict = "as-expected"
 
 [[run.result]]
-target = "scotch-hgraphordercp-disconnected"
+target = "bugs:504ebef2-f8b7-47e1-bc98-bfb9582ed5ec"  # scotch-hgraphordercp-disconnected
 verdict = "as-expected"
 note = "shrunk to nvert=3 nedges=1"
 
 [[run.result]]
-target = "scotch-archsub-off-by-one"
+target = "bugs:d534518d-56dc-4d32-96ed-85e582e37333"  # scotch-archsub-off-by-one
 verdict = "as-expected"
 
 [[run.result]]
-target = "scotch-graphgeomloadchac-cleanup"
+target = "bugs:3bd2eaf9-6465-4c85-8165-f96a35351ef4"  # scotch-graphgeomloadchac-cleanup
 verdict = "as-expected"
 
 [[run.result]]
-target = "scotch-kgraphmapfm-domnnbr"
+target = "bugs:db3640cf-3a04-42bd-aa89-38b196107b4a"  # scotch-kgraphmapfm-domnnbr
 verdict = "as-expected"
 
 [[run.result]]
-target = "scotch-strat-k-sigabrt"
+target = "bugs:a2b10110-363c-4761-811d-faf6c1b3b805"  # scotch-strat-k-sigabrt
 verdict = "as-expected"
 note = "open bug: red on master"
 
 [[run.result]]
-target = "scotch-graphpart-strat-f-d-segv"
+target = "bugs:5f94dd6a-6ae5-4751-9b98-ce7355f79901"  # scotch-graphpart-strat-f-d-segv
 verdict = "as-expected"
 note = "open bug: red on master"
 
@@ -361,17 +374,17 @@ verdict = "as-expected"
 note = "make test-props: 24 property tests green (without ASan)"
 
 [[run.result]]
-target = "scotch-hgraphordercp-disconnected"
+target = "bugs:504ebef2-f8b7-47e1-bc98-bfb9582ed5ec"  # scotch-hgraphordercp-disconnected
 verdict = "as-expected"
 note = "witness now on primitive draws (endpoints drawn in [0, nvert), no % fold): red and shrunk to nvert=3 nedges=1 on 5 runs of 5 (the schema version: about 2 in 5); green on the fix"
 
 [[run.result]]
-target = "scotch-kgraphmapfm-domnnbr"
+target = "bugs:db3640cf-3a04-42bd-aa89-38b196107b4a"  # scotch-kgraphmapfm-domnnbr
 verdict = "as-expected"
 note = "at 1000 cases the witness was flaky: red on 1 of 3 test-pin runs, 10 of 14 direct runs (main's own build too); the trigger is rare, detection deterministic. At 5000 cases: red 11 of 11, green on the fix"
 
 [[run.result]]
-target = "scotch-archsub-off-by-one"
+target = "bugs:d534518d-56dc-4d32-96ed-85e582e37333"  # scotch-archsub-off-by-one
 verdict = "as-expected"
 note = "both witnesses (test_arch_sub, and experiments/schema-with-callbacks' test_arch_sub_view): red on b4801dbf without ASan 5 of 5, shrunk to archCmplt(2) keep {1}; green on the fixed state with ASan 3 of 3. The buggy state was not re-run under ASan"
 
@@ -408,27 +421,27 @@ libhegel = "0.48.0"
 notes = "v7.0.18 is commit 275a92121f8a (tag object 7f9dadde). Run through temporary pin files (PIN_REF = v7.0.18, PIN_EXPECT = red), the original pins' tests, ASan and environment unchanged; the temporary files were deleted. Done for the pyscotch handoff (PYSCOTCH_HANDOFF.md): pyscotch tracks 7.0.18, hegel-c's pins stop at 7.0.17."
 
 [[run.result]]
-target = "scotch-archsub-off-by-one"
+target = "bugs:d534518d-56dc-4d32-96ed-85e582e37333"  # scotch-archsub-off-by-one
 verdict = "hit"
 note = "changed, not fixed: no wild write any more; SCOTCH_archSub refuses archCmplt(2) keep {1} with rc 2. arch_sub.c:466 still passes vnumnbr; with our patch the witness is green on v7.0.18 under ASan"
 
 [[run.result]]
-target = "scotch-graphgeomloadchac-cleanup"
+target = "bugs:3bd2eaf9-6465-4c85-8165-f96a35351ef4"  # scotch-graphgeomloadchac-cleanup
 verdict = "hit"
 note = "ASan heap write at graph_io_chac.c:230, as on 7.0.17"
 
 [[run.result]]
-target = "scotch-kgraphmapfm-domnnbr"
+target = "bugs:db3640cf-3a04-42bd-aa89-38b196107b4a"  # scotch-kgraphmapfm-domnnbr
 verdict = "hit"
 note = "ASan heap read in kgraphMapFmTablGet (kgraph_map_fm.c:130), as on 7.0.17"
 
 [[run.result]]
-target = "scotch-strat-k-sigabrt"
+target = "bugs:a2b10110-363c-4761-811d-faf6c1b3b805"  # scotch-strat-k-sigabrt
 verdict = "hit"
 note = "ASan heap read at hgraph_order_kp.c:141, as on 7.0.17"
 
 [[run.result]]
-target = "scotch-graphpart-strat-f-d-segv"
+target = "bugs:5f94dd6a-6ae5-4751-9b98-ce7355f79901"  # scotch-graphpart-strat-f-d-segv
 verdict = "hit"
 note = "SIGSEGV without ASan, as on 7.0.17"
 

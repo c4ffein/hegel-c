@@ -12,13 +12,11 @@
   state-machine creation in `core/hegel_server.c` ported to its
   declare-then-start ABI). Then say so in the README, so
   pyscotch can point its hegel-c witnesses at the tag.
-- **Engine bug: float draw between two drawn floats hits an internal error**
-  (`FloatChoice::simplest: no valid float for this choice`) in ~3% of runs,
-  on libhegel 0.48.0, 0.49.0 and 0.50.0 (`HEGEL_SEED=40` reproduces). It makes
-  `tests/from-hegel-rust/test_floats_f64_bounds` fail now and then, so
-  `make test` is red about one run in thirty for reasons not ours. Draft
-  report: `docs/upstream/float-simplest-nonzero-internal-error.md` (not
-  posted). Keep the test as is: it is the witness.
+- **`make test` is red about one run in thirty, from an engine bug** —
+  `bugs:8c229d24-4b71-4e69-b782-ddcf94bbf1fd` (libhegel-float-simplest-nonzero,
+  in c4ffein/bugs, with its draft report): a float drawn between two drawn
+  floats hits a libhegel internal error (0.48.0 to 0.50.0, `HEGEL_SEED=40`).
+  `tests/from-hegel-rust/test_floats_f64_bounds` is its witness: keep it as is.
 - **libhegel coverage (2026-11-06).** hegel-c binds 69 of libhegel 0.50.0's
   157 functions; the 88 others are listed in `tools/libhegel-coverage.toml`,
   19 as deliberate (getters, our own context / label / note / replay, the
@@ -133,8 +131,8 @@
   lack), `Fixes:` sha exists — builds the cover letter from the ledger
   entries, and writes `.eml` files for the human to read and send (`sm
   send-patches` or `b4`/`git send-email`). Says all of this up front. Build on
-  `b4` rather than beside it; keep the submission entries in
-  `docs/findings.toml` in step.
+  `b4` rather than beside it; keep the submission entries in c4ffein/bugs
+  (`data/submissions/`) in step.
 - **Sashiko integration in that pipeline.** Run a Sashiko review of our own
   series *before* sending (akpm pointed us at Sashiko's review of sg_split v1
   and v2: it found the zero-nents OOB and bug 4 — both pre-existing — that our
@@ -171,41 +169,24 @@
   (contract boundaries, output well-formedness, conservation, error path
   leaves outputs untouched; bug 4 and bug 5 were each a missing family), and
   each claim in the commit message mapped to the property that backs it.
-- **Private ledger overlay: undisclosed bugs and drafts, public once sent.**
-  This repo is public, and `submissions/` and `docs/findings.toml` disclose
-  every bug they name. Wanted: a second ledger for what isn't reported yet,
-  with the same tools, that moves entries to the public one when they go out.
-  Shape (2026-10-25 discussion): a *private git repo checked out at a
-  gitignored path* (`private/`, or `$HEGEL_FINDINGS_PRIVATE`), holding its own
-  `findings.toml` and `submissions/<id>/`. Not a submodule: a submodule records
-  its URL, name and every bump in the public history (that leaks that
-  undisclosed work exists, and when it moved) and public CI can't clone it.
-  Pieces: `findings.py` overlays the private ledger when present (one id
-  namespace, lint across both, a public entry may not point at a private id);
-  the page badges private entries and its title says "includes private";
-  `findings.py promote <id>` moves an entry and its folder to the public side
-  (the commit is the disclosure); `serve` warns louder when private entries are
-  loaded and bound to 0.0.0.0; blind bug-hunt sandboxes get neither ledger.
-  Open: finding ids leaking through `related` links or notes; whether pins for
-  undisclosed bugs (`tests/irl/*/pins/*.conf`) go private too (they name the
-  bug as much as the ledger does).
 - **Make the sg_split v3-agent evidence rerunnable.** The tests behind
-  `submissions/linux-sg-split-series/v3-agent/REPORT.md` are archived in its
-  `evidence/` as they ran in a throwaway sandbox (comments say `work/v3x/`).
+  `data/submissions/linux-sg-split-series/v3-agent/REPORT.md` in c4ffein/bugs
+  are archived in its `evidence/` as they ran in a throwaway sandbox (comments say `work/v3x/`).
   Wire them into `tests/irl/linux/sg_split/` as a target that applies a
   version folder's patches to the pin worktree and runs the extended suite,
   the fake-page / i386 properties (needs an i386 sysroot: fetch the Debian
   debs like `build32.sh` says) and the mutation run. Then any version folder
   can be re-checked after a container loss.
-- **`make check-findings`: re-run each finding's pin against upstream** (mainline +
+- **`make check-pins-upstream`: re-run each bug's pin against upstream** (mainline +
   linux-next for Linux, master for Scotch) and report what changed ("no longer
   reproduces upstream: probably fixed, go look"). Needs a shared, refreshed
   checkout at upstream's latest commit (the ~15 s per new kernel commit adds up),
-  and pins for the findings that have none (maple rewalk NULL deref, most Scotch
-  entries). Today's checks of `docs/findings.toml` were by hand (2026-10-22).
-- **Re-verify the Scotch entries marked `memory` / `transcript`** in
-  `docs/findings.toml` against current Scotch (line numbers moved since April),
-  and give the real ones pins.
+  and pins for the bugs that have none (maple rewalk NULL deref, most Scotch
+  entries). The checks recorded in the bugs' files were by hand (2026-10-22);
+  c4ffein/bugs plans the same from its side (PLAN Phase 5, witnesses run).
+- **Re-verify the Scotch bugs imported from `memory` / `transcript` sources**
+  (in c4ffein/bugs) against current Scotch (line numbers moved since April),
+  and give the real ones pins here.
 - **Real harness for `mab_calc_split`** (`4f6a6bed0bfe`, corpus candidate):
   a buggy snapshot at the fix's parent (the fix spans several functions, so
   no single-line revert) and a stateful property that drives node splits and

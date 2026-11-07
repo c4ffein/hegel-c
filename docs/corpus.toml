@@ -4,12 +4,12 @@
 #
 # Rediscovery targets: bugs our hunting should be able to find again.
 # Upstream-fixed bugs are keyed by their fix commit; bugs hegel-c found itself
-# point at their entry in docs/findings.toml. docs/runs.toml records what each
+# by their uuid in c4ffein/bugs (bugs:<uuid>). docs/runs.toml records what each
 # run found, per target; docs/rediscovery-corpus.md explains how targets are
 # picked and how this file merges with sashiko's corpus.
 #
 # View it:   make runs              (targets x runs)
-# Check it:  make lint-findings     (also checks this file)
+# Check it:  make lint-runs         (tools/runs.py; also checks docs/runs.toml)
 #
 # This file describes bugs: blind bug-hunt sandboxes must never see it.
 # tools/merge-corpus.py hands hunters only fixed_by, subsystem, tier,
@@ -17,7 +17,7 @@
 #
 # [[target]] fields (required first):
 #   fixed_by    upstream fix commit (12+ hex)       } exactly one of the two
-#   finding     id in docs/findings.toml (our find)  }
+#   bug         bugs:<uuid> (ours, in c4ffein/bugs) }
 #   title       one line
 #   subsystem   e.g. lib/maple_tree
 #   classes     [leak | uaf | double-free | oob | overflow | off-by-one |
@@ -32,13 +32,13 @@
 #               missed         a harness exists but never reaches the bug
 #               found-novel / found-and-submitted
 #                              our own find, not yet reported / reported
-#                              (mirrors the finding's status)
+#                              (as the bug's state in c4ffein/bugs)
 # Optional:
 #   fixed       YYYY-MM-DD of the fix          author   who fixed it
 #   source      where we found it (git log, a syzbot URL)
 #   harness_dir tests/irl/<project>/<dir>      pin   its pin file
 #   effort      ready | small | medium | large (to build a harness, at pick time)
-#   mechanism   what goes wrong (for findings: see docs/findings.toml)
+#   mechanism   what goes wrong (for our finds: see the bug in c4ffein/bugs)
 #   harness     how a harness can reach it
 #   property    what a test should check
 #   why         why it's a good target
@@ -370,7 +370,7 @@ and misses the next one (17 + 16 = 33 skips 32). cachestat() returns wrong \
 values."""
 property = "iterating with pauses visits every index of the entry and the next entry"
 why = "Needs a pause mid-entry; pausing only at aligned bases never triggers it."
-notes = "Upstream's fix is itself incomplete: finding linux-xas-pause-sibling."
+notes = "Upstream's fix is itself incomplete: bug linux-xas-pause-sibling in c4ffein/bugs."
 
 [[target]]
 fixed_by = "010d7d984650"
@@ -485,7 +485,7 @@ why = "Throw bytes at a parser and watch the sanitizer."
 # ----------------------------------------------------------- our own finds ----
 
 [[target]]
-finding = "linux-sg-split-overshoot"
+bug = "bugs:71acc20d-6b6a-442b-8cc0-eac58ec805dc"  # linux-sg-split-overshoot
 title = "sg_calculate_split() nb_splits overshoot on partial coverage"
 subsystem = "lib/sg_split"
 classes = ["wrong-result"]
@@ -496,7 +496,7 @@ harness_dir = "tests/irl/linux/sg_split"
 pin = "tests/irl/linux/pins/sg_split.conf"
 
 [[target]]
-finding = "linux-packing-le-oob"
+bug = "bugs:37ea9b3e-1401-4bc5-baa2-c92cfd7d1b16"  # linux-packing-le-oob
 title = "pack() / unpack() heap OOB with LITTLE_ENDIAN and a buffer not a multiple of 4"
 subsystem = "lib/packing"
 classes = ["oob"]

@@ -91,6 +91,8 @@ MPI tests use `MPI_Comm_spawn` — no `mpiexec` required for spawn tests. See [d
 
 The Scotch IRL suite is the real-world proof. [`tests/irl/scotch/props/`](tests/irl/scotch/props/) holds one property per Scotch API area over shared graph generators; [`tests/irl/scotch/test_graph_order_shrink.c`](tests/irl/scotch/test_graph_order_shrink.c) rediscovers a real bug in `SCOTCH_graphOrder` from random graphs and shrinks to the 3-vertex minimum. See [`docs/shrinking.md`](docs/shrinking.md) for the walkthrough.
 
+The bugs hegel-c finds (in Linux, Scotch and libhegel) are tracked in [c4ffein/bugs](https://github.com/c4ffein/bugs), a private repo: write-ups, patches as sent, upstream state. What stays here is what keeps hegel-c honest: each bug's pin under `tests/irl/*/pins/` (red on the buggy code, green on the fix when there is one), naming its bug by uuid (`PIN_BUG`), and the run log (`docs/runs.toml`, `make runs`).
+
 ## License
 
 hegel-c itself — the library (`hegel_c.h`, `core/`), its tests,

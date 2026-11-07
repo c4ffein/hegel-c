@@ -81,7 +81,7 @@ PREBUILT ?=
 LIBHEGEL_FLAVOR    = $(if $(PREBUILT),prebuilt,source)
 LIBHEGEL_TAGGED    = $(BUILD)/libhegel-$(LIBHEGEL_VERSION)-$(LIBHEGEL_FLAVOR).so
 
-.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-libhegel-upstream check-libhegel-coverage check-reuse findings runs findings-html findings-open findings-serve lint-findings clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
+.PHONY: FORCE help lib libhegel clean-lib inspiration clean-inspiration check-sashiko check-libhegel check-libhegel-upstream check-libhegel-coverage check-reuse runs lint-runs clean-cores docs-check docs-fix test selftest-% from-hegel-rust-% scotch-% mpi-% bench-% docs-%
 
 help:
 	@echo "hegel-c Makefile"
@@ -96,12 +96,8 @@ help:
 	@echo "                                (tools/libhegel-coverage.toml); LIBHEGEL_VERSION=<new> before a bump, COVERAGE_ARGS=--list"
 	@echo "  check-sashiko                 Report whether upstream sashiko moved past our pinned SHA (see docs/sashiko-gap-analysis.md)"
 	@echo "  check-reuse                   Lint per-file licensing against REUSE.toml + LICENSES/ (needs reuse or uvx)"
-	@echo "  findings                      List the bugs hegel-c found (docs/findings.toml); FINDINGS_ARGS=\"--open\" etc."
-	@echo "  findings-html                 Write build/findings.html from docs/findings.toml"
-	@echo "  findings-open                 findings-html, then open the page in your browser"
-	@echo "  findings-serve                Serve the findings page on 0.0.0.0:8080 (FINDINGS_HOST / FINDINGS_PORT)"
 	@echo "  runs                          Targets x runs from docs/runs.toml (what each bug-finding run found), regressions flagged"
-	@echo "  lint-findings                 Check docs/findings.toml, docs/runs.toml and submissions/; run in CI"
+	@echo "  lint-runs                     Check docs/runs.toml, docs/corpus.toml and the pins' PIN_BUG; run in CI"
 	@echo "  clean-cores                   Remove core dumps from repo root (core.*)"
 	@echo ""
 	@echo "Proxy targets (forwarded to sub-Makefiles):"
@@ -418,28 +414,16 @@ COVERAGE_ARGS ?=
 check-libhegel-coverage:
 	@python3 tools/libhegel-coverage.py $(LIBHEGEL_VERSION) $(COVERAGE_ARGS)
 
-# The findings ledger: bugs hegel-c found itself (tools/findings.py, Python 3.11+).
-findings:
-	@python3 tools/findings.py $(FINDINGS_ARGS)
-
-findings-html:
-	@python3 tools/findings.py html
-
-findings-open: findings-html
-	@if command -v xdg-open >/dev/null 2>&1; then xdg-open build/findings.html >/dev/null 2>&1 & \
-	elif command -v open >/dev/null 2>&1; then open build/findings.html; \
-	else echo "open file://$(CURDIR)/build/findings.html in a browser"; fi
-
-FINDINGS_HOST ?= 0.0.0.0
-FINDINGS_PORT ?= 8080
-findings-serve:
-	@python3 tools/findings.py serve --host $(FINDINGS_HOST) --port $(FINDINGS_PORT)
-
+# The bugs hegel-c finds are tracked in c4ffein/bugs (private).  What stays
+# here names them by uuid: docs/runs.toml (each bug-finding run and its
+# verdicts), docs/corpus.toml (rediscovery targets) and the pins' PIN_BUG.
+# tools/runs.py, Python 3.11+; with a c4ffein/bugs checkout (HEGEL_BUGS_REPO,
+# default ../bugs) it also checks each uuid exists there.
 runs:
-	@python3 tools/findings.py runs
+	@python3 tools/runs.py runs
 
-lint-findings:
-	@python3 tools/findings.py lint
+lint-runs:
+	@python3 tools/runs.py lint
 
 check-sashiko:
 	@latest=$$(git ls-remote https://github.com/sashiko-dev/sashiko.git HEAD | cut -f1); \

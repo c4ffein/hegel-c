@@ -28,6 +28,8 @@
 #                    still wrong, recorded as expected red)
 #   PIN_PATCH        a patch applied in every state (our shims)
 #   PIN_EXPECT       expectation of the `current` state (default green)
+#   PIN_BUG          bugs:<uuid> of the bug this pin witnesses, in c4ffein/bugs
+#                    (read by tools/runs.py lint, not here)
 #   PIN_BUILD        build steps for project_build (default: PROJECT_BUILD)
 #   PIN_ENV          extra VAR=value words for the test runs (read by the
 #                    projects' test-pin, e.g. HEGEL_C_FORK=clean)

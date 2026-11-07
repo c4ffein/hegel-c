@@ -23,8 +23,8 @@ Emits the same blind split as filter-corpus.py:
   merged_judge_key.json    — full entries. Judge-only.
 
 Our targets are converted to sashiko's shape: fixed_by -> Fixed-by, mechanism
-(or title) -> problem_description; a target that is one of our findings has no
-fix SHA and is keyed by its finding id.
+(or title) -> problem_description; a target that is one of our own finds has no
+fix SHA and is keyed by its bug (bugs:<uuid>, in c4ffein/bugs).
 
 Usage: tools/merge-corpus.py [--ours docs/corpus.toml]
                              [--theirs .corpus/judge_key.json] [-o .corpus/]
@@ -42,7 +42,7 @@ def norm(sha):
 def as_sashiko(t):
   """One docs/corpus.toml target in the shape of a sashiko benchmark entry."""
   e = {k: t[k] for k in ("subsystem", "classes", "provenance", "tier", "harness_dir",
-                         "status", "finding") if k in t}
+                         "status", "bug") if k in t}
   e["Fixed-by"] = t.get("fixed_by")
   e["problem_description"] = " ".join(t.get("mechanism", t["title"]).split())
   return e
@@ -66,7 +66,7 @@ def main():
   order = []
 
   def add(e, source):
-    key = norm(e.get("Fixed-by")) or e.get("finding") or f"_nofix_{e.get('subsystem')}_{len(order)}"
+    key = norm(e.get("Fixed-by")) or e.get("bug") or f"_nofix_{e.get('subsystem')}_{len(order)}"
     if key in merged:
       prev = merged[key]
       prev["source"] = "both"

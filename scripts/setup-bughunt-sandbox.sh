@@ -80,8 +80,9 @@ printf '%s\n' "$NEW_HASHES" > "$HASH_RECORD"
 #
 # The agent does NOT get:
 #   - README.md / TODO.md / NEXT.md (mention the bug)
-#   - docs/findings.toml, build/findings.html, submissions/ (the bugs we found
-#     and the patches we sent for them)
+#   - c4ffein/bugs (the bugs we found and the patches we sent for them; a
+#     separate private repo — never copied, its path never given)
+#   - tests/irl/*/pins/ (each pin says what its bug is; PIN_BUG names it)
 #   - docs/runs.toml, docs/runs/ (which runs found which bugs, the briefs)
 #   - docs/* (internal docs)
 #   - tests/* (any of them — would leak example tests / patterns)
