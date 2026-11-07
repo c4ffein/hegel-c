@@ -137,8 +137,14 @@ DEPFLAGS = -MMD -MP
 
 lib: $(BUILD)/libhegel_c.a
 
-$(BUILD)/libhegel_c.a: $(CORE_OBJ)
-	ar rcs $@ $^
+# Rebuilt from scratch: `ar rcs` only adds/replaces members, so an object
+# dropped from CORE_SRC would otherwise linger in the archive and keep
+# resolving symbols locally that a fresh checkout no longer has. The Makefile
+# is a prerequisite because CORE_SRC lives here: dropping a source touches no
+# remaining object, and the archive must still be rebuilt.
+$(BUILD)/libhegel_c.a: $(CORE_OBJ) Makefile
+	rm -f $@
+	ar rcs $@ $(CORE_OBJ)
 
 # An object whose .d is missing (first build, or built before -MMD) is
 # rebuilt once, so a header edit is never missed.
