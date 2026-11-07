@@ -614,3 +614,25 @@ verdict = "as-expected"
 [[run.result]]
 target = "tests/irl/linux/pins/xarray_pause.conf"
 verdict = "as-expected"
+
+# ------------------------------------------------------------- 2026-11-07 ----
+
+[[run]]
+id = "2026-11-07-linux-pins-ida-xarray"
+date = "2026-11-07"
+kind = "pins"
+project = "linux"
+summary = "two new pins, property tests for two of our own Linux finds that had only a write-up: both red on v7.1"
+hegel_c = "11b87e3"
+libhegel = "0.50.0"
+notes = "Informed, not blind: the tests were written knowing the bugs. hegel_c is the base; the tree is the pending series plus these tests. ida shrinks to the write-up's own case on every seed tried; xarray shrinks to [0, ULONG_MAX], a second path to the same hang (the chunk size wraps to 0, so first never advances). The write-up's one-line fix ends both hangs, but the same test then fails on [0, ULONG_MAX] (ULONG_MAX not stored) on 14 of 40 seeds, so the pin has no fixed state yet. One timer crash was seen once on the patched tree and not reproduced in 40 seeds."
+
+[[run.result]]
+target = "tests/irl/linux/pins/ida_find_first_range.conf"
+verdict = "as-expected"
+note = "red on v7.1: IDs {0, 1024}, ida_find_first_range (1, 1024) = -ENOENT, want 1024 (HEGEL_ASSERT at test_ida_find_first_range.c:60)"
+
+[[run.result]]
+target = "tests/irl/linux/pins/xa_store_range.conf"
+verdict = "as-expected"
+note = "red on v7.1: xa_store_range (0, ULONG_MAX) does not return (crash: signal 14, the 250 ms timer)"
