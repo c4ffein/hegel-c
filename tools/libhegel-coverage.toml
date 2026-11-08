@@ -14,7 +14,7 @@
 #         gap         a feature hegel-c lacks (see TODO.md, "libhegel coverage")
 #
 # Classified 2026-11-06 against libhegel 0.50.0 (157 declared, 69 bound).
-# 2026-11-08: events, value draws, settings and profiles bound: 95 bound, 16 deliberate, 46 gap.
+# 2026-11-08: events, value draws, settings and profiles, repeat loops bound: 99 bound, 16 deliberate, 42 gap.
 
 [[group]]
 name = "settings getters"
@@ -50,13 +50,6 @@ functions = ["hegel_generate_grammar", "hegel_grammar_builder_file",
   "hegel_grammar_builder_provide", "hegel_grammar_draw_free", "hegel_grammar_draw_new",
   "hegel_grammar_draw_next", "hegel_grammar_draw_provide", "hegel_grammar_draw_result",
   "hegel_grammar_free", "hegel_grammar_new", "hegel_grammar_placeholder"]
-
-[[group]]
-name = "repeat loops"
-status = "gap"
-why = "run a body as many times as the engine wants, shrinking to the fewest repetitions"
-functions = ["hegel_new_repeat", "hegel_repeat_failed", "hegel_repeat_free",
-  "hegel_repeat_more"]
 
 [[group]]
 name = "labels"

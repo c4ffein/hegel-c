@@ -621,6 +621,91 @@ bool             hegel_collection_more   (hegel_testcase * tc, hegel_collection 
 void             hegel_collection_reject (hegel_testcase * tc, hegel_collection c);
 void             hegel_collection_free   (hegel_testcase * tc, hegel_collection c);
 
+/* ---- Repeat loops ----
+**
+** Run a body as many times as the ENGINE wants — each run an iteration —
+** so a failing loop shrinks to the fewest iterations, as a collection
+** shrinks to the fewest elements.  For "call this API again and again"
+** properties: a stateful object under test, a sequence of operations.
+**
+**   Counter * k = counter_new ();            // state the iterations share
+**   HEGEL_REPEAT (tc) {
+**     int n = hegel_draw_int (tc, 0, 10);
+**     counter_add (k, n);
+**     HEGEL_ASSERT (counter_ok (k), "counter broke after adding %d", n);
+**   }
+**   counter_free (k);                        // runs once the loop is over
+**
+** A failure inside an iteration (HEGEL_ASSERT, hegel_fail, a crash in fork
+** mode or inside HEGEL_ISOLATED) ends the loop and the case; the runtime
+** tells the engine that the iteration failed (hegel_repeat_failed) for
+** you, whatever the transport, so the shrinker can cut the iterations
+** before it.  The loop starts where hegel_repeat_new / HEGEL_REPEAT is
+** reached in the draw sequence; the engine may run the body zero times.
+** When the case is replayed for the report, each iteration's output is
+** headed by a "Repetition #N" note.
+**
+** Cost: the loop is "logically infinite", as in every Hegel frontend — a
+** passing case typically runs hundreds to tens of thousands of
+** iterations, and many run until the case's choice budget (2^20 choices)
+** ends it as an overrun.  Every draw is an engine call; under the fork
+** runners each one is a pipe round trip, so a passing loop can take
+** seconds per case there and trip the engine's too_slow health check.
+** Run repeat properties under hegel_run_test_nofork* (HEGEL_ISOLATED
+** around crash-prone code) or on few test cases; or stop a raw loop
+** yourself (below).
+**
+** Two forms:
+**   - HEGEL_REPEAT (tc) { ... } — a loop statement.  hegel_assume (or an
+**     engine-side rejection) in the body discards the WHOLE case.  Don't
+**     leave the body with break / return / goto: the loop's handle stays
+**     open until the case ends, and a later failure would be blamed on
+**     the iteration you left (continue is fine: it ends the iteration).
+**   - hegel_repeat_run (tc, body, ctx) — the body as a function, called
+**     once per iteration.  A hegel_assume in the body ends only THAT
+**     iteration and the loop goes on, the semantics of hegel-rust's
+**     tc.repeat.  The body may return early (that ends the iteration).
+**     hegel_alloc blocks made in a rejected iteration last until the case
+**     ends.
+**
+** The raw protocol, for loops the forms above don't fit:
+**
+**   hegel_repeat r = hegel_repeat_new (tc);
+**   while (hegel_repeat_more (tc, r)) { ...one iteration... }
+**   hegel_repeat_free (tc, r);
+**
+** hegel_repeat_more decides whether another iteration runs; after false
+** the body must not run again.  To stop earlier on your own terms (an
+** iteration cap), just leave the loop and hegel_repeat_free the handle —
+** freeing also tells the runtime no iteration is open any more.  hegel_repeat_failed tells the engine the
+** iteration just run failed and ends the loop; the runtime calls it
+** itself when a case fails mid-iteration, so call it only if an iteration
+** fails in a way the runtime doesn't see — and fail the case right after.
+** Handles are freed automatically at the end of the test case if the
+** body escaped before freeing them.  Loops nest (a failure is then
+** reported to every open loop, innermost first). */
+
+typedef struct { int64_t id; } hegel_repeat;
+
+hegel_repeat hegel_repeat_new    (hegel_testcase * tc);
+bool         hegel_repeat_more   (hegel_testcase * tc, hegel_repeat r);
+void         hegel_repeat_failed (hegel_testcase * tc, hegel_repeat r);
+void         hegel_repeat_free   (hegel_testcase * tc, hegel_repeat r);
+
+typedef void (*hegel_repeat_fn) (hegel_testcase * tc, void * ctx);
+
+void hegel_repeat_run (hegel_testcase * tc, hegel_repeat_fn body, void * ctx);
+
+/* HEGEL_REPEAT's loop state: the handle and the iteration number. */
+typedef struct { hegel_repeat r; uint64_t n; } hegel__repeat_loop;
+
+hegel__repeat_loop hegel__repeat_begin (hegel_testcase * tc);
+bool               hegel__repeat_step  (hegel_testcase * tc, hegel__repeat_loop * l);
+
+#define HEGEL_REPEAT(tc) \
+  for (hegel__repeat_loop hegel__repeat_ = hegel__repeat_begin (tc); \
+       hegel__repeat_step ((tc), &hegel__repeat_); )
+
 /* ---- Recursion ----
 **
 ** One recursive value (a tree, an expression) per hegel_recursion_new;

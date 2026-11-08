@@ -149,6 +149,10 @@ const hg_engine * hg_engine_get (void)
   BIND (string_generator_email,     "hegel_string_generator_email");
   BIND (string_generator_url,       "hegel_string_generator_url");
   BIND (string_generator_domain,    "hegel_string_generator_domain");
+  BIND (new_repeat,                 "hegel_new_repeat");
+  BIND (repeat_more,                "hegel_repeat_more");
+  BIND (repeat_failed,              "hegel_repeat_failed");
+  BIND (repeat_free,                "hegel_repeat_free");
   BIND (result_status,              "hegel_run_result_status");
   BIND (result_error,               "hegel_run_result_error");
   BIND (result_error_kind,          "hegel_run_result_error_kind");

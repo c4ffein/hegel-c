@@ -125,6 +125,11 @@
 #define HEGEL_OP_DRAW_EMAIL    78  /*                                  -> str      */
 #define HEGEL_OP_DRAW_URL      79  /*                                  -> str      */
 #define HEGEL_OP_DRAW_DOMAIN   80  /* u64 max_length (4..255)          -> str      */
+/* Repeat loops */
+#define HEGEL_OP_REPEAT_NEW    81  /*                                  -> i64 id  */
+#define HEGEL_OP_REPEAT_MORE   82  /* i64 id                           -> u8      */
+#define HEGEL_OP_REPEAT_FAILED 83  /* i64 id                                      */
+#define HEGEL_OP_REPEAT_FREE   84  /* i64 id                                      */
 
 typedef struct {
   uint8_t  op;
@@ -177,6 +182,13 @@ const char *     hegel__srv_iso_site  (const hegel_case_srv * c);
 /* Captured lines, '\n'-separated; ownership moves to the caller. */
 char *           hegel__srv_take_lines (hegel_case_srv * c);
 void             hegel__srv_add_line   (hegel_case_srv * c, const char * line, size_t len);
+
+/* The case ended INTERESTING (an assert, hegel_fail, a crash): tell every
+** repeat loop still inside an iteration that the iteration failed
+** (hegel_repeat_failed), innermost first, before the case is marked
+** complete.  If the engine runs out of choices doing so, `out` becomes
+** OVERRUN. */
+void             hegel__srv_repeat_case_failed (hegel_case_srv * c, hegel_outcome * out);
 
 /* Serve one request.  Fills `resp_status` / `resp` for ops that answer.
 ** Returns 0 = answered, 1 = no response (fire-and-forget), 2 = terminal

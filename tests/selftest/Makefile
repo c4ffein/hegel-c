@@ -43,7 +43,8 @@ TESTS_PASS = test_pass_simple \
              test_value_draws_datetime \
              test_value_draws_net \
              test_settings \
-             test_profiles
+             test_profiles \
+             test_repeat_basic
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -75,7 +76,8 @@ TESTS_HEALTH = test_filter_too_much \
                test_isolated_draw_inside \
                test_recursive_misuse \
                test_event_misuse \
-               test_value_draws_misuse
+               test_value_draws_misuse \
+               test_repeat_stale_handle
 
 # Tests that should FAIL and report a specific shrunk result: exit
 # non-zero AND print a line "shrunk: <X>" where <X> is the text after
@@ -83,7 +85,9 @@ TESTS_HEALTH = test_filter_too_much \
 TESTS_SHRINK = test_recursive_shrinks \
                test_span_list_shrinks \
                test_event_shrink \
-               test_value_draws_shrink
+               test_value_draws_shrink \
+               test_repeat_shrinks \
+               test_repeat_crash_shrinks
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH) $(TESTS_SHRINK)
 

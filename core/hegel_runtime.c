@@ -658,6 +658,97 @@ void hegel_collection_free (hegel_testcase * tc, hegel_collection c)
   call_ids (tc, HEGEL_OP_COLL_FREE, NULL, 1, c.id, 0);
 }
 
+/* ---- Repeat loops ----
+**
+** The server remembers which loops are mid-iteration (their last
+** hegel_repeat_more said true) and calls hegel_repeat_failed on them if
+** the case ends as a failure, so neither the assert path nor a crashed
+** fork child has to. */
+
+hegel_repeat hegel_repeat_new (hegel_testcase * tc)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_REPEAT_NEW, NULL, 0, &r, 0);
+  hegel_repeat rp = { resp_i64 (&r) };
+  hegel__buf_free (&r);
+  return rp;
+}
+
+bool hegel_repeat_more (hegel_testcase * tc, hegel_repeat rp)
+{
+  hegel_buf r;
+  hegel__buf_init (&r);
+  call_ids (tc, HEGEL_OP_REPEAT_MORE, &r, 1, rp.id, 0);
+  bool more = resp_u8 (&r) != 0;
+  hegel__buf_free (&r);
+  return more;
+}
+
+void hegel_repeat_failed (hegel_testcase * tc, hegel_repeat rp)
+{
+  call_ids (tc, HEGEL_OP_REPEAT_FAILED, NULL, 1, rp.id, 0);
+}
+
+void hegel_repeat_free (hegel_testcase * tc, hegel_repeat rp)
+{
+  call_ids (tc, HEGEL_OP_REPEAT_FREE, NULL, 1, rp.id, 0);
+}
+
+static void repeat_heading (hegel_testcase * tc, uint64_t n)
+{
+  if (!tc->capture) return;
+  char line[64];
+  snprintf (line, sizeof line, "Repetition #%" PRIu64, n);
+  hegel__emit_line (tc, line);
+}
+
+hegel__repeat_loop hegel__repeat_begin (hegel_testcase * tc)
+{
+  hegel__repeat_loop l = { hegel_repeat_new (tc), 0 };
+  return l;
+}
+
+bool hegel__repeat_step (hegel_testcase * tc, hegel__repeat_loop * l)
+{
+  if (!hegel_repeat_more (tc, l->r)) {
+    hegel_repeat_free (tc, l->r);
+    return false;
+  }
+  repeat_heading (tc, ++l->n);
+  return true;
+}
+
+/* One iteration under an ASSUME catch, as a stateful rule runs (see
+** run_rule in hegel_stateful.c): a rejected iteration is over, the loop
+** goes on.  FAIL / STOP / HEALTH still end the case. */
+static void repeat_iteration (hegel_testcase * tc, hegel_repeat_fn body, void * ctx)
+{
+  jmp_buf env;
+  jmp_buf * saved = tc->rule_escape;
+  struct hegel__recursive * saved_rec = tc->recursive;
+  tc->rule_escape = &env;
+  if (setjmp (env) != 0) {
+    tc->rule_escape = saved;
+    tc->recursive = saved_rec;
+    if (hegel__draws_abandoned) hegel__draws_abandoned ();
+    return;
+  }
+  body (tc, ctx);
+  tc->rule_escape = saved;
+}
+
+void hegel_repeat_run (hegel_testcase * tc, hegel_repeat_fn body, void * ctx)
+{
+  hegel_repeat rp = hegel_repeat_new (tc);
+  uint64_t n = 0;
+  while (hegel_repeat_more (tc, rp)) {
+    repeat_heading (tc, ++n);
+    repeat_iteration (tc, body, ctx);
+  }
+  hegel_repeat_free (tc, rp);
+}
+
 /* ---- Recursion ---- */
 
 hegel_recursion hegel_recursion_new (hegel_testcase * tc, uint64_t max_depth,

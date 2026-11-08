@@ -48,6 +48,7 @@ typedef struct hg_recursion  hg_recursion;
 typedef struct hg_pool       hg_pool;
 typedef struct hg_sm         hg_sm;
 typedef struct hg_strgen     hg_strgen;
+typedef struct hg_repeat     hg_repeat;
 
 /* hegel_string_t / hegel_owned_string_t / hegel_generate_bytes_result_t */
 typedef struct { const char * data; size_t len; } hg_str;
@@ -219,6 +220,11 @@ typedef struct {
   int (*string_generator_email)  (hg_context *, hg_strgen ** out);
   int (*string_generator_url)    (hg_context *, hg_strgen ** out);
   int (*string_generator_domain) (hg_context *, uint64_t max_length, hg_strgen ** out);
+  /* Repeat loops (libhegel >= 0.50). */
+  int (*new_repeat)    (hg_context *, hg_tc *, hg_repeat ** out);
+  int (*repeat_more)   (hg_context *, hg_tc *, hg_repeat *, bool * out);
+  int (*repeat_failed) (hg_context *, hg_tc *, hg_repeat *);
+  int (*repeat_free)   (hg_context *, hg_repeat *);
 
   int (*result_status)        (hg_context *, const hg_result *, uint32_t * out);
   int (*result_error)         (hg_context *, const hg_result *, const hg_str ** out);

@@ -775,6 +775,9 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *),
       run_case_forked (srv, test_fn, &out);
     else
       run_case_inproc (srv, test_fn, &out);
+    /* A failure inside a repeat iteration ends that loop: tell the engine. */
+    if (out.status == HG_STATUS_INTERESTING && !out.health)
+      hegel__srv_repeat_case_failed (srv, &out);
 
     /* HEGEL_C_MERGE_ORIGINS=1: every failure is the same bug to the engine,
     ** so a test whose one bug shows up as a crash OR a bad result (heap

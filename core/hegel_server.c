@@ -51,11 +51,12 @@ void hegel__buf_put (hegel_buf * b, const void * p, size_t n)
 
 /* ---- Per-case state ---- */
 
-enum { H_FREE = 0, H_COLL, H_REC, H_POOL, H_SM };
+enum { H_FREE = 0, H_COLL, H_REC, H_POOL, H_SM, H_REPEAT };
 
 typedef struct {
   int    kind;
   void * ptr;
+  int    in_iter;   /* H_REPEAT: the last hegel_repeat_more said true */
 } srv_handle;
 
 struct hegel_case_srv {
@@ -89,7 +90,9 @@ static void free_handle (hegel_case_srv * c, srv_handle * h)
     case H_REC:  e->recursion_free (e->ctx, h->ptr);  break;
     case H_POOL: e->pool_free (e->ctx, h->ptr);       break;
     case H_SM:   e->sm_free (e->ctx, h->ptr);         break;
+    case H_REPEAT: e->repeat_free (e->ctx, h->ptr);   break;
   }
+  h->in_iter = 0;
   h->kind = H_FREE;
   h->ptr = NULL;
 }
@@ -138,6 +141,7 @@ static int64_t add_handle (hegel_case_srv * c, int kind, void * ptr)
   }
   c->handles[c->n_handles].kind = kind;
   c->handles[c->n_handles].ptr = ptr;
+  c->handles[c->n_handles].in_iter = 0;
   return c->n_handles++;
 }
 
@@ -146,6 +150,31 @@ static void * get_handle (hegel_case_srv * c, int64_t id, int kind)
 {
   if (id < 0 || id >= c->n_handles || c->handles[id].kind != kind) return NULL;
   return c->handles[id].ptr;
+}
+
+/* An iteration that ends on anything but a failed assumption ends its
+** loop, and the engine wants to hear it (hegel_repeat_failed draws the
+** mark that separates the iterations before the failure from the one
+** that failed).  The server knows which loops are mid-iteration whatever
+** the transport, so a crash in a fork child is reported the same way as
+** an assert.  Innermost first: a nested loop was created later. */
+void hegel__srv_repeat_case_failed (hegel_case_srv * c, hegel_outcome * out)
+{
+  const hg_engine * e = c->e;
+  for (int i = c->n_handles - 1; i >= 0; i--) {
+    srv_handle * h = &c->handles[i];
+    if (h->kind != H_REPEAT || !h->in_iter) continue;
+    h->in_iter = 0;
+    int rc = e->repeat_failed (e->ctx, c->htc, h->ptr);
+    if (rc == HG_E_STOP_TEST) {
+      c->stop_seen = 1;
+      out->status = HG_STATUS_OVERRUN;
+      return;
+    }
+    if (rc != HG_OK)
+      fprintf (stderr, "hegel-c: hegel_repeat_failed at case end (rc=%d): %s\n", rc,
+               hg_last_error (e));
+  }
 }
 
 /* ---- Run-scoped string-generator caches ----
@@ -739,6 +768,39 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
       rc = op == HEGEL_OP_SM_GROUP ? e->sm_next_group (x, t, h, &v)
                                    : e->sm_next_rule (x, t, h, 0, &v);
       if ((st = eng_status (c, rc, "state machine step", resp)) == HEGEL_RESP_OK)
+        HEGEL_BUF_PUT (resp, v);
+      break;
+    }
+
+    /* ---- Repeat loops ---- */
+    case HEGEL_OP_REPEAT_NEW: {
+      hg_repeat * h = NULL;
+      rc = e->new_repeat (x, t, &h);
+      if ((st = eng_status (c, rc, "new_repeat", resp)) == HEGEL_RESP_OK) {
+        int64_t id = add_handle (c, H_REPEAT, h);
+        HEGEL_BUF_PUT (resp, id);
+      } else if (h) {
+        e->repeat_free (x, h);
+      }
+      break;
+    }
+    case HEGEL_OP_REPEAT_MORE:
+    case HEGEL_OP_REPEAT_FAILED:
+    case HEGEL_OP_REPEAT_FREE: {
+      int64_t id = RD (&r, int64_t);
+      hg_repeat * h = get_handle (c, id, H_REPEAT);
+      if (!h) { st = usage_error (resp, "hegel-c: stale or invalid repeat handle"); break; }
+      if (op == HEGEL_OP_REPEAT_FREE) { free_handle (c, &c->handles[id]); break; }
+      if (op == HEGEL_OP_REPEAT_FAILED) {
+        c->handles[id].in_iter = 0;
+        st = eng_status (c, e->repeat_failed (x, t, h), "repeat_failed", resp);
+        break;
+      }
+      bool more = false;
+      rc = e->repeat_more (x, t, h, &more);
+      uint8_t v = more;
+      c->handles[id].in_iter = rc == HG_OK && more;
+      if ((st = eng_status (c, rc, "repeat_more", resp)) == HEGEL_RESP_OK)
         HEGEL_BUF_PUT (resp, v);
       break;
     }
