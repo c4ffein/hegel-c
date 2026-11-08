@@ -37,6 +37,8 @@ FAILED: n = 5
 
 Lite keeps the *last* stamped failing case and prints it after the run. Careful avoids the question by replaying the reported blob (one more execution); hegel-c's runner does what lite does, per origin.
 
+Lite could drop the stamp check entirely (2 lines in every lite file) and just keep the last failing case: in a deterministic run the final replay is the run's last execution, so the output is the same (checked on seeds 1–10 for minimal, graph and tree, and in libhegel 0.50.0's `final_replay`). It doesn't, because that order is how the engine happens to work, not something `hegel.h` documents; the stamp is the documented contract, and following it is part of "correctly".
+
 ## What hegel-c adds (14 lines)
 
 The run loop, the result reading, the capture and the report are in the runner. The test is the property and one `hegel_run_test_n` call. `HEGEL_ASSERT`'s `file:line` is the origin, and the reproduce line is printed with every failure. The cost is in fork mode (22 ms here: every draw is a pipe round trip); nofork is as fast as libhegel.
