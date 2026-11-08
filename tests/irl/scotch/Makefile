@@ -247,10 +247,13 @@ _run-tests: all check-license
 	done; \
 	echo ""; \
 	echo "==== Scotch reducer-quality tests (must shrink to small counterexample) ===="; \
+	: "Fork-clean, as pin hgraphOrderCp runs it: the bug reads uninitialized heap, so a"; \
+	: "plain fork makes small cases fail only sometimes and the shrink stalls (Scotch 7.0.7"; \
+	: "without ASan, 2026-11-08: nvert > 5 on 6 of 15 seeds fast, nvert = 3 on 15 of 15 clean)."; \
 	for t in $(TESTS_SHRINK); do \
 		total=$$((total + 1)); \
 		printf "  %-35s" "$$t"; \
-		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(HEGEL_SHRINK_ENV) timeout 120 $(CURDIR)/$$t 2>&1); \
+		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(HEGEL_SHRINK_ENV) HEGEL_C_FORK=clean timeout 120 $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -eq 0 ]; then \
 			echo "FAIL — expected non-zero exit but got 0"; \
