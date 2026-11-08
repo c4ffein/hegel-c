@@ -7,6 +7,9 @@
 #   make build  LIBHEGEL_SO=...                    build only
 #   make loc                                       line counts only
 #
+# Three versions of each pair (see <pair>.md): lite_* (shortest correct
+# libhegel), raw_* (careful libhegel, upstream examples' style), hc_*.
+#
 # Both sides run on the SAME engine file: raw_* link LIBHEGEL_SO directly
 # (rpath to its directory); hc_* link hegel-c's libhegel_c.a and run with
 # HEGEL_LIBHEGEL_PATH=$(LIBHEGEL_SO).
@@ -33,11 +36,14 @@ HC_LDFLAGS  = -L$(HEGEL_C_ROOT)/build -lhegel_c -lpthread -lm -ldl
 
 PAIRS   = minimal crash graph tree twobugs misuse
 RAW     = $(addprefix raw_,$(PAIRS)) raw_crash_fork raw_replay
+# lite_*: the shortest correct libhegel version of each pair (no shared
+# helpers, no return-code checks beyond what correctness needs, no frees)
+LITE    = $(addprefix lite_,$(PAIRS)) lite_replay
 HC      = $(addprefix hc_,$(PAIRS)) hc_crash_iso
 # hcn_*: the same hc_*.c under the nofork runner (no source change: the
 # fork runner's name is redefined on the command line)
 HCN     = $(addprefix hcn_,$(PAIRS))
-SOURCES = $(addsuffix .c,$(RAW) $(HC))
+SOURCES = $(addsuffix .c,$(LITE) $(RAW) $(HC))
 SHARED  = common.h sut.h raw_check.h
 LEAK_PROGS = raw_graph raw_tree hcn_graph hcn_tree
 
@@ -50,9 +56,13 @@ FORCE:
 
 all: build
 
-build: $(addprefix $(OUT)/,$(RAW) $(HC) $(HCN))
+build: $(addprefix $(OUT)/,$(LITE) $(RAW) $(HC) $(HCN))
 
 $(OUT)/raw_%: raw_%.c $(SHARED) include/hegel.h
+	@mkdir -p $(OUT)
+	$(CC) $(RAW_CFLAGS) -o $@ $< $(RAW_LDFLAGS)
+
+$(OUT)/lite_%: lite_%.c common.h sut.h include/hegel.h
 	@mkdir -p $(OUT)
 	$(CC) $(RAW_CFLAGS) -o $@ $< $(RAW_LDFLAGS)
 
@@ -95,7 +105,7 @@ leaks: $(addprefix $(OUT)/asan/,$(LEAK_PROGS))
 	done
 
 check-license:
-	@for f in $(SOURCES) $(SHARED) Makefile run.sh loc.sh README.md; do \
+	@for f in $(SOURCES) $(SHARED) Makefile run.sh loc.sh README.md $(wildcard *.md); do \
 	  grep -q "SPDX-License-Identifier[:] MIT" $$f || { echo "missing SPDX: $$f"; exit 1; }; \
 	done; echo "license headers OK"
 

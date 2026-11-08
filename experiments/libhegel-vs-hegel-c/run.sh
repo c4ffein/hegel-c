@@ -21,24 +21,31 @@ ulimit -c 0
 
 # pair | program | side | extra env | grep for the counterexample line(s)
 ROWS='
+1 minimal|lite_minimal|libhegel lite||^FAILED:\|^run error:
 1 minimal|raw_minimal|libhegel||^n =
 1 minimal|hc_minimal|hegel-c fork||^Draw 1:
 1 minimal|hcn_minimal|hegel-c nofork||^Draw 1:
+2 crash|lite_crash|libhegel lite (own fork)||^FAILED:\|^run error:
 2 crash|raw_crash|libhegel||^id =
 2 crash|raw_crash_fork|libhegel + own fork||^id =
 2 crash|hc_crash|hegel-c fork||^Draw 1:
 2 crash|hcn_crash|hegel-c nofork||^Draw 1:
 2 crash|hc_crash_iso|hegel-c nofork+ISOLATED||^Draw 1:
+3 graph|lite_graph|libhegel lite||^FAILED:\|^run error:
 3 graph|raw_graph|libhegel||^graph:
 3 graph|hc_graph|hegel-c fork||^graph:
 3 graph|hcn_graph|hegel-c nofork||^graph:
+4 tree|lite_tree|libhegel lite||^FAILED:\|^run error:
 4 tree|raw_tree|libhegel||^expr =
 4 tree|hc_tree|hegel-c fork||^expr =
 4 tree|hcn_tree|hegel-c nofork||^expr =
+5 twobugs|lite_twobugs|libhegel lite||^FAILED:\|^run error:
 5 twobugs|raw_twobugs|libhegel||^lo =
 5 twobugs|hc_twobugs|hegel-c fork||^message:
+5 twobugs|lite_twobugs|libhegel lite|HEGEL_REPORT_MULTIPLE_FAILURES=1|^FAILED:\|^run error:
 5 twobugs|raw_twobugs|libhegel|HEGEL_REPORT_MULTIPLE_FAILURES=1|^lo =
 5 twobugs|hc_twobugs|hegel-c fork|HEGEL_REPORT_MULTIPLE_FAILURES=1|^message:
+6 misuse|lite_misuse|libhegel lite||run error:
 6 misuse|raw_misuse|libhegel||run error:
 6 misuse|hc_misuse|hegel-c fork||Health check failure:
 '
@@ -83,6 +90,8 @@ done
 echo
 echo "7 replay   (n = 5 blob, then a passing n = 4 blob)"
 for b in AAEAAAAACgEAAAAF AAEAAAAACgEAAAAE; do
+  r=$(REPRO=$b "$OUT/lite_replay" 2>&1); rc=$?
+  printf '  lite      REPRO=%s  exit %s: %s\n' "$b" "$rc" "$(echo "$r" | tr '\n' ' ' | cut -c1-80)"
   r=$(REPRO=$b "$OUT/raw_replay" 2>&1); rc=$?
   printf '  libhegel  REPRO=%s  exit %s: %s\n' "$b" "$rc" "$(echo "$r" | tr '\n' ' ' | cut -c1-80)"
   h=$(HEGEL_C_REPRODUCE="1:$b" "$OUT/hc_minimal" 2>&1); rc=$?
@@ -93,7 +102,8 @@ done
 echo
 echo "Lines of test code (comments and blank lines excluded; shared sut.h / common.h not counted)"
 printf '  %-18s %6s %12s %10s %7s\n' file lines boilerplate "property" chars
-sh ./loc.sh raw_minimal.c hc_minimal.c raw_crash.c raw_crash_fork.c hc_crash.c \
-   hc_crash_iso.c raw_graph.c hc_graph.c raw_tree.c hc_tree.c raw_twobugs.c hc_twobugs.c \
-   raw_misuse.c hc_misuse.c raw_replay.c raw_check.h |
+sh ./loc.sh lite_minimal.c raw_minimal.c hc_minimal.c lite_crash.c raw_crash.c raw_crash_fork.c \
+   hc_crash.c hc_crash_iso.c lite_graph.c raw_graph.c hc_graph.c lite_tree.c raw_tree.c hc_tree.c \
+   lite_twobugs.c raw_twobugs.c hc_twobugs.c lite_misuse.c raw_misuse.c hc_misuse.c \
+   lite_replay.c raw_replay.c raw_check.h |
   awk '{ printf "  %-18s %6d %12d %10d %7d\n", $1, $2, $3, $2 - $3, $4 }'

@@ -5,10 +5,30 @@
 # libhegel directly vs hegel-c
 
 What does hegel-c add over writing tests directly against libhegel's C ABI
-(`hegel.h`)? Each property here is written twice, `raw_<pair>.c` on
-`hegel.h` alone and `hc_<pair>.c` on `hegel_c.h`, with the same bounds,
-the same 100-case budget, the same function under test (`sut.h`, shared
-and not counted) and **the same engine file** for both sides.
+(`hegel.h`)? Each property here is written three times, with the same
+bounds, the same 100-case budget, the same function under test (`sut.h`,
+shared and not counted) and **the same engine file**:
+
+- `lite_<pair>.c`: the shortest libhegel program that does the job
+  correctly (finds the bug, shrinks it, prints the minimal counterexample
+  once, says why a run errored), with no defensive extras;
+- `raw_<pair>.c`: the careful libhegel program, in upstream
+  `libhegel/examples/` style (every call checked, everything freed, the
+  origin and the blob printed);
+- `hc_<pair>.c`: the same property on `hegel_c.h`.
+
+Each pair's `<pair>.md` compares its three files: what each does and
+doesn't do, the measured results, and the pitfalls.
+
+| pair | lite | careful | hegel-c | write-up |
+|---|---|---|---|---|
+| 1 minimal | [lite_minimal.c](lite_minimal.c) | [raw_minimal.c](raw_minimal.c) | [hc_minimal.c](hc_minimal.c) | [minimal.md](minimal.md) |
+| 2 crash | [lite_crash.c](lite_crash.c) | [raw_crash.c](raw_crash.c), [raw_crash_fork.c](raw_crash_fork.c) | [hc_crash.c](hc_crash.c), [hc_crash_iso.c](hc_crash_iso.c) | [crash.md](crash.md) |
+| 3 graph | [lite_graph.c](lite_graph.c) | [raw_graph.c](raw_graph.c) | [hc_graph.c](hc_graph.c) | [graph.md](graph.md) |
+| 4 tree | [lite_tree.c](lite_tree.c) | [raw_tree.c](raw_tree.c) | [hc_tree.c](hc_tree.c) | [tree.md](tree.md) |
+| 5 two bugs | [lite_twobugs.c](lite_twobugs.c) | [raw_twobugs.c](raw_twobugs.c) | [hc_twobugs.c](hc_twobugs.c) | [twobugs.md](twobugs.md) |
+| 6 misuse | [lite_misuse.c](lite_misuse.c) | [raw_misuse.c](raw_misuse.c) | [hc_misuse.c](hc_misuse.c) | [misuse.md](misuse.md) |
+| 7 replay | [lite_replay.c](lite_replay.c) | [raw_replay.c](raw_replay.c) | [hc_minimal.c](hc_minimal.c) | [replay.md](replay.md) |
 
 ```
 make -C experiments/libhegel-vs-hegel-c run LIBHEGEL_SO=/path/to/libhegel.so \
@@ -20,6 +40,8 @@ prints the table below, replays a blob each way and runs a leak check;
 `make loc` gives the line counts only. Not part of `make test`.
 
 ## Setup of the measured run (2026-11-06)
+
+**Re-run on 2026-11-08** with the `lite_*` files added: the tables under "Results" and "Lines" are that run, on the same engine file, with hegel-c's working tree of that day (generator helpers, multiple-failure reporting and the new libhegel coverage included). The notes below describe the first run; nothing they say changed.
 
 - Engine: libhegel 0.50.0, `libhegel-linux-amd64.so`, sha256
   `e290467d…fce56298` (matches the release's `.sha256`). raw_* link it
@@ -81,27 +103,35 @@ env var for `hegel_run_start_blob`).
 ## Results (20 seeds)
 
 ```
-pair       side                       env    exits   execs med  [range]     ms    rep  counterexample (same on all 20 seeds)
-1 minimal  libhegel                          20x1    40         [39-43]     4     1    n = 5
-1 minimal  hegel-c fork                      20x1    39         [38-42]     22    1    Draw 1: 5
-1 minimal  hegel-c nofork                    20x1    39         [38-42]     4     1    Draw 1: 5
-2 crash    libhegel                          20x139  2          [2-5]       3     0    (process killed by SIGSEGV, no output)
-2 crash    libhegel + own fork               20x1    59         [50-64]     18    1    id = 42
-2 crash    hegel-c fork                      20x1    58         [49-63]     30    1    Draw 1: 42
-2 crash    hegel-c nofork                    20x139  2          [2-5]       3     0    (process killed by SIGSEGV, no output)
-2 crash    hegel-c nofork+ISOLATED           20x1    58         [49-63]     18    1    Draw 1: 42
-3 graph    libhegel                          20x1    2389       [2349-2491] 76    1    nvert=1 edges=[(0,0) (0,0)]
-3 graph    hegel-c fork                      20x1    2388       [2348-2490] 1806  1    nvert=1 edges=[(0,0) (0,0)]
-3 graph    hegel-c nofork                    20x1    2388       [2348-2490] 85    1    nvert=1 edges=[(0,0) (0,0)]
-4 tree     libhegel                          20x1    1993       [1770-2528] 89    1    (0 - 1)
-4 tree     hegel-c fork                      20x1    1992       [1769-2527] 3623  1    (0 - 1)
-4 tree     hegel-c nofork                    20x1    1992       [1769-2527] 109   1    (0 - 1)
-5 twobugs  libhegel                          20x1    55         [49-114]    5     1    B: lo = -1, hi = 0
-5 twobugs  hegel-c fork                      20x1    54         [48-113]    28    1    B: lo = -1, hi = 0
-5 twobugs  libhegel                   multi  20x1    139        [121-609]   8     2    A: lo = INT_MIN, hi = -1 (18/20; 2/20: lo = 1, hi = INT_MAX) + B
-5 twobugs  hegel-c fork               multi  20x1    54         [48-113]    29    1    B only (env ignored)
-6 misuse   libhegel                          20x1    1          [1-1]       2     0    run error: FailedHealthCheck: LargeInitialTestCase …
-6 misuse   hegel-c fork                      20x1    1          [1-1]       3     0    Health check failure: hegel-c: integer draw with min > max
+pair       side                       env    exits       execs med    [range] ms   rep  counterexample (seed 1)
+------------------------------------------------------------------------------------------------------------------------
+1 minimal  libhegel lite                     20x1        39           [38-42] 5    1    FAILED: n = 5
+1 minimal  libhegel                          20x1        40           [39-43] 5    1    n = 5
+1 minimal  hegel-c fork                      20x1        39           [38-42] 22   1    Draw 1: 5
+1 minimal  hegel-c nofork                    20x1        39           [38-42] 4    1    Draw 1: 5
+2 crash    libhegel lite (own fork)          20x1        58           [49-63] 17   1    FAILED: id = 42
+2 crash    libhegel                          20x139      2            [2-5]  3    0    (none: Segmentation fault)
+2 crash    libhegel + own fork               20x1        59           [50-64] 19   1    id = 42
+2 crash    hegel-c fork                      20x1        58           [49-63] 31   1    Draw 1: 42
+2 crash    hegel-c nofork                    20x139      2            [2-5]  3    0    (none: Segmentation fault)
+2 crash    hegel-c nofork+ISOLATED           20x1        58           [49-63] 19   1    Draw 1: 42
+3 graph    libhegel lite                     20x1        2388         [2348-2490] 74   1    FAILED: graph: nvert=1 nedge=2 edges=[(0,0) (0,0)]
+3 graph    libhegel                          20x1        2389         [2349-2491] 74   1    graph: nvert=1 nedge=2 edges=[(0,0) (0,0)]
+3 graph    hegel-c fork                      20x1        2388         [2348-2490] 1850 1    graph: nvert=1 nedge=2 edges=[(0,0) (0,0)]
+3 graph    hegel-c nofork                    20x1        2388         [2348-2490] 76   1    graph: nvert=1 nedge=2 edges=[(0,0) (0,0)]
+4 tree     libhegel lite                     20x1        1992         [1769-2527] 90   1    FAILED: expr = (0 - 1)
+4 tree     libhegel                          20x1        1993         [1770-2528] 98   1    expr = (0 - 1)
+4 tree     hegel-c fork                      20x1        1992         [1769-2527] 3856 1    expr = (0 - 1)
+4 tree     hegel-c nofork                    20x1        1992         [1769-2527] 143  1    expr = (0 - 1)
+5 twobugs  libhegel lite                     20x1        54           [48-113] 6    1    FAILED: lo = -1, hi = 0, midpoint = 0
+5 twobugs  libhegel                          20x1        55           [49-114] 6    1    lo = -1, hi = 0, midpoint = 0
+5 twobugs  hegel-c fork                      20x1        54           [48-113] 33   1    lo = -1, hi = 0, midpoint = 0
+5 twobugs  libhegel lite              multi  20x1        137          [119-607] 9    1    FAILED: lo = -1, hi = 0, midpoint = 0
+5 twobugs  libhegel                   multi  20x1        139          [121-609] 9    2    lo = -2147483648, hi = -1, midpoint = 1073741823 ; lo = -1, hi = 0, mi
+5 twobugs  hegel-c fork               multi  20x1        137          [119-607] 74   2    lo = -2147483648, hi = -1, midpoint = 1073741823 ; lo = -1, hi = 0, mi
+6 misuse   libhegel lite                     20x1        1            [1-1]  3    0    run error: FailedHealthCheck: LargeInitialTestCase — the smallest na
+6 misuse   libhegel                          20x1        1            [1-1]  3    0    run error: FailedHealthCheck: LargeInitialTestCase — the smallest na
+6 misuse   hegel-c fork                      20x1        1            [1-1]  3    0    Health check failure: hegel-c: integer draw with min > max
 ```
 
 `multi` = `HEGEL_REPORT_MULTIPLE_FAILURES=1`. `rep` = failures reported.
@@ -128,23 +158,30 @@ care (below).
 ## Lines
 
 ```
-file              lines  boilerplate  property  chars
-raw_minimal.c        71           56        15   1990
-hc_minimal.c         14            5         9    228
-raw_crash.c          71           56        15   1990    (dies, see pair 2)
-raw_crash_fork.c     86           68        18   2291
-hc_crash.c           14            5         9    232
-hc_crash_iso.c       16            5        11    259
-raw_graph.c         106           61        45   3183
-hc_graph.c           38            5        33    920
-raw_tree.c          136           74        62   3795
-hc_tree.c            35            5        30    703
-raw_twobugs.c        78           57        21   2264
-hc_twobugs.c         19            5        14    422
-raw_misuse.c         72           57        15   2060
-hc_misuse.c          15            5        10    261
-raw_replay.c         78           63        15   2254    (+7 lines over raw_minimal)
-raw_check.h          18            0        18    440    (CHECK / STR, shared by raw_*)
+file                lines  boilerplate   property   chars
+lite_minimal.c         43           31         12    1265
+raw_minimal.c          71           56         15    1990
+hc_minimal.c           14            5          9     228
+lite_crash.c           49           31         18    1403
+raw_crash.c            71           56         15    1990
+raw_crash_fork.c       86           68         18    2291
+hc_crash.c             14            5          9     232
+hc_crash_iso.c         16            5         11     259
+lite_graph.c           66           31         35    1922
+raw_graph.c           106           61         45    3183
+hc_graph.c             38            5         33     920
+lite_tree.c            80           30         50    2354
+raw_tree.c            136           74         62    3795
+hc_tree.c              35            5         30     703
+lite_twobugs.c         53           32         21    1706
+raw_twobugs.c          78           57         21    2264
+hc_twobugs.c           19            5         14     422
+lite_misuse.c          44           31         13    1332
+raw_misuse.c           72           57         15    2060
+hc_misuse.c            15            5         10     261
+lite_replay.c          48           34         14    1501
+raw_replay.c           78           63         15    2254
+raw_check.h            18            0         18     440
 ```
 
 Of each raw file's boilerplate, ~54 lines are the same `main` (context,
@@ -267,11 +304,15 @@ Where hegel-c adds value (measured here):
   reproduce line, at 0 extra lines. A raw user can get the same result
   with ~15 lines of fork/waitpid, but has no channel for asserts, notes
   or assume from inside the child.
-- **Code volume.** As written, the raw file is 2.8x (graph) to 5.1x
-  (minimal) the lines and 3.5x to 8.7x the characters. After factoring
-  the raw run loop into a harness, the raw property code is still 1.4x
-  (graph) to 2.1x (tree) the lines; the difference is error-code
-  propagation and memory release.
+- **Code volume**, against two libhegel baselines. Against the shortest
+  correct libhegel program (lite), hegel-c is 1.7x (graph) to 3.5x
+  (crash) fewer lines: the lite run loop is about 30 lines, the same in
+  every file, and the generators keep their error-code checks (every
+  engine call can end the case). Against the careful program, it is
+  2.8x (graph) to 5.1x (minimal) fewer lines and 3.5x to 8.7x fewer
+  characters. After factoring a run loop into a harness, the libhegel
+  property code is still 1.1x (graph, lite) to 2.1x (tree, careful) the
+  lines: error-code propagation and memory release.
 - **Recursion.** The raw generator takes 55 lines (arena, node function,
   retry loop) against hegel-c's 13-line node function, and it is easy
   to get wrong. My first raw draft called `hegel_recursion_retry` after
@@ -310,17 +351,16 @@ What hegel-c costs or hides:
   `report_multiple` / `HEGEL_REPORT_MULTIPLE_FAILURES=1` (opt-in; the
   default is still one failure per run).
 - **Engine output**: verbosity forced to QUIET (`HEGEL_VERBOSITY=verbose`
-  shows the engine's phase/case trace for raw, nothing for hegel-c);
-  `HEGEL_STATISTICS` is likewise inert, and `hegel_event` isn't exposed.
+  shows the engine's phase/case trace for raw, nothing for hegel-c).
+  *Since 2026-11-08:* `hegel_event` / `hegel_event_value` are bound, and
+  `show_statistics` (or `HEGEL_STATISTICS=1`) prints the engine's
+  statistics.
 - **Diagnostics**: misuse messages drop the engine's details (pair 6).
-- **ABI coverage**: hegel-c binds 69 of libhegel 0.50.0's 157 functions
-  (the other 88, each classified, in `tools/libhegel-coverage.toml`;
-  `make check-libhegel-coverage`).
-  Not reachable from hegel-c: date/time/datetime/uuid/ipv4/ipv6/email/
-  url/domain and grammar generators, `hegel_repeat_*`, test-case clones
-  (multi-threaded generation), events/statistics, the pretty printer,
-  `stop_on_first_failure` / `derandomize` / profiles as code (the env
-  vars and `hegel.toml` still apply).
+- **ABI coverage**: when measured, hegel-c bound 69 of libhegel 0.50.0's
+  157 functions. *Since 2026-11-08:* 111, the other 46 classified in
+  `tools/libhegel-coverage.toml` (`make check-libhegel-coverage`). Still
+  not reachable from hegel-c: test-case clones (multi-threaded
+  generation) and the pretty printer.
 - **Fork mode semantics**: state the body changes in the process doesn't
   survive the case; counting executions here needed an `O_APPEND` file
   for that reason.
