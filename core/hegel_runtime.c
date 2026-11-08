@@ -394,6 +394,214 @@ int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
   return len;
 }
 
+/* ---- Value draws (dates, times, uuids, IPs, emails, URLs, domains) ----
+**
+** Each is one wire op (HEGEL_OP_DRAW_DATE..DRAW_DOMAIN); dates and times
+** travel field by field (see hegel_internal.h), never as raw structs. */
+
+static const hegel_date default_min_date = { 1, 1, 1 };
+static const hegel_date default_max_date = { 9999, 12, 31 };
+static const hegel_time default_min_time = { 0, 0, 0, 0 };
+static const hegel_time default_max_time = { 23, 59, 59, 999999999 };
+
+static void put_date (hegel_buf * b, const hegel_date * d)
+{
+  HEGEL_BUF_PUT (b, d->year);
+  HEGEL_BUF_PUT (b, d->month);
+  HEGEL_BUF_PUT (b, d->day);
+}
+
+static void put_time (hegel_buf * b, const hegel_time * t)
+{
+  HEGEL_BUF_PUT (b, t->hour);
+  HEGEL_BUF_PUT (b, t->minute);
+  HEGEL_BUF_PUT (b, t->second);
+  HEGEL_BUF_PUT (b, t->nanosecond);
+}
+
+/* Read the next `n` response bytes at *off into `out` (zeros when short). */
+static void resp_take (const hegel_buf * r, size_t * off, void * out, size_t n)
+{
+  if (*off + n <= r->len) memcpy (out, r->data + *off, n);
+  else memset (out, 0, n);
+  *off += n;
+}
+
+static hegel_date take_date (const hegel_buf * r, size_t * off)
+{
+  hegel_date d;
+  memset (&d, 0, sizeof d);
+  resp_take (r, off, &d.year, sizeof d.year);
+  resp_take (r, off, &d.month, sizeof d.month);
+  resp_take (r, off, &d.day, sizeof d.day);
+  return d;
+}
+
+static hegel_time take_time (const hegel_buf * r, size_t * off)
+{
+  hegel_time t;
+  memset (&t, 0, sizeof t);
+  resp_take (r, off, &t.hour, sizeof t.hour);
+  resp_take (r, off, &t.minute, sizeof t.minute);
+  resp_take (r, off, &t.second, sizeof t.second);
+  resp_take (r, off, &t.nanosecond, sizeof t.nanosecond);
+  return t;
+}
+
+/* "YYYY-MM-DD" / "HH:MM:SS[.nnnnnnnnn]", as the Rust frontend formats them. */
+static void fmt_date (char * s, size_t n, hegel_date d)
+{
+  snprintf (s, n, "%04" PRId32 "-%02u-%02u", d.year, d.month, d.day);
+}
+
+static void fmt_time (char * s, size_t n, hegel_time t)
+{
+  if (t.nanosecond) snprintf (s, n, "%02u:%02u:%02u.%09" PRIu32, t.hour, t.minute, t.second,
+                              t.nanosecond);
+  else snprintf (s, n, "%02u:%02u:%02u", t.hour, t.minute, t.second);
+}
+
+hegel_date hegel_draw_date (hegel_testcase * tc, const hegel_date * min,
+                            const hegel_date * max)
+{
+  if (!tc->silent) tc->draw_count++;
+  hegel_buf p, r;
+  hegel__buf_init (&p);
+  hegel__buf_init (&r);
+  put_date (&p, min ? min : &default_min_date);
+  put_date (&p, max ? max : &default_max_date);
+  hegel__call (tc, HEGEL_OP_DRAW_DATE, p.data, (uint32_t) p.len, &r, 0);
+  size_t off = 0;
+  hegel_date v = take_date (&r, &off);
+  hegel__buf_free (&p);
+  hegel__buf_free (&r);
+  char s[32];
+  fmt_date (s, sizeof s, v);
+  trace (tc, "%s", s);
+  return v;
+}
+
+hegel_time hegel_draw_time (hegel_testcase * tc, const hegel_time * min,
+                            const hegel_time * max)
+{
+  if (!tc->silent) tc->draw_count++;
+  hegel_buf p, r;
+  hegel__buf_init (&p);
+  hegel__buf_init (&r);
+  put_time (&p, min ? min : &default_min_time);
+  put_time (&p, max ? max : &default_max_time);
+  hegel__call (tc, HEGEL_OP_DRAW_TIME, p.data, (uint32_t) p.len, &r, 0);
+  size_t off = 0;
+  hegel_time v = take_time (&r, &off);
+  hegel__buf_free (&p);
+  hegel__buf_free (&r);
+  char s[32];
+  fmt_time (s, sizeof s, v);
+  trace (tc, "%s", s);
+  return v;
+}
+
+hegel_datetime hegel_draw_datetime (hegel_testcase * tc, const hegel_datetime * min,
+                                    const hegel_datetime * max)
+{
+  if (!tc->silent) tc->draw_count++;
+  hegel_buf p, r;
+  hegel__buf_init (&p);
+  hegel__buf_init (&r);
+  put_date (&p, min ? &min->date : &default_min_date);
+  put_time (&p, min ? &min->time : &default_min_time);
+  put_date (&p, max ? &max->date : &default_max_date);
+  put_time (&p, max ? &max->time : &default_max_time);
+  hegel__call (tc, HEGEL_OP_DRAW_DATETIME, p.data, (uint32_t) p.len, &r, 0);
+  size_t off = 0;
+  hegel_datetime v;
+  v.date = take_date (&r, &off);
+  v.time = take_time (&r, &off);
+  hegel__buf_free (&p);
+  hegel__buf_free (&r);
+  char ds[32], ts[32];
+  fmt_date (ds, sizeof ds, v.date);
+  fmt_time (ts, sizeof ts, v.time);
+  trace (tc, "%sT%s", ds, ts);
+  return v;
+}
+
+/* Fixed-size byte draws: uuid (u32 version payload), ipv4, ipv6. */
+static void draw_fixed (hegel_testcase * tc, uint8_t op, const void * payload, uint32_t len,
+                        uint8_t * out, size_t n)
+{
+  if (!tc->silent) tc->draw_count++;
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, op, payload, len, &r, 0);
+  size_t off = 0;
+  resp_take (&r, &off, out, n);
+  hegel__buf_free (&r);
+}
+
+hegel_uuid hegel_draw_uuid (hegel_testcase * tc, int version)
+{
+  hegel_uuid u;
+  /* Out-of-range versions go to the server as-is, which rejects them. */
+  uint32_t v = version < 0 ? UINT32_MAX : (uint32_t) version;
+  draw_fixed (tc, HEGEL_OP_DRAW_UUID, &v, sizeof v, u.bytes, sizeof u.bytes);
+  const uint8_t * b = u.bytes;
+  trace (tc, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+         b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+         b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
+  return u;
+}
+
+hegel_ipv4 hegel_draw_ipv4 (hegel_testcase * tc)
+{
+  hegel_ipv4 a;
+  draw_fixed (tc, HEGEL_OP_DRAW_IPV4, NULL, 0, a.bytes, sizeof a.bytes);
+  trace (tc, "%u.%u.%u.%u", a.bytes[0], a.bytes[1], a.bytes[2], a.bytes[3]);
+  return a;
+}
+
+hegel_ipv6 hegel_draw_ipv6 (hegel_testcase * tc)
+{
+  hegel_ipv6 a;
+  draw_fixed (tc, HEGEL_OP_DRAW_IPV6, NULL, 0, a.bytes, sizeof a.bytes);
+  const uint8_t * b = a.bytes;
+  trace (tc, "%x:%x:%x:%x:%x:%x:%x:%x",
+         (b[0] << 8) | b[1], (b[2] << 8) | b[3], (b[4] << 8) | b[5], (b[6] << 8) | b[7],
+         (b[8] << 8) | b[9], (b[10] << 8) | b[11], (b[12] << 8) | b[13], (b[14] << 8) | b[15]);
+  return a;
+}
+
+static int draw_value_string (hegel_testcase * tc, uint8_t op, const void * payload,
+                              uint32_t len, char * buf, int capacity)
+{
+  if (!tc->silent) tc->draw_count++;
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, op, payload, len, &r, 0);
+  int n = copy_out (&r, buf, capacity, 1);
+  hegel__buf_free (&r);
+  if (capacity > 0) trace (tc, "\"%s\"", buf);
+  return n;
+}
+
+int hegel_draw_email (hegel_testcase * tc, char * buf, int capacity)
+{
+  return draw_value_string (tc, HEGEL_OP_DRAW_EMAIL, NULL, 0, buf, capacity);
+}
+
+int hegel_draw_url (hegel_testcase * tc, char * buf, int capacity)
+{
+  return draw_value_string (tc, HEGEL_OP_DRAW_URL, NULL, 0, buf, capacity);
+}
+
+int hegel_draw_domain (hegel_testcase * tc, int max_length, char * buf, int capacity)
+{
+  /* 0 = the engine default, 255; out-of-range lengths go to the server
+  ** as-is, which rejects them. */
+  uint64_t m = max_length == 0 ? 255 : max_length < 0 ? 0 : (uint64_t) max_length;
+  return draw_value_string (tc, HEGEL_OP_DRAW_DOMAIN, &m, sizeof m, buf, capacity);
+}
+
 /* ---- Spans ---- */
 
 uint64_t hegel_label (const char * name)

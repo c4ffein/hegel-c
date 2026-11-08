@@ -227,6 +227,87 @@ int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
 #define HEGEL__DRAW_BOOL_0() ((bool)(hegel_draw_int ((tc), 0, 1)))
 #define HEGEL_DRAW_BOOL(...) HEGEL__DISPATCH (HEGEL__DRAW_BOOL, __VA_ARGS__)
 
+/* ---- Value draws: dates, times, UUIDs, IP addresses, emails, URLs, domains ----
+**
+** The engine's own generators for common value types: each is ONE draw
+** the engine knows the shape of, so it shrinks toward a simple value of
+** that type (a date toward 2000-01-01, a time toward midnight, ...)
+** instead of toward whatever a hand-rolled generator's parts shrink to.
+** Same fork / nofork behaviour as every other draw. */
+
+/* A proleptic Gregorian calendar date: month 1..12, day 1..days-in-month. */
+typedef struct {
+  int32_t  year;
+  uint8_t  month;
+  uint8_t  day;
+} hegel_date;
+
+/* A time of day: hour 0..23, minute and second 0..59 (no leap second),
+** nanosecond 0..999999999. */
+typedef struct {
+  uint8_t  hour;
+  uint8_t  minute;
+  uint8_t  second;
+  uint32_t nanosecond;
+} hegel_time;
+
+/* A naive datetime (no timezone). */
+typedef struct {
+  hegel_date date;
+  hegel_time time;
+} hegel_datetime;
+
+/* 16 bytes, big-endian (bytes[0] is the first hex pair of the canonical
+** form; the version is bytes[6] >> 4, the variant the top bits of bytes[8]). */
+typedef struct { uint8_t bytes[16]; } hegel_uuid;
+/* Network byte order: 192.168.0.1 is { 192, 168, 0, 1 }. */
+typedef struct { uint8_t bytes[4]; }  hegel_ipv4;
+typedef struct { uint8_t bytes[16]; } hegel_ipv6;
+
+/* Draw a date in [*min, *max] (inclusive).  NULL bounds are the engine
+** defaults: min 0001-01-01, max 9999-12-31; given bounds may use years
+** -999999..999999.  Shrinks toward 2000-01-01, or the nearest bound when
+** that is out of range.  Bounds that are not real dates, or min > max,
+** abort the run as a health failure. */
+hegel_date hegel_draw_date (hegel_testcase * tc, const hegel_date * min,
+                            const hegel_date * max);
+
+/* Draw a time of day in [*min, *max].  NULL bounds: 00:00:00.000000000
+** and 23:59:59.999999999.  Shrinks toward min. */
+hegel_time hegel_draw_time (hegel_testcase * tc, const hegel_time * min,
+                            const hegel_time * max);
+
+/* Draw a datetime in [*min, *max].  NULL bounds: 0001-01-01T00:00:00 and
+** 9999-12-31T23:59:59.999999999.  Shrinks toward 2000-01-01T00:00:00, or
+** the nearest bound. */
+hegel_datetime hegel_draw_datetime (hegel_testcase * tc, const hegel_datetime * min,
+                                    const hegel_datetime * max);
+
+/* Draw a UUID.  version 0: any 128 bits except the nil UUID.  version
+** 1..15: the RFC 4122 version nibble is forced to it and the variant to
+** RFC 4122 (bytes[8] is 10xxxxxx); conventionally 1..5.  Anything else
+** is a health failure. */
+hegel_uuid hegel_draw_uuid (hegel_testcase * tc, int version);
+
+/* Draw an IPv4 / IPv6 address (any address, special ranges included). */
+hegel_ipv4 hegel_draw_ipv4 (hegel_testcase * tc);
+hegel_ipv6 hegel_draw_ipv6 (hegel_testcase * tc);
+
+/* Draw an RFC 5321/5322 email address (`local@domain`), an RFC 3986
+** http/https URL, or a fully-qualified domain name of at most max_length
+** characters (4..255; 0 means 255).  Same return semantics as
+** hegel_draw_text: a NUL-terminated string in buf, truncated to
+** capacity - 1 bytes, the length written returned (0 if capacity < 1).
+** All three are ASCII and never contain NUL.  Truncation cuts a valid
+** value into an invalid one, so size buf for the longest value: an email
+** is at most 254 characters, a domain max_length; a URL has no bound
+** (its path has as many components as the engine draws, each up to ~300
+** characters percent-encoded) — 4096 bytes covers what it generates in
+** practice, and a return of capacity - 1 means the URL may be cut. */
+int hegel_draw_email  (hegel_testcase * tc, char * buf, int capacity);
+int hegel_draw_url    (hegel_testcase * tc, char * buf, int capacity);
+int hegel_draw_domain (hegel_testcase * tc, int max_length, char * buf, int capacity);
+
 /* ---- Test suite ---- */
 
 /* A test suite runs multiple tests in one binary; each test is its own

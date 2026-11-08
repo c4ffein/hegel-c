@@ -218,9 +218,12 @@ static int regex_gen (const hg_engine * e, const uint8_t * pat, uint32_t plen, h
   return HG_OK;
 }
 
+static void value_strgens_free (const hg_engine * e);
+
 void hegel__srv_run_end (void)
 {
   const hg_engine * e = hg_engine_get ();
+  value_strgens_free (e);
   for (int i = 0; i < g_n_strgens; i++) {
     if (e) e->string_generator_free (e->ctx, g_strgens[i].gen);
     free (g_strgens[i].pattern);
@@ -313,6 +316,182 @@ static int draw_float (const hg_engine * e, hg_tc * t, double min, double max, u
   double tiny = width == 32 ? 1.401298464324817e-45 : 5e-324;
   return e->generate_float (e->ctx, t, width, min, max, false, allow_inf, false, false,
                             tiny, out);
+}
+
+/* ---- Value draws (dates, times, uuids, IPs, emails, URLs, domains) ----
+**
+** Wire encodings (hegel_internal.h): a date is { i32 year, u8 month,
+** u8 day }, a time { u8 hour, u8 minute, u8 second, u32 nanosecond },
+** packed field by field so struct padding never crosses the wire.  The
+** email / url / domain string generators are run-scoped like text and
+** regex ones: one email, one url, one domain per distinct max_length.
+** Their alphabets are ASCII (a URL fragment percent-encodes anything
+** else, NUL included), so the strings are safe as C strings. */
+
+static hg_strgen * g_email_gen = NULL;
+static hg_strgen * g_url_gen = NULL;
+static struct { uint64_t max_length; hg_strgen * gen; } g_domain_gens[256];
+static int         g_n_domain_gens = 0;
+
+static void value_strgens_free (const hg_engine * e)
+{
+  if (e) {
+    if (g_email_gen) e->string_generator_free (e->ctx, g_email_gen);
+    if (g_url_gen) e->string_generator_free (e->ctx, g_url_gen);
+    for (int i = 0; i < g_n_domain_gens; i++)
+      e->string_generator_free (e->ctx, g_domain_gens[i].gen);
+  }
+  g_email_gen = g_url_gen = NULL;
+  g_n_domain_gens = 0;
+}
+
+static int value_strgen (const hg_engine * e, uint8_t op, uint64_t max_length, hg_strgen ** out)
+{
+  int rc;
+  if (op == HEGEL_OP_DRAW_EMAIL || op == HEGEL_OP_DRAW_URL) {
+    hg_strgen ** slot = op == HEGEL_OP_DRAW_EMAIL ? &g_email_gen : &g_url_gen;
+    if (!*slot) {
+      rc = op == HEGEL_OP_DRAW_EMAIL ? e->string_generator_email (e->ctx, slot)
+                                     : e->string_generator_url (e->ctx, slot);
+      if (rc != HG_OK) { *slot = NULL; return rc; }
+    }
+    *out = *slot;
+    return HG_OK;
+  }
+  for (int i = 0; i < g_n_domain_gens; i++)
+    if (g_domain_gens[i].max_length == max_length) {
+      *out = g_domain_gens[i].gen;
+      return HG_OK;
+    }
+  rc = e->string_generator_domain (e->ctx, max_length, out);
+  if (rc == HG_OK) {    /* max_length is 4..255, so at most 252 entries */
+    g_domain_gens[g_n_domain_gens].max_length = max_length;
+    g_domain_gens[g_n_domain_gens].gen = *out;
+    g_n_domain_gens++;
+  }
+  return rc;
+}
+
+static hg_date rd_date (rd * r)
+{
+  hg_date d;
+  d.year = RD (r, int32_t);
+  d.month = RD (r, uint8_t);
+  d.day = RD (r, uint8_t);
+  return d;
+}
+
+static hg_time rd_time (rd * r)
+{
+  hg_time t;
+  t.hour = RD (r, uint8_t);
+  t.minute = RD (r, uint8_t);
+  t.second = RD (r, uint8_t);
+  t.nanosecond = RD (r, uint32_t);
+  return t;
+}
+
+static void put_date (hegel_buf * b, hg_date d)
+{
+  HEGEL_BUF_PUT (b, d.year);
+  HEGEL_BUF_PUT (b, d.month);
+  HEGEL_BUF_PUT (b, d.day);
+}
+
+static void put_time (hegel_buf * b, hg_time t)
+{
+  HEGEL_BUF_PUT (b, t.hour);
+  HEGEL_BUF_PUT (b, t.minute);
+  HEGEL_BUF_PUT (b, t.second);
+  HEGEL_BUF_PUT (b, t.nanosecond);
+}
+
+/* Serve one value-draw op (the HEGEL_OP_DRAW_DATE..DRAW_DOMAIN range). */
+static uint8_t serve_value_op (hegel_case_srv * c, uint8_t op, rd * r, hegel_buf * resp)
+{
+  const hg_engine * e = c->e;
+  hg_context * x = e->ctx;
+  hg_tc * t = c->htc;
+  uint8_t st;
+  int rc;
+
+  switch (op) {
+    case HEGEL_OP_DRAW_DATE: {
+      hg_date min = rd_date (r), max = rd_date (r), v = { 0, 0, 0 };
+      if (r->bad) return HEGEL_RESP_OK;   /* reported as truncated by the caller */
+      rc = e->generate_date (x, t, min, max, &v);
+      if ((st = eng_status (c, rc, "date draw", resp)) == HEGEL_RESP_OK) put_date (resp, v);
+      return st;
+    }
+    case HEGEL_OP_DRAW_TIME: {
+      hg_time min = rd_time (r), max = rd_time (r), v = { 0, 0, 0, 0 };
+      if (r->bad) return HEGEL_RESP_OK;
+      rc = e->generate_time (x, t, min, max, &v);
+      if ((st = eng_status (c, rc, "time draw", resp)) == HEGEL_RESP_OK) put_time (resp, v);
+      return st;
+    }
+    case HEGEL_OP_DRAW_DATETIME: {
+      hg_datetime min, max, v = { { 0, 0, 0 }, { 0, 0, 0, 0 } };
+      min.date = rd_date (r);
+      min.time = rd_time (r);
+      max.date = rd_date (r);
+      max.time = rd_time (r);
+      if (r->bad) return HEGEL_RESP_OK;
+      rc = e->generate_datetime (x, t, min, max, &v);
+      if ((st = eng_status (c, rc, "datetime draw", resp)) == HEGEL_RESP_OK) {
+        put_date (resp, v.date);
+        put_time (resp, v.time);
+      }
+      return st;
+    }
+    case HEGEL_OP_DRAW_UUID:
+    case HEGEL_OP_DRAW_IPV4:
+    case HEGEL_OP_DRAW_IPV6: {
+      uint8_t v[16] = { 0 };
+      size_t n = 16;
+      if (op == HEGEL_OP_DRAW_UUID) {
+        uint32_t version = RD (r, uint32_t);
+        if (r->bad) return HEGEL_RESP_OK;
+        if (version > 15)
+          return usage_error (resp, "hegel-c: uuid version must be 0 (any) or 1..15");
+        rc = e->generate_uuid (x, t, (uint8_t) version, version != 0, v);
+      } else if (op == HEGEL_OP_DRAW_IPV4) {
+        rc = e->generate_ipv4 (x, t, v);
+        n = 4;
+      } else {
+        rc = e->generate_ipv6 (x, t, v);
+      }
+      if ((st = eng_status (c, rc, op == HEGEL_OP_DRAW_UUID ? "uuid draw" : "ip address draw",
+                            resp)) == HEGEL_RESP_OK)
+        hegel__buf_put (resp, v, n);
+      return st;
+    }
+    case HEGEL_OP_DRAW_EMAIL:
+    case HEGEL_OP_DRAW_URL:
+    case HEGEL_OP_DRAW_DOMAIN: {
+      uint64_t max_length = 0;
+      if (op == HEGEL_OP_DRAW_DOMAIN) {
+        max_length = RD (r, uint64_t);
+        if (r->bad) return HEGEL_RESP_OK;
+        if (max_length < 4 || max_length > 255)
+          return usage_error (resp, "hegel-c: domain max_length must be in 4..255 (0 = 255)");
+      }
+      hg_strgen * g = NULL;
+      rc = value_strgen (e, op, max_length, &g);
+      if ((st = eng_status (c, rc, op == HEGEL_OP_DRAW_EMAIL ? "email generator"
+                                 : op == HEGEL_OP_DRAW_URL   ? "url generator"
+                                                             : "domain generator", resp)))
+        return st;
+      hg_str s = { NULL, 0 };
+      rc = e->generate_string (x, t, g, &s);
+      if ((st = eng_status (c, rc, "string draw", resp)) == HEGEL_RESP_OK) {
+        hegel__buf_put (resp, s.data, s.len);
+        e->owned_string_free (x, &s);
+      }
+      return st;
+    }
+  }
+  return usage_error (resp, "hegel-c: unknown value draw op");
 }
 
 int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, uint32_t len,
@@ -626,6 +805,19 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
       out->status = HG_STATUS_INVALID;
       return 2;
     }
+
+    /* ---- Value draws (serve_value_op above) ---- */
+    case HEGEL_OP_DRAW_DATE:
+    case HEGEL_OP_DRAW_TIME:
+    case HEGEL_OP_DRAW_DATETIME:
+    case HEGEL_OP_DRAW_UUID:
+    case HEGEL_OP_DRAW_IPV4:
+    case HEGEL_OP_DRAW_IPV6:
+    case HEGEL_OP_DRAW_EMAIL:
+    case HEGEL_OP_DRAW_URL:
+    case HEGEL_OP_DRAW_DOMAIN:
+      st = serve_value_op (c, op, &r, resp);
+      break;
 
     default: {
       char msg[96];

@@ -14,7 +14,7 @@
 #         gap         a feature hegel-c lacks (see TODO.md, "libhegel coverage")
 #
 # Classified 2026-11-06 against libhegel 0.50.0 (157 declared, 69 bound).
-# 2026-11-08: events bound: 71 bound, 19 deliberate, 67 gap.
+# 2026-11-08: events, value draws bound: 80 bound, 19 deliberate, 58 gap.
 
 [[group]]
 name = "settings getters"
@@ -51,15 +51,6 @@ functions = ["hegel_settings_set_backend", "hegel_settings_set_derandomize",
   "hegel_settings_set_stop_on_first_failure", "hegel_settings_set_test_location",
   "hegel_settings_set_unbounded_choices", "hegel_settings_new_for_profile",
   "hegel_settings_register_profile", "hegel_set_default_profile"]
-
-[[group]]
-name = "value generators"
-status = "gap"
-why = "dates, times, uuids, IP addresses, domains, emails, URLs: no hegel-c draw for them"
-functions = ["hegel_generate_date", "hegel_generate_datetime", "hegel_generate_time",
-  "hegel_generate_uuid", "hegel_generate_ipv4", "hegel_generate_ipv6",
-  "hegel_string_generator_domain", "hegel_string_generator_email",
-  "hegel_string_generator_url"]
 
 [[group]]
 name = "grammars"

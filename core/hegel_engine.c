@@ -140,6 +140,15 @@ const hg_engine * hg_engine_get (void)
   BIND (sm_rule_rejected,           "hegel_state_machine_rule_rejected");
   BIND (sm_should_check_invariant,  "hegel_state_machine_should_check_invariant");
   BIND (sm_free,                    "hegel_state_machine_free");
+  BIND (generate_date,              "hegel_generate_date");
+  BIND (generate_time,              "hegel_generate_time");
+  BIND (generate_datetime,          "hegel_generate_datetime");
+  BIND (generate_uuid,              "hegel_generate_uuid");
+  BIND (generate_ipv4,              "hegel_generate_ipv4");
+  BIND (generate_ipv6,              "hegel_generate_ipv6");
+  BIND (string_generator_email,     "hegel_string_generator_email");
+  BIND (string_generator_url,       "hegel_string_generator_url");
+  BIND (string_generator_domain,    "hegel_string_generator_domain");
   BIND (result_status,              "hegel_run_result_status");
   BIND (result_error,               "hegel_run_result_error");
   BIND (result_error_kind,          "hegel_run_result_error_kind");

@@ -113,6 +113,18 @@
 ** have a response, like TARGET: a bad label or value is a health failure. */
 #define HEGEL_OP_EVENT        70   /* str label                                   */
 #define HEGEL_OP_EVENT_VALUE  71   /* f64 value, str label                        */
+/* Value draws (libhegel value generators).  "date" is { i32 year, u8 month,
+** u8 day } (6 bytes), "time" is { u8 hour, u8 minute, u8 second,
+** u32 nanosecond } (7 bytes), "datetime" is date then time. */
+#define HEGEL_OP_DRAW_DATE     72  /* date min, date max               -> date    */
+#define HEGEL_OP_DRAW_TIME     73  /* time min, time max               -> time    */
+#define HEGEL_OP_DRAW_DATETIME 74  /* datetime min, datetime max       -> datetime */
+#define HEGEL_OP_DRAW_UUID     75  /* u32 version (0 = any, else 1..15) -> 16 bytes */
+#define HEGEL_OP_DRAW_IPV4     76  /*                                  -> 4 bytes  */
+#define HEGEL_OP_DRAW_IPV6     77  /*                                  -> 16 bytes */
+#define HEGEL_OP_DRAW_EMAIL    78  /*                                  -> str      */
+#define HEGEL_OP_DRAW_URL      79  /*                                  -> str      */
+#define HEGEL_OP_DRAW_DOMAIN   80  /* u64 max_length (4..255)          -> str      */
 
 typedef struct {
   uint8_t  op;

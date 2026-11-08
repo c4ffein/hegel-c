@@ -55,6 +55,12 @@ typedef struct { uint8_t * data; size_t len; }    hg_bytes;
 
 #define HG_STR_Z(s) ((hg_str){ (s), strlen (s) })
 
+/* hegel_date_t / hegel_time_t / hegel_datetime_t (passed by value, so
+** the layout must match hegel.h exactly) */
+typedef struct { int32_t year; uint8_t month; uint8_t day; }                     hg_date;
+typedef struct { uint8_t hour; uint8_t minute; uint8_t second; uint32_t nanosecond; } hg_time;
+typedef struct { hg_date date; hg_time time; }                                   hg_datetime;
+
 /* hegel_result_t */
 #define HG_OK                   0
 #define HG_E_STOP_TEST         -1
@@ -194,6 +200,20 @@ typedef struct {
   int (*sm_rule_rejected)       (hg_context *, hg_tc *, hg_sm *, int64_t worker);
   int (*sm_should_check_invariant) (hg_context *, hg_tc *, hg_sm *, int64_t idx, bool * out);
   int (*sm_free)                (hg_context *, hg_sm *);
+
+  /* Value generators: dates, times, uuids, IP addresses (libhegel 0.50)
+  ** and the email / url / domain string generators. */
+  int (*generate_date)     (hg_context *, hg_tc *, hg_date min, hg_date max, hg_date * out);
+  int (*generate_time)     (hg_context *, hg_tc *, hg_time min, hg_time max, hg_time * out);
+  int (*generate_datetime) (hg_context *, hg_tc *, hg_datetime min, hg_datetime max,
+                            hg_datetime * out);
+  int (*generate_uuid)     (hg_context *, hg_tc *, uint8_t version, bool has_version,
+                            uint8_t * out16);
+  int (*generate_ipv4)     (hg_context *, hg_tc *, uint8_t * out4);
+  int (*generate_ipv6)     (hg_context *, hg_tc *, uint8_t * out16);
+  int (*string_generator_email)  (hg_context *, hg_strgen ** out);
+  int (*string_generator_url)    (hg_context *, hg_strgen ** out);
+  int (*string_generator_domain) (hg_context *, uint64_t max_length, hg_strgen ** out);
 
   int (*result_status)        (hg_context *, const hg_result *, uint32_t * out);
   int (*result_error)         (hg_context *, const hg_result *, const hg_str ** out);
