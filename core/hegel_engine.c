@@ -103,6 +103,8 @@ const hg_engine * hg_engine_get (void)
   BIND (start_span,                 "hegel_start_span");
   BIND (stop_span,                  "hegel_stop_span");
   BIND (target,                     "hegel_target");
+  BIND (event,                      "hegel_event");
+  BIND (event_value,                "hegel_event_value");
   BIND (generate_boolean,           "hegel_generate_boolean");
   BIND (generate_integer,           "hegel_generate_integer");
   BIND (generate_integer_big,       "hegel_generate_integer_big");

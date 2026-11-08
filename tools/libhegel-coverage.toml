@@ -13,8 +13,8 @@
 # status: deliberate  hegel-c does not need it (say why)
 #         gap         a feature hegel-c lacks (see TODO.md, "libhegel coverage")
 #
-# Classified 2026-11-06 against libhegel 0.50.0: 157 declared, 69 bound,
-# 88 listed below.
+# Classified 2026-11-06 against libhegel 0.50.0 (157 declared, 69 bound).
+# 2026-11-08: events bound: 71 bound, 19 deliberate, 67 gap.
 
 [[group]]
 name = "settings getters"
@@ -77,12 +77,6 @@ status = "gap"
 why = "run a body as many times as the engine wants, shrinking to the fewest repetitions"
 functions = ["hegel_new_repeat", "hegel_repeat_failed", "hegel_repeat_free",
   "hegel_repeat_more"]
-
-[[group]]
-name = "events"
-status = "gap"
-why = "per-case events and values for the engine's statistics"
-functions = ["hegel_event", "hegel_event_value"]
 
 [[group]]
 name = "labels"

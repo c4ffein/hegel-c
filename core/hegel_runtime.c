@@ -607,6 +607,33 @@ void hegel_target (hegel_testcase * tc, double value, const char * label)
   hegel__buf_free (&p);
 }
 
+/* ---- Events (statistics observations) ---- */
+
+static void event_label_check (hegel_testcase * tc, const char * fn, const char * label)
+{
+  if (label) return;
+  char msg[96];
+  snprintf (msg, sizeof msg, "hegel-c: %s with a NULL label", fn);
+  escape_health (tc, msg);
+}
+
+void hegel_event (hegel_testcase * tc, const char * label)
+{
+  event_label_check (tc, "hegel_event", label);
+  hegel__call (tc, HEGEL_OP_EVENT, label, (uint32_t) strlen (label), NULL, 0);
+}
+
+void hegel_event_value (hegel_testcase * tc, const char * label, double value)
+{
+  event_label_check (tc, "hegel_event_value", label);
+  hegel_buf p;
+  hegel__buf_init (&p);
+  HEGEL_BUF_PUT (&p, value);
+  hegel__buf_put (&p, label, strlen (label));
+  hegel__call (tc, HEGEL_OP_EVENT_VALUE, p.data, (uint32_t) p.len, NULL, 0);
+  hegel__buf_free (&p);
+}
+
 /* ---- HEGEL_ISOLATED ----
 **
 ** The block's body runs where a crash can't take the run down with it:
@@ -698,7 +725,9 @@ int hegel__isolate_enter (hegel_testcase * tc, const char * site)
     if (!payload) abort ();
     if (h.len && hegel__read_full (fds[0], payload, h.len) != 0) { free (payload); break; }
     int done = 0;
-    if (h.op == HEGEL_OP_NOTE || h.op >= HEGEL_OP_DONE) {
+    /* Only notes and the terminal verdicts (DONE .. HEALTH) come from an
+    ** isolated child; ops numbered after HEALTH are ordinary requests. */
+    if (h.op == HEGEL_OP_NOTE || (h.op >= HEGEL_OP_DONE && h.op <= HEGEL_OP_HEALTH)) {
       uint8_t st;
       done = hegel__serve_op (tc->srv, h.op, payload, h.len, &st, NULL, &out) == 2;
     }

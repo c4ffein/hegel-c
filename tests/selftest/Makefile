@@ -38,7 +38,8 @@ TESTS_PASS = test_pass_simple \
              test_report_multiple \
              test_recursion_nary_tree \
              test_alloc_lifetime \
-             test_recursive_tree
+             test_recursive_tree \
+             test_event_stats
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -68,13 +69,15 @@ TESTS_CRASH = test_crash_segfault \
 TESTS_HEALTH = test_filter_too_much \
                test_filter_too_much_suite \
                test_isolated_draw_inside \
-               test_recursive_misuse
+               test_recursive_misuse \
+               test_event_misuse
 
 # Tests that should FAIL and report a specific shrunk result: exit
 # non-zero AND print a line "shrunk: <X>" where <X> is the text after
 # "EXPECTED_SHRINK:" in the test's header comment.
 TESTS_SHRINK = test_recursive_shrinks \
-               test_span_list_shrinks
+               test_span_list_shrinks \
+               test_event_shrink
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH) $(TESTS_SHRINK)
 

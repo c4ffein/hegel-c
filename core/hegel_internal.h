@@ -109,6 +109,10 @@
 #define HEGEL_OP_ASSUME       62   /* assume(false): INVALID                      */
 #define HEGEL_OP_FAIL         63   /* u32 olen, origin, msg: INTERESTING          */
 #define HEGEL_OP_HEALTH       64   /* str msg: abort run, health failure          */
+/* Events — statistics observations (hegel_event / hegel_event_value).  They
+** have a response, like TARGET: a bad label or value is a health failure. */
+#define HEGEL_OP_EVENT        70   /* str label                                   */
+#define HEGEL_OP_EVENT_VALUE  71   /* f64 value, str label                        */
 
 typedef struct {
   uint8_t  op;

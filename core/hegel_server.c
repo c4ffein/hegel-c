@@ -581,6 +581,20 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
       return 1;
     }
 
+    /* ---- Events (statistics observations) ---- */
+    case HEGEL_OP_EVENT: {
+      hg_str label = { payload ? (const char *) payload : "", len };
+      st = eng_status (c, e->event (x, t, label), "event", resp);
+      break;
+    }
+    case HEGEL_OP_EVENT_VALUE: {
+      double v = RD (&r, double);
+      if (r.bad) break;
+      hg_str label = { (const char *) r.p, r.left };
+      st = eng_status (c, e->event_value (x, t, v, label), "event_value", resp);
+      break;
+    }
+
     /* ---- Terminal messages ---- */
     case HEGEL_OP_DONE:
       out->status = c->stop_seen ? HG_STATUS_OVERRUN : HG_STATUS_VALID;

@@ -633,6 +633,39 @@ void hegel_fail_with_origin (const char * origin, const char * msg);
 ** gets going — ask for ~1000 (see tests/selftest/test_target.c). */
 void hegel_target (hegel_testcase * tc, double value, const char * label);
 
+/* ---- Events: statistics observations ----
+**
+** Record what a test case exercised, for the engine's end-of-run
+** statistics report (like Hypothesis's event()):
+**
+**   if (n == 0) hegel_event (tc, "empty input");
+**   hegel_event_value (tc, "input length", (double) n);
+**
+** hegel_event: the report shows, per label, the percentage of test cases
+** in which the label was recorded at least once (repeats within one case
+** count once).  hegel_event_value: the report shows, per label, count,
+** min, median, mean, p90 and max of every value recorded (any number per
+** case).  Only generation-phase cases that completed (passed or failed)
+** are counted: discarded cases (hegel_assume) and shrink / replay cases
+** are not.  Events never steer generation or shrinking — unlike
+** hegel_target — and cost almost nothing.
+**
+** The engine prints the report on stderr at the end of each run (fork,
+** nofork, suites, stateful), only with its show_statistics setting on:
+** HEGEL_STATISTICS=1 in the environment.  Off, events report nothing.
+** For example:
+**
+**   Statistics (over 100 test cases):
+**     * empty input: 12.0% of test cases
+**     * input length: count 100, min 0, median 4, mean 4.31, p90 8, max 10
+**
+** Label: non-NULL UTF-8.  Value: finite (NaN / infinity is a health
+** failure).  Both are engine calls: fine in fork and nofork bodies and in
+** stateful rules, a health failure inside a HEGEL_ISOLATED block. */
+void hegel_event       (hegel_testcase * tc, const char * label);
+void hegel_event_value (hegel_testcase * tc, const char * label, double value);
+/* ---- end of events ---- */
+
 /* Assert a condition — if false, fails with message and triggers shrinking */
 void hegel_assert (int condition, const char * msg);
 

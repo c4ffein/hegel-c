@@ -135,6 +135,9 @@ typedef struct {
   int (*start_span) (hg_context *, hg_tc *, uint64_t label);
   int (*stop_span)  (hg_context *, hg_tc *, bool discard);
   int (*target)     (hg_context *, hg_tc *, double value, hg_str label);
+  /* Events: per-case observations for the end-of-run statistics report. */
+  int (*event)       (hg_context *, hg_tc *, hg_str label);
+  int (*event_value) (hg_context *, hg_tc *, double value, hg_str label);
 
   int (*generate_boolean)     (hg_context *, hg_tc *, double p, bool forced, bool has_forced,
                                bool * out);
