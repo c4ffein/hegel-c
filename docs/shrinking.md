@@ -253,6 +253,48 @@ fi
 Loose enough to absorb shrinker variance, tight enough to catch
 real degradation.
 
+### Step 7: run it fork-clean, because the bug reads uninitialized memory
+
+In November 2026 that assertion went red on CI, on 4 of 5 runs:
+
+```
+test_graph_order_shrink   FAIL — shrunk to nvert=13 (expected <= 5): MINIMAL nvert=13 nedges=1 edges=[(5,9)]
+```
+
+The shrinker had cut the edges down to the one K₂ pair that matters and
+then stopped, with ten isolated vertices still around it. hegel-c hadn't
+changed; the test was flaky. The bug reads uninitialized heap, and in the
+default *fast* fork mode each test case's child inherits the parent's heap
+as it happens to be at fork time. A smaller graph that fails on one replay
+can pass on the next, and the shrinker only keeps a candidate that fails
+again. So the shrink stalls wherever the small cases stop failing reliably.
+The report says so: it carries a `caveat: nondeterministic failure` line,
+for example "failed 8 of 20 replays".
+
+*Clean* fork mode (`HEGEL_C_FORK=clean`, or
+`hegel_set_fork_mode (HEGEL_FORK_CLEAN)`) re-executes the test binary for
+every case, with ASLR off, so every child starts from the same fresh heap
+and the failure becomes deterministic. Measured on 2026-11-08 against
+Scotch 7.0.7 (Debian 13's version), built without ASan as Debian ships it,
+with CI's `MALLOC_PERTURB_=170`, 15 seeds per mode:
+
+| fork mode | `nvert` after shrinking, sorted | over the limit of 5 |
+|---|---|---|
+| fast | 3, 3, 3, 4, 4, 5, 5, 5, 5, 6, 14, 15, 15, 18, 18 | 6 of 15, most with the caveat |
+| clean | 3 on every seed, always `edges=[(1,2)]` | 0 of 15 |
+
+Clean mode costs about 2.5x per case. Tests that key files by PID can't
+use it. It is only needed when the code under test can behave differently
+on the same input: uninitialized reads, use-after-free, anything that
+depends on the heap layout. The pin for this bug (`hgraphOrderCp`) ran
+fork-clean from October for that reason; CI's `_run-tests` caught up in
+`8a3ddbe`.
+
+**The general rule:** a shrink that ends larger than it should, together
+with a nondeterministic-failure caveat, means the failure depends on
+something outside the drawn input. Rerun with `HEGEL_C_FORK=clean` before
+trusting the counterexample, or before blaming the shrinker.
+
 ## Rules for writing tests that shrink well
 
 After building this test (and several others), the rules that
