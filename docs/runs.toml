@@ -653,6 +653,21 @@ note = "red on v7.1: xa_store_range (0, ULONG_MAX) does not return (crash: signa
 # ------------------------------------------------------------- 2026-11-08 ----
 
 [[run]]
+id = "2026-11-08-linux-pins-maple-prealloc"
+date = "2026-11-08"
+kind = "pins"
+project = "linux"
+summary = "maple_prealloc red again on its buggy state after RCU-mode rules were added; fixed green"
+hegel_c = "8a3ddbe"
+libhegel = "0.50.0"
+notes = "Informed, not blind: the test was fixed knowing the bug. hegel_c is the base; the tree had the uncommitted work of that day. The test only built non-RCU trees, where the first preallocation rarely sets the flag and a second one is never short; two rules switching mt_set_in_rcu / mt_clear_in_rcu let the engine reach it through the existing preallocation rules. Buggy red on seeds 1-6 (shrunk to 4-6 steps: a tree over two leaves, RCU on, a 1-node preallocation, then a re-preallocation for a splitting store), 4-5 min per run because shrinking hits the engine's 300 s budget; fixed green on seeds 1-6 (about 20 s, mostly the build)."
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_prealloc.conf"
+verdict = "as-expected"
+note = "buggy red (crash: exit 1; WARN_ON(!total) in mas_pop_node, then a NULL maple_node), fixed green; unexpected (buggy green) on every run since 2026-10-19"
+
+[[run]]
 id = "2026-11-08-scotch-pins-reducer-isolated"
 date = "2026-11-08"
 kind = "pins"

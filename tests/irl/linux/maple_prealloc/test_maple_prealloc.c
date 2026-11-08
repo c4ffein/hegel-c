@@ -26,6 +26,11 @@
 **   rule_prealloc_then_destroy   - prealloc(k), mas_destroy(mas) — leak probe
 **   rule_prealloc_then_other_key - prealloc(k1), then store at k2 with mas_store
 **                                  (mismatched location)
+**   rule_reprealloc_range        - prealloc(k), then re-prealloc the same mas
+**                                  for a range, mas_store_prealloc
+**   rule_set_rcu / rule_clear_rcu - mt_set_in_rcu / mt_clear_in_rcu: the
+**                                  tree's mode is part of the state (VMA
+**                                  trees run in RCU mode)
 **   rule_erase_existing          - mtree_erase
 **   rule_load                    - mtree_load, compare with shadow
 **
@@ -312,6 +317,27 @@ static void rule_prealloc_then_other_key (void *s, hegel_testcase *tc)
   st->c_prealloc_mismatch++;
 }
 
+/* ---- Tree mode: RCU on / off ----
+**
+** In RCU mode a store cannot reuse nodes in place, so it needs nodes in
+** cases a non-RCU tree does not (an in-node store asks for one) — a
+** different set of preallocation sizes, which is what the
+** preallocation rules above are exercised under.  mm's VMA trees are in
+** this mode. */
+static void rule_set_rcu (void *s, hegel_testcase *tc)
+{
+  (void) tc;
+  st_t *st = s;
+  mt_set_in_rcu (&st->mt);
+}
+
+static void rule_clear_rcu (void *s, hegel_testcase *tc)
+{
+  (void) tc;
+  st_t *st = s;
+  mt_clear_in_rcu (&st->mt);
+}
+
 /* ---- Erase ---- */
 static void rule_erase_existing (void *s, hegel_testcase *tc)
 {
@@ -443,6 +469,8 @@ int main (int argc, char *argv[])
   (void) rule_prealloc_then_other_key;
   if (hegel_state_machine_add_rule (sm, "reprealloc_range", rule_reprealloc_range) != 0) return 1;
   if (hegel_state_machine_add_rule (sm, "store_run", rule_store_run) != 0) return 1;
+  if (hegel_state_machine_add_rule (sm, "set_rcu", rule_set_rcu) != 0) return 1;
+  if (hegel_state_machine_add_rule (sm, "clear_rcu", rule_clear_rcu) != 0) return 1;
 
   if (hegel_state_machine_add_rule_with_precondition
         (sm, "erase_existing", any_present, rule_erase_existing) != 0)

@@ -334,7 +334,7 @@ subsystem = "lib/maple_tree"
 classes = ["wrong-result"]
 provenance = "curated"
 tier = "A"
-status = "missed"
+status = "harness-only"
 fixed = "2025-06-16"
 author = "Liam R. Howlett"
 source = "git log"
@@ -348,6 +348,12 @@ store then WARN_ONs and dereferences NULL. The fix clears the flag during the \
 second preallocation."""
 property = "a store after two preallocations doesn't WARN or crash"
 why = "A stateful flag bug: what pure generators miss and state machines are for."
+notes = """2026-11-08: the harness reaches it again (was "missed" since 2026-10-19, \
+when an API-contract-violating rule that had made it red was unregistered). \
+It only ever built non-RCU trees, where the preallocations that set the flag \
+are rare and never short; RCU-mode rules (mt_set_in_rcu / mt_clear_in_rcu) \
+fixed that. Informed, not blind: written knowing the fix. Buggy red on 6 of 6 \
+seeds (4-5 min each, shrinking hits the engine's 300 s budget), fixed green."""
 
 [[target]]
 fixed_by = "c9ba5249ef8b"
