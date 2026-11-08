@@ -288,7 +288,10 @@ use it. It is only needed when the code under test can behave differently
 on the same input: uninitialized reads, use-after-free, anything that
 depends on the heap layout. The pin for this bug (`hgraphOrderCp`) ran
 fork-clean from October for that reason; CI's `_run-tests` caught up in
-`8a3ddbe`, and CI has been green since.
+`8a3ddbe`, and CI has been green since. Both had their own copy of the
+setting, and a manual run of the binary had neither, so the test now says
+it itself: `main()` calls `hegel_set_fork_mode (HEGEL_FORK_CLEAN)`. Put the
+mode in the test when the test needs it, not in whatever runs the test.
 
 **The general rule:** a shrink that ends larger than it should, together
 with a nondeterministic-failure caveat, means the failure depends on

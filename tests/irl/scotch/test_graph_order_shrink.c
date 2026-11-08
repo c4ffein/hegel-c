@@ -328,6 +328,12 @@ int
 main (void)
 {
   hegel_set_case_setup (seed_scotch);
+  /* Fork-clean, however the binary is run (CI, pin, by hand): the bug reads
+  ** uninitialized heap, so with a plain fork a small case fails on some
+  ** replays and not others and the shrink stalls (Scotch 7.0.7 without ASan,
+  ** 2026-11-08: nvert > 5 on 6 of 15 seeds fast, nvert = 3 on 15 of 15
+  ** clean; docs/shrinking.md, Step 7).  HEGEL_C_FORK=fast still overrides. */
+  hegel_set_fork_mode (HEGEL_FORK_CLEAN);
   /* 200 cases is more than enough — at ~25% trigger rate, hegel
   ** should hit a failing case within the first ~5 attempts and
   ** then spend the rest on shrinking. */
