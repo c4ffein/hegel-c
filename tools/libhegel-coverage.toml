@@ -14,17 +14,17 @@
 #         gap         a feature hegel-c lacks (see TODO.md, "libhegel coverage")
 #
 # Classified 2026-11-06 against libhegel 0.50.0 (157 declared, 69 bound).
-# 2026-11-08: events, value draws bound: 80 bound, 19 deliberate, 58 gap.
+# 2026-11-08: events, value draws, settings and profiles bound: 95 bound, 16 deliberate, 46 gap.
 
 [[group]]
 name = "settings getters"
 status = "deliberate"
-why = "hegel-c only sets settings; nothing reads them back"
+why = "hegel-c sets settings and reads back only the three its runner acts on itself (show_statistics and nondeterminism_strictness pick the verbosity, print_blob the reproduce line; bound)"
 functions = ["hegel_settings_get_backend", "hegel_settings_get_database",
-  "hegel_settings_get_derandomize", "hegel_settings_get_nondeterminism_strictness",
-  "hegel_settings_get_phases", "hegel_settings_get_print_blob",
+  "hegel_settings_get_derandomize",
+  "hegel_settings_get_phases",
   "hegel_settings_get_report_multiple_failures", "hegel_settings_get_seed",
-  "hegel_settings_get_show_statistics", "hegel_settings_get_stop_on_first_failure",
+  "hegel_settings_get_stop_on_first_failure",
   "hegel_settings_get_suppress_health_check", "hegel_settings_get_test_cases",
   "hegel_settings_get_unbounded_choices", "hegel_settings_get_verbosity"]
 
@@ -40,17 +40,6 @@ name = "unicode version"
 status = "deliberate"
 why = "C has no host Unicode version, so generators use the engine's newest tables (CLAUDE.md)"
 functions = ["hegel_set_unicode_version"]
-
-[[group]]
-name = "settings setters"
-status = "gap"
-why = "not settable from C (several are reachable through HEGEL_* environment variables, which hegel_settings_new reads)"
-functions = ["hegel_settings_set_backend", "hegel_settings_set_derandomize",
-  "hegel_settings_set_from_string", "hegel_settings_set_nondeterminism_strictness",
-  "hegel_settings_set_print_blob", "hegel_settings_set_show_statistics",
-  "hegel_settings_set_stop_on_first_failure", "hegel_settings_set_test_location",
-  "hegel_settings_set_unbounded_choices", "hegel_settings_new_for_profile",
-  "hegel_settings_register_profile", "hegel_set_default_profile"]
 
 [[group]]
 name = "grammars"

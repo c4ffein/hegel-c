@@ -88,6 +88,11 @@ typedef struct { hg_date date; hg_time time; }                                  
 #define HG_VERBOSITY_VERBOSE  2
 #define HG_VERBOSITY_DEBUG    3
 
+/* hegel_nondeterminism_strictness_t */
+#define HG_ND_QUIET 0
+#define HG_ND_WARN  1
+#define HG_ND_ERROR 2
+
 /* hegel_run_status_t */
 #define HG_RUN_PASSED 0
 #define HG_RUN_FAILED 1
@@ -224,6 +229,27 @@ typedef struct {
   int (*failure_origin)       (hg_context *, const hg_failure *, hg_str * out);
   int (*failure_blob)         (hg_context *, const hg_failure *, const hg_str ** out);
   int (*failure_caveat)       (hg_context *, const hg_failure *, const hg_str ** out);
+
+  /* ---- settings: profiles, from_string and the remaining setters ---- */
+  int (*settings_new_for_profile)       (hg_context *, hg_str name, hg_settings ** out);
+  int (*settings_register_profile)      (hg_context *, hg_str name, const hg_settings *);
+  int (*set_default_profile)            (hg_context *, hg_str name);
+  int (*settings_set_from_string)       (hg_context *, hg_settings *, hg_str key, hg_str value);
+  int (*settings_set_backend)           (hg_context *, hg_settings *, uint32_t backend);
+  int (*settings_set_derandomize)       (hg_context *, hg_settings *, bool yes);
+  int (*settings_set_nondeterminism_strictness) (hg_context *, hg_settings *, uint32_t v);
+  int (*settings_set_print_blob)        (hg_context *, hg_settings *, bool yes);
+  int (*settings_set_show_statistics)   (hg_context *, hg_settings *, bool yes);
+  int (*settings_set_stop_on_first_failure) (hg_context *, hg_settings *, bool yes);
+  int (*settings_set_unbounded_choices) (hg_context *, hg_settings *, bool yes);
+  int (*settings_set_test_location)     (hg_context *, hg_settings *, hg_str file, uint32_t line,
+                                         hg_str class_name, hg_str function);
+  /* read back what profile + env + options resolved to, for the settings
+  ** the runner acts on itself (engine notices, the reproduce line) */
+  int (*settings_get_show_statistics)   (hg_context *, const hg_settings *, bool * out);
+  int (*settings_get_print_blob)        (hg_context *, const hg_settings *, bool * out);
+  int (*settings_get_nondeterminism_strictness) (hg_context *, const hg_settings *, uint32_t * out);
+  /* ---- end settings ---- */
 } hg_engine;
 
 /*

@@ -158,6 +158,22 @@ const hg_engine * hg_engine_get (void)
   BIND (failure_origin,             "hegel_failure_origin");
   BIND (failure_blob,               "hegel_failure_reproduction_blob");
   BIND (failure_caveat,             "hegel_failure_caveat");
+  /* settings: profiles, from_string and the remaining setters */
+  BIND (settings_new_for_profile,   "hegel_settings_new_for_profile");
+  BIND (settings_register_profile,  "hegel_settings_register_profile");
+  BIND (set_default_profile,        "hegel_set_default_profile");
+  BIND (settings_set_from_string,   "hegel_settings_set_from_string");
+  BIND (settings_set_backend,       "hegel_settings_set_backend");
+  BIND (settings_set_derandomize,   "hegel_settings_set_derandomize");
+  BIND (settings_set_nondeterminism_strictness, "hegel_settings_set_nondeterminism_strictness");
+  BIND (settings_set_print_blob,    "hegel_settings_set_print_blob");
+  BIND (settings_set_show_statistics, "hegel_settings_set_show_statistics");
+  BIND (settings_set_stop_on_first_failure, "hegel_settings_set_stop_on_first_failure");
+  BIND (settings_set_unbounded_choices, "hegel_settings_set_unbounded_choices");
+  BIND (settings_set_test_location, "hegel_settings_set_test_location");
+  BIND (settings_get_show_statistics, "hegel_settings_get_show_statistics");
+  BIND (settings_get_print_blob,    "hegel_settings_get_print_blob");
+  BIND (settings_get_nondeterminism_strictness, "hegel_settings_get_nondeterminism_strictness");
 
   if (!ok) {
     dlclose (h);

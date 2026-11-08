@@ -99,6 +99,19 @@ typedef struct {
   int                 has_seed;         /* nonzero: use seed below */
   uint64_t            seed;
   int                 report_multiple;  /* nonzero: report every distinct failure */
+  /* ---- engine settings (see "Engine settings and profiles" below) ---- */
+  const char *        profile;          /* NULL: the default profile */
+  const char *        settings;         /* "key=value key=value ...", NULL: none */
+  int                 derandomize;      /* HEGEL_ON / HEGEL_OFF, 0: profile / env */
+  int                 stop_on_first_failure;  /* HEGEL_ON / HEGEL_OFF */
+  int                 show_statistics;  /* HEGEL_ON / HEGEL_OFF */
+  int                 print_blob;       /* HEGEL_ON / HEGEL_OFF: the reproduce line */
+  int                 unbounded_choices;  /* HEGEL_ON / HEGEL_OFF */
+  uint32_t            backend;          /* HEGEL_BACKEND_*, 0: profile / env */
+  uint32_t            nondeterminism;   /* HEGEL_NONDETERMINISM_*, 0: profile / env */
+  const char *        test_file;        /* test location (Antithesis reports), */
+  uint32_t            test_line;        /*   NULL test_file: "<binary>", line 0 */
+  const char *        test_function;    /* NULL: suite test name, else "run<N>" */
 } hegel_run_options;
 
 /* report_multiple: by default a run stops at its first failure (one bug
@@ -123,6 +136,111 @@ typedef struct {
 #define HEGEL_SKIP_GENERATE   (1u << 2)
 #define HEGEL_SKIP_TARGET     (1u << 3)         /* hegel_target hill-climbing */
 #define HEGEL_SKIP_SHRINK     (1u << 4)         /* report failures unshrunk */
+
+/* ---- Engine settings and profiles ----
+**
+** The remaining engine settings, as hegel_run_options fields.  Boolean
+** ones are tri-state: 0 keeps what the profile / hegel.toml / HEGEL_*
+** environment resolved, HEGEL_ON or HEGEL_OFF sets it.
+**
+**   derandomize            seed from a stable hash instead of fresh
+**                          randomness (when no seed is set): every run
+**                          of the binary sees the same cases.  The `ci`
+**                          profile turns it on.
+**   stop_on_first_failure  default ON: generation stops at the first
+**                          failure.  OFF spends the whole test_cases
+**                          budget first (every failure found is kept;
+**                          report_multiple decides how many are shown).
+**   show_statistics        the engine prints its statistics block at the
+**                          end of the run, on stderr: per hegel_event
+**                          label, the fraction of generated cases it
+**                          occurred in; per hegel_event_value label, a
+**                          distribution summary.  Turns the engine's
+**                          notices on for the run (see below).
+**   print_blob             default ON: each failure report ends with its
+**                          `reproduce: HEGEL_C_REPRODUCE=...` line; OFF
+**                          leaves it out (replay still works from the
+**                          database).  The engine never acts on it.
+**   unbounded_choices      lift the 2^20-choices-per-case limit.
+**   backend                HEGEL_BACKEND_DEFAULT (a seeded PRNG) or
+**                          HEGEL_BACKEND_URANDOM (fresh entropy per draw,
+**                          for Antithesis; no reproducible runs).
+**   nondeterminism         what a test whose replay diverges gets:
+**                          _QUIET (confirm failures by replay, silently;
+**                          the default), _WARN (the same with a one-line
+**                          notice, which turns the engine's notices on)
+**                          or _ERROR (the run errors out).
+**
+** `settings` passes engine settings as text, the way a hegel.toml profile
+** names them: "key=value" pairs separated by spaces, tabs or ';' (a value
+** holds no space: "phases=generate,shrink").  Keys: test_cases, seed,
+** derandomize, database, verbosity, phases, suppress_health_check,
+** report_multiple_failures, stop_on_first_failure, show_statistics,
+** print_blob, backend, nondeterminism_strictness, unbounded_choices,
+** database_key.  A bad key or value fails the run (returns 1) with the
+** engine's message.
+**
+** `profile` starts the run from a named profile instead of the default
+** one: `base`, `development`, `ci`, `workload`, a [profile] section of
+** hegel.toml, or one registered with hegel_register_profile.  An unknown
+** name fails the run.
+**
+** Precedence, lowest to highest:
+**   1. the profile: `profile` if set, else the default profile — the one
+**      hegel_set_default_profile named, else HEGEL_DEFAULT_PROFILE, else
+**      hegel.toml's `default =`, else `ci` on a CI server, else
+**      `development` (a named profile layers over the default one,
+**      except `base`); hegel.toml's section for it merges over it;
+**   2. the HEGEL_* environment variables (HEGEL_TEST_CASES, HEGEL_SEED,
+**      HEGEL_DERANDOMIZE, HEGEL_STATISTICS, HEGEL_PRINT_BLOB, ...);
+**   3. the `settings` string, pair by pair, left to right;
+**   4. the typed fields of hegel_run_options;
+**   5. what the runner owns, whatever came before: the verbosity (QUIET,
+**      or NORMAL when show_statistics or nondeterminism WARN resolved
+**      on), the database (off unless HEGEL_DATABASE names a directory;
+**      the key is "<binary>#<run>"), report_multiple_failures (off
+**      unless report_multiple or HEGEL_REPORT_MULTIPLE_FAILURES), and
+**      the test location.  So `verbosity`, `database`, `database_key`
+**      and `report_multiple_failures` from a profile or the settings
+**      string are overridden.
+**
+** Test location: where the test lives, for the engine's Antithesis
+** reporting (outside Antithesis it is unused): the property is reported
+** as "<binary>::<test_function> passes properties" at test_file:test_line.
+** HEGEL_TEST_LOCATION (fn) fills the three fields at the call site:
+**
+**   hegel_run_options o = { HEGEL_TEST_LOCATION (test_foo), .test_cases = 500 };
+*/
+#define HEGEL_ON    1
+#define HEGEL_OFF (-1)
+
+#define HEGEL_BACKEND_DEFAULT  1u
+#define HEGEL_BACKEND_URANDOM  2u
+
+#define HEGEL_NONDETERMINISM_QUIET  1u
+#define HEGEL_NONDETERMINISM_WARN   2u
+#define HEGEL_NONDETERMINISM_ERROR  3u
+
+#define HEGEL_TEST_LOCATION(fn) \
+  .test_file = __FILE__, .test_line = __LINE__, .test_function = #fn
+
+/* Register `opts` as the engine profile `name` (ASCII letters, digits,
+** '-' and '_'; not `base` or `default`), process-wide, replacing an
+** earlier registration.  The snapshot starts from opts->profile (NULL:
+** the default profile) with the environment applied, then opts->settings
+** and the typed fields, as a run would; runner-owned fields
+** (report_multiple, the test location) are not part of a profile.
+** Registering does not change runs by itself: name the profile in
+** hegel_run_options.profile, or make it the default.  Returns 0, or 1
+** with a message on stderr (bad name, bad settings).  Call it before the
+** runs that use it (in main). */
+int hegel_register_profile (const char * name, const hegel_run_options * opts);
+
+/* Make `name` the default profile for every later run in the process,
+** over HEGEL_DEFAULT_PROFILE, hegel.toml's `default =` and CI detection.
+** The name need not exist yet (it must when a run starts).  NULL or ""
+** clears an earlier call.  Returns 0, or 1 with a message on stderr. */
+int hegel_set_default_profile (const char * name);
 
 /* Like hegel_run_test_result / the nofork runner, with options (NULL =
 ** defaults).  Return 0 if the property held, 1 if not. */

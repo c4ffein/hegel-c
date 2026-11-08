@@ -424,7 +424,8 @@ static void print_reproduce (const hg_str * blob, uint64_t run_index)
              (unsigned long long) run_index, (int) blob->len, blob->data);
 }
 
-static int report (const hg_engine * e, const hg_result * result, uint64_t run_index)
+static int report (const hg_engine * e, const hg_result * result, uint64_t run_index,
+                   bool print_blob)
 {
   uint32_t status = HG_RUN_PASSED;
   e->result_status (e->ctx, result, &status);
@@ -470,7 +471,7 @@ static int report (const hg_engine * e, const hg_result * result, uint64_t run_i
     fprintf (stderr, "origin: %.*s\n", (int) origin.len, origin.data);
     if (cap && cap->msg[0]) fprintf (stderr, "message: %s\n", cap->msg);
     print_str (stderr, "caveat: ", caveat);
-    print_reproduce (blob, run_index);
+    if (print_blob) print_reproduce (blob, run_index);
     e->failure_free (e->ctx, f);
   }
   return 1;
@@ -542,6 +543,165 @@ static void database_key (char * buf, size_t n, uint64_t run_index)
   snprintf (buf, n, "%s#%llu", name, (unsigned long long) run_index);
 }
 
+/* ---- Engine settings: profiles, the settings string, typed fields ----
+**
+** Settings live in the runner (the parent in fork mode) and are applied
+** before the run starts; nothing crosses the wire.  Precedence (hegel_c.h,
+** "Engine settings and profiles"): profile < HEGEL_* env (both applied by
+** the engine when the handle is made) < opts->settings < typed fields <
+** what run_property_inner forces after (verbosity, database, report
+** multiple, test location). */
+
+static const char * g_suite_test_name;   /* the suite test running, if any */
+
+static int is_settings_sep (char c)
+{
+  return c == ' ' || c == '\t' || c == '\n' || c == ';';
+}
+
+/* opts->settings: "key=value" pairs separated by blanks or ';'. */
+static int apply_settings_string (const hg_engine * e, hg_settings * s, const char * text)
+{
+  const char * p = text;
+  for (;;) {
+    while (is_settings_sep (*p)) p++;
+    if (!*p) return 0;
+    const char * end = p;
+    while (*end && !is_settings_sep (*end)) end++;
+    const char * eq = memchr (p, '=', (size_t) (end - p));
+    if (!eq || eq == p) {
+      fprintf (stderr, "hegel-c: settings: \"%.*s\" is not key=value\n", (int) (end - p), p);
+      return 1;
+    }
+    hg_str key = { p, (size_t) (eq - p) };
+    hg_str val = { eq + 1, (size_t) (end - eq - 1) };
+    if (e->settings_set_from_string (e->ctx, s, key, val) != HG_OK) {
+      fprintf (stderr, "hegel-c: settings: %.*s: %s\n", (int) (end - p), p, hg_last_error (e));
+      return 1;
+    }
+    p = end;
+  }
+}
+
+/* A handle from opts->profile (or the default profile), with the settings
+** string and the typed fields applied.  NULL (message printed) on error. */
+static hg_settings * settings_from_options (const hg_engine * e, const hegel_run_options * o)
+{
+  hg_context * x = e->ctx;
+  hg_settings * s = NULL;
+  int rc = o->profile ? e->settings_new_for_profile (x, HG_STR_Z (o->profile), &s)
+                      : e->settings_new (x, &s);
+  if (rc != HG_OK) {
+    if (o->profile)
+      fprintf (stderr, "hegel-c: settings: profile \"%s\": %s\n", o->profile, hg_last_error (e));
+    else
+      fprintf (stderr, "hegel-c: settings: %s\n", hg_last_error (e));
+    return NULL;
+  }
+  if (o->settings && apply_settings_string (e, s, o->settings)) {
+    e->settings_free (x, s);
+    return NULL;
+  }
+  /* Only what the caller set overrides the profile / env. */
+  if (o->test_cases) e->settings_set_test_cases (x, s, o->test_cases);
+  if (o->has_seed) e->settings_set_seed (x, s, o->seed, true);
+  if (o->suppress_health) e->settings_set_suppress_health_check (x, s, o->suppress_health);
+  if (o->skip_phases) e->settings_set_phases (x, s, HG_PHASE_ALL & ~o->skip_phases);
+  if (o->derandomize) e->settings_set_derandomize (x, s, o->derandomize > 0);
+  if (o->stop_on_first_failure)
+    e->settings_set_stop_on_first_failure (x, s, o->stop_on_first_failure > 0);
+  if (o->show_statistics) e->settings_set_show_statistics (x, s, o->show_statistics > 0);
+  if (o->print_blob) e->settings_set_print_blob (x, s, o->print_blob > 0);
+  if (o->unbounded_choices) e->settings_set_unbounded_choices (x, s, o->unbounded_choices > 0);
+  if (o->backend && e->settings_set_backend (x, s, o->backend) != HG_OK) {
+    fprintf (stderr, "hegel-c: settings: backend %u: %s\n", o->backend, hg_last_error (e));
+    e->settings_free (x, s);
+    return NULL;
+  }
+  if (o->nondeterminism
+      && e->settings_set_nondeterminism_strictness (x, s, o->nondeterminism - 1) != HG_OK) {
+    fprintf (stderr, "hegel-c: settings: nondeterminism %u: %s\n", o->nondeterminism,
+             hg_last_error (e));
+    e->settings_free (x, s);
+    return NULL;
+  }
+  return s;
+}
+
+/* Where the test lives (the engine reports it inside Antithesis only):
+** the options' location, else the binary, line 0, and the suite test's
+** name or "run<N>". */
+static void set_test_location (const hg_engine * e, hg_settings * s,
+                               const hegel_run_options * o, uint64_t run_index)
+{
+  char exe[512], fn[64];
+  ssize_t len = readlink ("/proc/self/exe", exe, sizeof exe - 1);
+  exe[len > 0 ? len : 0] = 0;
+  const char * slash = strrchr (exe, '/');
+  const char * binary = slash ? slash + 1 : exe[0] ? exe : "hegel-c";
+  const char * file = o->test_file ? o->test_file : exe[0] ? exe : binary;
+  const char * func = o->test_function ? o->test_function : g_suite_test_name;
+  if (!func) {
+    snprintf (fn, sizeof fn, "run%llu", (unsigned long long) run_index);
+    func = fn;
+  }
+  e->settings_set_test_location (e->ctx, s, HG_STR_Z (file), o->test_file ? o->test_line : 0,
+                                 HG_STR_Z (binary), HG_STR_Z (func));
+}
+
+/* The engine's own output (its notices, the statistics block): stderr. */
+static void engine_output (void * user, const char * line, size_t len)
+{
+  (void) user;
+  fprintf (stderr, "%.*s\n", (int) len, line);
+}
+
+/* Engine notices are off (QUIET) unless a setting the engine reports
+** through them resolved on: show_statistics, nondeterminism WARN. */
+static uint32_t run_verbosity (const hg_engine * e, const hg_settings * s)
+{
+  bool stats = false;
+  uint32_t nd = HG_ND_QUIET;
+  e->settings_get_show_statistics (e->ctx, s, &stats);
+  e->settings_get_nondeterminism_strictness (e->ctx, s, &nd);
+  return stats || nd == HG_ND_WARN ? HG_VERBOSITY_NORMAL : HG_VERBOSITY_QUIET;
+}
+
+int hegel_register_profile (const char * name, const hegel_run_options * opts)
+{
+  static const hegel_run_options defaults;
+  if (g_clean.active) return 0;             /* the fork-clean child replays main() */
+  const hg_engine * e = hg_engine_get ();
+  if (!e) return 1;
+  if (!name) {
+    fprintf (stderr, "hegel-c: hegel_register_profile: NULL name\n");
+    return 1;
+  }
+  hg_settings * s = settings_from_options (e, opts ? opts : &defaults);
+  if (!s) return 1;
+  int rc = e->settings_register_profile (e->ctx, HG_STR_Z (name), s);
+  if (rc != HG_OK)
+    fprintf (stderr, "hegel-c: hegel_register_profile (\"%s\"): %s\n", name, hg_last_error (e));
+  e->settings_free (e->ctx, s);
+  return rc != HG_OK;
+}
+
+int hegel_set_default_profile (const char * name)
+{
+  if (g_clean.active) return 0;
+  const hg_engine * e = hg_engine_get ();
+  if (!e) return 1;
+  if (!name) name = "";
+  if (e->set_default_profile (e->ctx, HG_STR_Z (name)) != HG_OK) {
+    fprintf (stderr, "hegel-c: hegel_set_default_profile (\"%s\"): %s\n", name,
+             hg_last_error (e));
+    return 1;
+  }
+  return 0;
+}
+
+/* ---- end engine settings ---- */
+
 static int run_property_inner (void (*test_fn)(hegel_testcase *),
                                const hegel_run_options * o, int use_fork, uint64_t run_index,
                                const char * blob, size_t blob_len)
@@ -552,17 +712,12 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *),
   const char * merge_env = getenv ("HEGEL_C_MERGE_ORIGINS");
   int merge_origins = merge_env && *merge_env && strcmp (merge_env, "0") != 0;
 
-  hg_settings * s = NULL;
-  if (e->settings_new (x, &s) != HG_OK) {
-    fprintf (stderr, "hegel-c: settings: %s\n", hg_last_error (e));
-    return 1;
-  }
-  /* Only what the caller set overrides the engine's profile / env. */
-  if (o->test_cases) e->settings_set_test_cases (x, s, o->test_cases);
-  if (o->has_seed) e->settings_set_seed (x, s, o->seed, true);
-  if (o->suppress_health) e->settings_set_suppress_health_check (x, s, o->suppress_health);
-  if (o->skip_phases) e->settings_set_phases (x, s, HG_PHASE_ALL & ~o->skip_phases);
-  e->settings_set_verbosity (x, s, HG_VERBOSITY_QUIET);
+  hg_settings * s = settings_from_options (e, o);
+  if (!s) return 1;
+  e->settings_set_verbosity (x, s, run_verbosity (e, s));
+  set_test_location (e, s, o, run_index);
+  bool print_blob = true;
+  e->settings_get_print_blob (x, s, &print_blob);
   /* One failure per run unless asked: the run option, or the engine's own
   ** HEGEL_REPORT_MULTIPLE_FAILURES (left as hegel_settings_new read it). */
   const char * multi_env = getenv ("HEGEL_REPORT_MULTIPLE_FAILURES");
@@ -587,9 +742,9 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *),
   int started;
   if (blob) {
     hg_str b = { blob, blob_len };
-    started = e->run_start_blob (x, s, b, NULL, NULL, &run);
+    started = e->run_start_blob (x, s, b, engine_output, NULL, &run);
   } else {
-    started = e->run_start (x, s, NULL, NULL, &run);
+    started = e->run_start (x, s, engine_output, NULL, &run);
   }
   if (started != HG_OK) {
     fprintf (stderr, "hegel-c: %s failed: %s\n", blob ? "replaying HEGEL_C_REPRODUCE" : "hegel_run_start",
@@ -651,7 +806,7 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *),
       fprintf (stderr, "hegel-c: hegel_run_result failed: %s\n", hg_last_error (e));
       rc = 1;
     } else {
-      rc = report (e, result, run_index);
+      rc = report (e, result, run_index, print_blob);
       if (blob && rc == 0)
         fprintf (stderr, "hegel-c: HEGEL_C_REPRODUCE: run %llu did not reproduce the failure "
                          "(passes)\n", (unsigned long long) run_index);
@@ -752,7 +907,9 @@ int hegel_suite_run (hegel_suite * suite)
   for (int i = 0; i < suite->count; i++) {
     printf ("[suite] %s\n", suite->names[i]);
     fflush (stdout);
+    g_suite_test_name = suite->names[i];
     int rc = hegel_run_test_result (suite->fns[i]);
+    g_suite_test_name = NULL;
     printf ("[suite] %s: %s\n", suite->names[i], rc == 0 ? "PASS" : "FAIL");
     fflush (stdout);
     if (rc != 0) failures++;

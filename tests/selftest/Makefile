@@ -41,7 +41,9 @@ TESTS_PASS = test_pass_simple \
              test_recursive_tree \
              test_event_stats \
              test_value_draws_datetime \
-             test_value_draws_net
+             test_value_draws_net \
+             test_settings \
+             test_profiles
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
