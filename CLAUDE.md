@@ -220,7 +220,7 @@ The `fixed` state is what keeps rediscoveries honest: a test that is also red on
 **`inspiration/hegel/`** — sister hegel bindings + the canonical Agent Skill:
 - **hegel-java / hegel-ocaml**: the other in-process bindings over libhegel (Java 22 FFM; OCaml ctypes with checksum-verified cdylib download). Closest design relatives to our core; OCaml's `lib/ffi/ffi.ml` + `lib/client.ml` is the cleanest small consumer.
 - **hegel-go / hegel-typescript / hegel-cpp**: still on the retired Python-server model as of 2026-06; expect them to migrate to libhegel.
-- **hegel-core**: the retired Python server. Kept because `docs/library-api.md` is still the schema-dialect spec `hegel_generate` accepts.
+- **hegel-core**: the retired Python server. Its `docs/library-api.md` specifies the CBOR schema dialect of libhegel's old `hegel_generate` (removed in libhegel 0.26.0; hegel-c bound it until 2026-10-20), the dialect the retired schema layer (`experiments/schema-with-let/`) started out on; only history needs it now.
 - **hegel-skill**: the canonical Agent Skill (rust/go/cpp/ts language-specific references). Adding C is the documented extension path; see CLAUDE.md inside that repo.
 
 **`inspiration/existing-pbt-in-c/`** — competitive landscape, study these for design comparison:
