@@ -4,8 +4,8 @@
 
 - [Setup](#setup) — vendor, static link, `gcc` flags, the engine library
 - [Test Structure](#test-structure) — runners, suites, per-case setup, run options, replaying a failure
-- [TestCase Functions](#testcase-functions) — `hegel_draw_*`, `HEGEL_DRAW_*`, `hegel_assume`, `hegel_note`, `hegel_fail`, `HEGEL_ASSERT`, `hegel_target`
-- [Writing Generators](#writing-generators) — case memory (`hegel_alloc`), dependent fields, arrays, spans, optionals, one-of, recursion (`hegel_draw_recursive`), map / filter / flat_map
+- [TestCase Functions](#testcase-functions) — `hegel_draw_*`, `HEGEL_DRAW_*`, `hegel_assume`, `hegel_note`, `hegel_event`, `hegel_fail`, `HEGEL_ASSERT`, `hegel_target`
+- [Writing Generators](#writing-generators) — case memory (`hegel_alloc`), dependent fields, arrays, spans, optionals, one-of, recursion (`hegel_draw_recursive`), repeat loops, value draws (dates, uuids, IPs, emails, URLs), grammar strings, map / filter / flat_map
 - [C-Specific Examples](#c-specific-examples)
 - [Crash Isolation](#crash-isolation)
 - [Gotchas](#gotchas)
@@ -142,6 +142,24 @@ Fields: `test_cases`, `has_seed` + `seed`, `suppress_health` (`HEGEL_SUPPRESS_*`
 
 By default a run reports its first failure only: a second bug in the same property stays hidden until the first is fixed. `.report_multiple = 1` (or `HEGEL_REPORT_MULTIPLE_FAILURES=1`) keeps looking and reports every failure with a distinct origin — each `HEGEL_ASSERT` location, each crash signal — shrunk, with its own reproduce line. Worth turning on when hunting bugs; it costs shrinking time per extra bug. The engine also reads `HEGEL_*` environment variables (`HEGEL_TEST_CASES`, `HEGEL_SEED`, `HEGEL_DATABASE`, ...); a field set in code wins.
 
+**Settings and profiles.** More fields set the engine's other settings; zero keeps what the profile and environment resolved:
+
+- tri-state (`HEGEL_ON` / `HEGEL_OFF`): `derandomize`, `stop_on_first_failure` (OFF spends the whole budget even after a failure), `show_statistics` (the engine's statistics block on stderr, see `hegel_event`), `print_blob` (OFF drops the reproduce line), `unbounded_choices`;
+- `backend` (`HEGEL_BACKEND_*`), `nondeterminism` (`HEGEL_NONDETERMINISM_QUIET` / `_WARN` / `_ERROR`);
+- `settings`: a `"key=value key=value"` string in hegel.toml's vocabulary;
+- `profile`: `base`, `development`, `ci`, `workload`, a hegel.toml section, or one registered with `hegel_register_profile(name, &opts)`; `hegel_set_default_profile(name)` picks the default for every run (NULL clears);
+- `test_file` / `test_line` / `test_function`, most easily `HEGEL_TEST_LOCATION(test_foo)`.
+
+Precedence, lowest first: profile, `HEGEL_*` environment, the `settings` string, typed fields, and what the runner always owns (verbosity, database, `report_multiple`, test location).
+
+```c
+hegel_run_options nightly = { .profile = "ci", .test_cases = 10000 };
+hegel_register_profile("nightly", &nightly);
+hegel_run_options o = { HEGEL_TEST_LOCATION(test_foo), .profile = "nightly",
+                        .settings = "phases=generate,shrink", .show_statistics = HEGEL_ON };
+hegel_run_test_with(test_foo, &o);
+```
+
 ### Replaying a failure
 
 Every failure report ends with a line like `reproduce: HEGEL_C_REPRODUCE='1:AAEAAAAACgEAAABl'`. Rerun the same binary with that variable set and it replays exactly that failing case (the number is the run within the binary, in call order; the binary's other runs are skipped). Once the bug is fixed, the replay prints "did not reproduce" and passes — the quick way to check a fix.
@@ -189,6 +207,8 @@ static void test_division(hegel_testcase *tc) {
 ```
 
 `hegel_note` is dropped everywhere except the report of the minimal counterexample. Don't use it for progress logging.
+
+**Checking what a test exercises: events.** `hegel_event(tc, "empty input")` and `hegel_event_value(tc, "input length", (double) n)` record per-case observations. Run with `HEGEL_STATISTICS=1` (or `.show_statistics = HEGEL_ON`) to get the engine's report on stderr at the end of the run: `* empty input: 12.0% of test cases`, `* input length: count 100, min 0, median 4, mean 4.31, p90 8, max 10`. Use it to confirm a generator reaches the interesting cases (boundaries, empty inputs, deep trees). Events never change generation or shrinking (unlike `hegel_target`). Record them before `HEGEL_ISOLATED`, never inside it; labels are non-NULL UTF-8 and values must be finite. Only generation-phase cases that completed are counted.
 
 `hegel_fail` and `hegel_health_fail` differ in intent:
 
@@ -270,6 +290,23 @@ hegel_collection_free(tc, c);
 
 The engine decides when to stop and shrinks by deleting elements; `hegel_collection_reject` says the last element was invalid (a duplicate) so it doesn't count. The engine aims for **about 5 elements whatever the max** — fine for "a few things", wrong when the code under test only misbehaves on large inputs. Use a drawn length then.
 
+### Repeat loops
+
+For "do something an arbitrary number of times", let the engine own the count; a failing loop shrinks to the fewest iterations:
+
+```c
+Counter c = { 0 };
+HEGEL_REPEAT(tc) {                      /* the engine decides how many iterations */
+    counter_add(&c, HEGEL_DRAW_INT(0, 9));
+    HEGEL_ASSERT(counter_ok(&c), "after %d adds", c.n);
+}
+```
+
+- `HEGEL_REPEAT(tc) { ... }`: an assume discards the whole case; `continue` is fine, `break` / `return` / `goto` out of it are not.
+- `hegel_repeat_run(tc, fn, ctx)`: the body as a function; an assume ends only that iteration and the loop goes on.
+- Raw protocol: `hegel_repeat_new` / `_more` / `_free` (`_failed` too, but the runtime calls it for you when an iteration fails by assert, `hegel_fail` or a crash).
+- **Cost:** a passing loop is long — often until the case's choice budget runs out — and in fork mode every draw is a pipe round trip. Run repeat properties nofork (with `HEGEL_ISOLATED` around crash-prone code), use few cases, or cap a raw loop yourself and `hegel_repeat_free` it.
+
 ### Optionals and one-of
 
 An optional is a coin and then the value; a one-of is a drawn tag and a `switch`. A span around each keeps the alternatives apart for the shrinker:
@@ -334,6 +371,39 @@ static void test_tree(hegel_testcase *tc) {
 - Defaults (50 levels, 100 leaves) give dozens of nodes per tree (~80 on average for a binary tree); pass smaller budgets for small trees.
 
 Each sub-value gets its own span, so the shrinker can drop or swap whole subtrees. The raw protocol (`hegel_recursion_new` / `_branch` / `_leaf` / `_retry` / `_finish` / `_free`) is still there if you need control the helper doesn't give, but then the unwinding and freeing are yours. A coin flip per child with a hand-written depth cap also "works", but makes far smaller trees (around 5 nodes) and shrinks less like other Hegel frontends.
+
+### Value draws
+
+```c
+hegel_date d = hegel_draw_date(tc, NULL, NULL);                 /* 0001-01-01..9999-12-31 */
+static const hegel_date from = { 1970, 1, 1 };
+hegel_datetime dt = hegel_draw_datetime(tc, &(hegel_datetime){ from, {0} }, NULL);
+hegel_time t = hegel_draw_time(tc, NULL, NULL);
+hegel_uuid u = hegel_draw_uuid(tc, 4);        /* 0 = any version */
+hegel_ipv4 a = hegel_draw_ipv4(tc);           /* a.bytes[0..3], network order */
+char email[256], url[4096], host[256];
+hegel_draw_email(tc, email, sizeof email);
+hegel_draw_url(tc, url, sizeof url);
+hegel_draw_domain(tc, 63, host, sizeof host);
+```
+
+Prefer these to assembling dates or addresses from integer draws: they are always valid and shrink as values (a date toward 2000-01-01, a time toward its lower bound). NULL bounds are the engine's defaults; impossible bounds are health failures, not test failures. Size string buffers generously: a truncated email or URL is no longer valid.
+
+### Grammar strings
+
+`hegel_draw_grammar(tc, lark_text, start)` draws a string a Lark grammar accepts — inputs for parsers, config readers, query engines:
+
+```c
+static const char *EXPR =
+    "?start: expr\n"
+    "?expr: term | expr \"+\" term\n"
+    "?term: NUMBER | \"(\" expr \")\"\n"
+    "%import common.NUMBER\n";
+char *src = hegel_draw_grammar(tc, EXPR, NULL);   /* owned by the case, never truncated */
+HEGEL_ASSERT(parse_ok(src), "rejected: %s", src);
+```
+
+It shrinks through the derivation, so a failing input comes back short. `hegel_draw_grammar_with(tc, text, &opts)` adds `max_size`, `max_depth`, an `import_dir` for your own `%import`s, and explicit terminals: list them in `explicit_names` and give a `fill(tc, i, ctx)` callback that draws the value with ordinary draws and returns it (required for `%declare`d terminals). A grammar the engine rejects is a health failure with its message. No grammar draws inside `HEGEL_ISOLATED`.
 
 ### map / filter / flat_map
 

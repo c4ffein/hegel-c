@@ -17,30 +17,36 @@
   in c4ffein/bugs, with its draft report): a float drawn between two drawn
   floats hits a libhegel internal error (0.48.0 to 0.50.0, `HEGEL_SEED=40`).
   `tests/from-hegel-rust/test_floats_f64_bounds` is its witness: keep it as is.
-- **libhegel coverage (2026-11-06).** hegel-c binds 69 of libhegel 0.50.0's
-  157 functions; the 88 others are listed in `tools/libhegel-coverage.toml`,
-  19 as deliberate (getters, our own context / label / note / replay, the
-  Unicode version), 69 as gaps. `make check-libhegel-coverage` fails on a
-  function in neither list, so a bump can't add an unclassified one
-  (`LIBHEGEL_VERSION=<new>` runs it against the new header before bumping).
-  The gaps, roughly by value:
-  - *Value generators*: date, time, datetime, uuid, ipv4, ipv6, and the
-    email / url / domain string generators — draws like the others.
-  - *Repeat loops* (`hegel_new_repeat` / `_more` / `_failed`): a body run as
-    many times as the engine wants, shrinking to the fewest repetitions.
-  - *Settings as code*: `stop_on_first_failure`, `derandomize`,
-    `show_statistics`, `print_blob`, `nondeterminism_strictness`,
-    `unbounded_choices`, `backend`, `test_location`, profiles,
-    `set_from_string` — today only through `HEGEL_*` env vars and
-    `hegel.toml`, which `hegel_settings_new` reads.
-  - *Events* (`hegel_event`, `_value`), with statistics reporting
-    (verbosity is forced QUIET, so `HEGEL_STATISTICS` is inert).
-  - *Grammars* (13 functions): strings from a Lark grammar.
+- **libhegel coverage (2026-11-08).** hegel-c binds 111 of libhegel 0.50.0's
+  157 functions; the 46 others are listed in `tools/libhegel-coverage.toml`,
+  18 as deliberate (most getters, our own context / label / note / replay,
+  the Unicode version, grammar placeholder markers), 28 as gaps.
+  `make check-libhegel-coverage` fails on a function in neither list, so a
+  bump can't add an unclassified one (`LIBHEGEL_VERSION=<new>` runs it
+  against the new header before bumping). Bound on 2026-11-08: value draws,
+  repeat loops, settings and profiles, events, grammars, `label_combine`.
+  Left:
   - *Multi-threaded generation* (`test_case_clone` / `set_worker` / `block`):
-    needs a design for fork mode, where the engine is in the parent.
+    needs a design for fork mode, where the engine lives in the parent and
+    a clone can't be handed to another process. Nofork could use it as is.
   - *Pretty printer* (25 functions): the engine's counterexample printer;
     hegel-c prints its own report, so low priority.
-  - `hegel_label_combine`.
+  Follow-ups from that work:
+  - `HEGEL_STATISTICS=1` prints the engine's statistics although the runner
+    sets verbosity QUIET, which libhegel 0.50.0's header says prints nothing:
+    an upstream question (header or behaviour?). Its "no events were
+    recorded" message names the Rust API (`tc.event(..)`).
+  - `derandomize` with the database off seeds every run of a binary from the
+    same empty key, so they all see the same input sequence (the `ci`
+    profile too). Setting the `<binary>#<run>` key even with the database
+    off would give each run its own stable seed; not done, since it changes
+    default CI behaviour.
+  - A passing repeat loop runs until the choice budget overruns (often
+    ~400k iterations), which trips TooSlow in fork mode. A built-in cap would
+    depart from the engine and hegel-rust; decide whether to offer one.
+  - URLs from `hegel_draw_url` have no length bound (631 characters seen in
+    2000 draws), and the caller-buffer contract truncates silently: an
+    allocating variant (case-owned, like `hegel_draw_grammar`) would be safer.
 - **Imperative helpers (2026-10-30).** Main is plain generators now (the
   schema layer moved to `experiments/`, see its README). What the
   harnesses read while deciding would have used:
