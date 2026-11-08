@@ -355,7 +355,13 @@ check-libhegel:
 # LIBHEGEL_VERSION exists; also exit 1, with a different message, if the
 # tags can't be listed ("COULD NOT CHECK") or the newest is older than the
 # pin ("PIN NOT PUBLISHED") — neither is ever reported as an update.
+# Also exit 1 ("SUBMODULE NOT AT PIN") if deps/hegel, as recorded in
+# WATCH_REV (default HEAD; no checkout needed), is not the commit of tag
+# libhegel/LIBHEGEL_VERSION: CI builds the engine from the submodule, so a
+# bump that moves only the Makefile, or a `git submodule update --remote`,
+# breaks it (2026-11-07).
 # Under GitHub Actions it also emits ::error:: and the step summary.
+WATCH_REV ?= HEAD
 check-libhegel-upstream:
 	@pinned='$(LIBHEGEL_VERSION)'; url='$(LIBHEGEL_UPSTREAM)'; \
 	say() { [ -n "$$GITHUB_STEP_SUMMARY" ] && printf "$$@" >> "$$GITHUB_STEP_SUMMARY"; :; }; \
@@ -374,6 +380,17 @@ check-libhegel-upstream:
 		echo "COULD NOT CHECK: no libhegel/X.Y.Z tag on $$url (did upstream change its tag scheme?)"; \
 		err "no libhegel/X.Y.Z tag on $$url - did upstream change its tag scheme? (not a new release)"; \
 		say '## libhegel release watch: could not check\n\nNo `libhegel/X.Y.Z` tag on %s: did upstream change its tag scheme?\n' "$$url"; \
+		exit 1; \
+	fi; \
+	tagsha=$$(printf '%s\n' "$$refs" | awk -v r="refs/tags/libhegel/$$pinned^{}" '$$2 == r { print $$1 }'); \
+	[ -n "$$tagsha" ] || tagsha=$$(printf '%s\n' "$$refs" | awk -v r="refs/tags/libhegel/$$pinned" '$$2 == r { print $$1 }'); \
+	recorded=$$(git ls-tree $(WATCH_REV) $(LIBHEGEL_CRATE_DIR) 2>/dev/null | awk '{ print $$3 }'); \
+	if [ -n "$$tagsha" ] && [ -n "$$recorded" ] && [ "$$recorded" != "$$tagsha" ]; then \
+		echo "SUBMODULE NOT AT PIN: $(LIBHEGEL_CRATE_DIR) records $$recorded, but libhegel/$$pinned is $$tagsha"; \
+		echo "  (a bump that moved LIBHEGEL_VERSION but not the submodule, or a 'git submodule update --remote')."; \
+		echo "  Fix: git -C $(LIBHEGEL_CRATE_DIR) fetch origin tag libhegel/$$pinned && git -C $(LIBHEGEL_CRATE_DIR) checkout libhegel/$$pinned && git add $(LIBHEGEL_CRATE_DIR)"; \
+		err "$(LIBHEGEL_CRATE_DIR) records $$recorded, not libhegel/$$pinned ($$tagsha): check out the tag in the submodule and commit it"; \
+		say '## libhegel release watch: submodule not at the pin\n\n`%s` records `%s`, but `libhegel/%s` is `%s`. CI builds the engine from the submodule.\n\nFix: check out tag `libhegel/%s` in `%s` and commit the submodule.\n' "$(LIBHEGEL_CRATE_DIR)" "$$recorded" "$$pinned" "$$tagsha" "$$pinned" "$(LIBHEGEL_CRATE_DIR)"; \
 		exit 1; \
 	fi; \
 	if [ "$$latest" = "$$pinned" ]; then \

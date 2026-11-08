@@ -18,6 +18,11 @@ name: libhegel release watch
 #
 # It stays red until the pin is bumped (LIBHEGEL_VERSION + both sha256 pins
 # + deps/hegel, re-verified as CLAUDE.md describes).
+#
+# It is also red ("SUBMODULE NOT AT PIN") while deps/hegel, as committed,
+# is not the commit of tag libhegel/LIBHEGEL_VERSION: CI builds the engine
+# from the submodule, and on 2026-11-07 a bump that moved only the Makefile
+# (then a `git submodule update --remote`) broke every test job.
 
 on:
   schedule:
@@ -26,6 +31,7 @@ on:
     branches: [main]
     paths:
       - "Makefile"
+      - "deps/hegel"
       - ".github/workflows/libhegel-release-watch.yml"
   workflow_dispatch:
 
@@ -38,7 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # Only the Makefile is needed: no submodules, no history.
+      # Only the Makefile and the committed deps/hegel pointer are needed
+      # (git ls-tree reads it without checking the submodule out): no history.
       - uses: actions/checkout@v5
 
       - name: Compare the newest libhegel/X.Y.Z tag with LIBHEGEL_VERSION
