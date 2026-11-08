@@ -437,6 +437,21 @@ static void inv_iter_matches_shadow (const void *s, hegel_testcase *tc)
   }
 }
 
+/* ASan's startup defaults for this binary (ASAN_OPTIONS still overrides).
+** No quarantine: in fork mode the engine runs in the parent, its frees fill
+** ASan's quarantine (256 MB by default), and every fork then copies that
+** memory.  Measured on the buggy pin, seed 1, 2026-11-08: fork() 8.6 ms ->
+** 2.1 ms, and the shrink finishes (27,733 executions, 271 s) instead of being
+** cut at 10,540 by the engine's 300 s budget, which on a slower machine
+** could leave a bigger counterexample.  The bug this witnesses is a NULL
+** dereference, caught without a quarantine; what is lost is reliable
+** use-after-free detection in this test. */
+const char *__asan_default_options (void);
+const char *__asan_default_options (void)
+{
+  return "quarantine_size_mb=0";
+}
+
 int main (int argc, char *argv[])
 {
   unsigned long n_cases = 200;
