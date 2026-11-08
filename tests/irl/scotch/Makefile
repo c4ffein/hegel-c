@@ -259,7 +259,8 @@ _run-tests: all check-license
 			echo "FAIL — expected non-zero exit but got 0"; \
 			errors=$$((errors + 1)); \
 		else \
-			minimal=$$(echo "$$output" | grep -oE 'MINIMAL nvert=[0-9]+ nedges=[0-9]+ edges=\[[^]]*\]' | tail -1); \
+			: "With several failure reports (HEGEL_REPORT_MULTIPLE_FAILURES), judge the largest."; \
+			minimal=$$(echo "$$output" | grep -oE 'MINIMAL nvert=[0-9]+ nedges=[0-9]+ edges=\[[^]]*\]' | sort -t= -k2 -n | tail -1); \
 			if [ -z "$$minimal" ]; then \
 				echo "FAIL — exit $$rc but no MINIMAL line in stderr"; \
 				errors=$$((errors + 1)); \

@@ -98,7 +98,7 @@ test: all check-license
 		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
-			draw=$$(echo "$$output" | grep -oP 'Draw 1: \K[^ ]+' | head -1); \
+			draw=$$(echo "$$output" | grep -oP 'Draw 1: \K[^ ]+' | sort -u | paste -sd ' '); \
 			expected=$$(grep 'EXPECTED_SHRINK:' $(CURDIR)/$$t.c | head -1 | sed 's/.*EXPECTED_SHRINK: *//'); \
 			if [ "$$draw" = "$$expected" ]; then \
 				echo "OK (shrunk to $$draw)"; \
@@ -157,7 +157,7 @@ report:
 		rust_src=$$(grep 'RUST_SOURCE:' $(CURDIR)/$$t.c | head -1 | sed 's/.*RUST_SOURCE: *//'); \
 		output=$$(cd $(REPO_ROOT) && ulimit -c $(HEGEL_TEST_ULIMIT) && $(CURDIR)/$$t 2>&1); \
 		rc=$$?; \
-		draw=$$(echo "$$output" | grep -oP 'Draw 1: \K[^ ]+' | head -1); \
+		draw=$$(echo "$$output" | grep -oP 'Draw 1: \K[^ ]+' | sort -u | paste -sd ' '); \
 		expected=$$(grep 'EXPECTED_SHRINK:' $(CURDIR)/$$t.c | head -1 | sed 's/.*EXPECTED_SHRINK: *//'); \
 		if [ $$rc -ne 0 ] && [ "$$draw" = "$$expected" ]; then \
 			echo "| $$t | $$rust_src | PASS (shrunk→$$draw) |" >> $(CURDIR)/report.md; \

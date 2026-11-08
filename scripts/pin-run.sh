@@ -11,7 +11,9 @@
 #   green  every binary must exit 0
 #   red    every binary must exit non-zero (the bug is found).  If it
 #          printed a "MINIMAL nvert=N ..." line and PIN_MAX_NVERT is set,
-#          N must be <= PIN_MAX_NVERT (shrink quality).
+#          N must be <= PIN_MAX_NVERT (shrink quality).  With several
+#          failure reports (HEGEL_REPORT_MULTIPLE_FAILURES=1), every one
+#          must be: the largest N is judged.
 #
 # Environment: PIN_TIMEOUT (seconds, default 600), PIN_MAX_NVERT,
 # PIN_RUN_ENV (extra VAR=value words for the run, e.g. MALLOC_PERTURB_=170),
@@ -46,7 +48,7 @@ for t in "$@"; do
     echo "FAIL — timed out after ${PIN_TIMEOUT:-600}s"
     errors=$((errors + 1))
   else
-    minimal=$(printf '%s\n' "$output" | grep -oE 'MINIMAL nvert=[0-9]+ nedges=[0-9]+ edges=\[[^]]*\]' | tail -1)
+    minimal=$(printf '%s\n' "$output" | grep -oE 'MINIMAL nvert=[0-9]+ nedges=[0-9]+ edges=\[[^]]*\]' | sort -t= -k2 -n | tail -1)
     origin=$(printf '%s\n' "$output" | grep -m1 -oE '^origin: .*')
     if [ -n "$minimal" ] && [ -n "${PIN_MAX_NVERT:-}" ]; then
       nvert=$(echo "$minimal" | sed -n 's/MINIMAL nvert=\([0-9]*\).*/\1/p')
