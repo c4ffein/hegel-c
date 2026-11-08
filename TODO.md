@@ -6,12 +6,13 @@
 
 ## Next up (2026-10-21)
 
-- **First tag (v0.1.0), which pyscotch waits for** (`PYSCOTCH_HANDOFF.md`,
-  phase 2): once the pending work is committed and `make test` plus every
-  Scotch pin pass. The libhegel bump is done (2026-11-06: 0.50.0, the
-  state-machine creation in `core/hegel_server.c` ported to its
-  declare-then-start ABI). Then say so in the README, so
-  pyscotch can point its hegel-c witnesses at the tag.
+- **First tag (v0.1.0), which c4ffein/bugs waits for**: every hegel-c pin is
+  a witness there with `ref = "pending"`; with a tag, its PLAN Phase 5 can
+  run them on each new upstream release. Ready: the pending work is
+  committed, `make test` and CI are green (8a3ddbe), the libhegel 0.50.0
+  bump is done and the submodule is on its tag. Before tagging, run every
+  Scotch and Linux pin once more; then say so in the README, and point the
+  witnesses at the tag in c4ffein/bugs.
 - **`make test` is red about one run in thirty, from an engine bug** —
   `bugs:8c229d24-4b71-4e69-b782-ddcf94bbf1fd` (libhegel-float-simplest-nonzero,
   in c4ffein/bugs, with its draft report): a float drawn between two drawn
