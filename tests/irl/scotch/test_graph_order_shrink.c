@@ -229,80 +229,89 @@ hegel_testcase *            tc)
     hegel_note (tc, note_buf);
   }
 
-  build_csr (g, &verttab, &edgetab, &nedge);
+  /* One block, so the bug has one origin whichever way it shows: a
+  ** SIGSEGV inside Scotch, a failed HEGEL_ASSERT or the hegel_fail on an
+  ** invalid permutation.  Outside a block those are three origins, and
+  ** the engine shrinks them as separate bugs: with
+  ** HEGEL_REPORT_MULTIPLE_FAILURES=1 the crash shrank to nvert=3 but the
+  ** invalid permutation stalled at nvert=7 (2026-11-08, fork-clean, Scotch
+  ** 7.0.7).  All draws happen above, as HEGEL_ISOLATED requires. */
+  HEGEL_ISOLATED (tc) {
+    build_csr (g, &verttab, &edgetab, &nedge);
 
-  SCOTCH_graphInit (&grafdat);
-  rc = SCOTCH_graphBuild (&grafdat, 0, nvert, verttab, verttab + 1,
-                          NULL, NULL, nedge, edgetab, NULL);
-  HEGEL_ASSERT (rc == 0, "SCOTCH_graphBuild failed (rc=%d)", rc);
+    SCOTCH_graphInit (&grafdat);
+    rc = SCOTCH_graphBuild (&grafdat, 0, nvert, verttab, verttab + 1,
+                            NULL, NULL, nedge, edgetab, NULL);
+    HEGEL_ASSERT (rc == 0, "SCOTCH_graphBuild failed (rc=%d)", rc);
 
-  rc = SCOTCH_graphCheck (&grafdat);
-  HEGEL_ASSERT (rc == 0,
-                "SCOTCH_graphCheck failed (rc=%d) nvert=%d nedge=%d",
-                rc, nvert, nedge);
+    rc = SCOTCH_graphCheck (&grafdat);
+    HEGEL_ASSERT (rc == 0,
+                  "SCOTCH_graphCheck failed (rc=%d) nvert=%d nedge=%d",
+                  rc, nvert, nedge);
 
-  SCOTCH_stratInit (&stradat);
-  /* Build the strategy with SCOTCH_STRATDISCONNECTED — this is
-  ** the flag that triggers the buggy hgraphOrderCp code path.
-  ** Args 3 and 0.2 are taken verbatim from the bug report's
-  ** reproducer #1. */
-  SCOTCH_stratGraphOrderBuild (&stradat, SCOTCH_STRATDISCONNECTED, 3, 0.2);
+    SCOTCH_stratInit (&stradat);
+    /* Build the strategy with SCOTCH_STRATDISCONNECTED — this is
+    ** the flag that triggers the buggy hgraphOrderCp code path.
+    ** Args 3 and 0.2 are taken verbatim from the bug report's
+    ** reproducer #1. */
+    SCOTCH_stratGraphOrderBuild (&stradat, SCOTCH_STRATDISCONNECTED, 3, 0.2);
 
-  permtab = calloc ((size_t) nvert, sizeof (SCOTCH_Num));
-  memset (permtab, 0xBB, (size_t) nvert * sizeof (SCOTCH_Num));
+    permtab = calloc ((size_t) nvert, sizeof (SCOTCH_Num));
+    memset (permtab, 0xBB, (size_t) nvert * sizeof (SCOTCH_Num));
 
-  /* This call may segfault outright on some inputs (the bug
-  ** dereferences uninitialized memory; whether that crashes
-  ** depends on heap layout / ASLR).  Hegel's fork-mode catches
-  ** the segfault as a property failure regardless. */
-  rc = SCOTCH_graphOrder (&grafdat, &stradat, permtab, NULL,
-                          &cblknbr, NULL, NULL);
-  HEGEL_ASSERT (rc == 0,
-                "SCOTCH_graphOrder failed (rc=%d) nvert=%d nedge=%d",
-                rc, nvert, nedge);
+    /* This call may segfault outright on some inputs (the bug
+    ** dereferences uninitialized memory; whether that crashes
+    ** depends on heap layout / ASLR).  Hegel's fork-mode catches
+    ** the segfault as a property failure regardless. */
+    rc = SCOTCH_graphOrder (&grafdat, &stradat, permtab, NULL,
+                            &cblknbr, NULL, NULL);
+    HEGEL_ASSERT (rc == 0,
+                  "SCOTCH_graphOrder failed (rc=%d) nvert=%d nedge=%d",
+                  rc, nvert, nedge);
 
-  /* Validate the permutation: every value in [0, nvert), no dups. */
-  seen = calloc ((size_t) nvert, 1);
-  for (i = 0; i < nvert; i++) {
-    SCOTCH_Num v = permtab[i];
-    if (v < 0 || v >= nvert) {
-      bad_idx = i;
-      bad_val = (int) v;
-      bad_reason = "out_of_range";
-      break;
+    /* Validate the permutation: every value in [0, nvert), no dups. */
+    seen = calloc ((size_t) nvert, 1);
+    for (i = 0; i < nvert; i++) {
+      SCOTCH_Num v = permtab[i];
+      if (v < 0 || v >= nvert) {
+        bad_idx = i;
+        bad_val = (int) v;
+        bad_reason = "out_of_range";
+        break;
+      }
+      if (seen[v]) {
+        bad_idx = i;
+        bad_val = (int) v;
+        bad_reason = "duplicate";
+        break;
+      }
+      seen[v] = 1;
     }
-    if (seen[v]) {
-      bad_idx = i;
-      bad_val = (int) v;
-      bad_reason = "duplicate";
-      break;
-    }
-    seen[v] = 1;
-  }
-  free (seen);
+    free (seen);
 
-  if (bad_reason != NULL) {
-    /* Build a parseable failure message — the Makefile greps the
-    ** "MINIMAL nvert=N nedges=M" prefix to verify shrink quality. */
-    char msg[256];
-    snprintf (msg, sizeof (msg),
-              "MINIMAL nvert=%d nedges=%d permtab[%d]=%d (%s)",
-              nvert, g->nedges, bad_idx, bad_val, bad_reason);
-    /* Free Scotch resources before failing — fork-mode means we're
-    ** about to _exit, but cleanup keeps ASAN/valgrind quiet. */
+    if (bad_reason != NULL) {
+      /* Build a parseable failure message — the Makefile greps the
+      ** "MINIMAL nvert=N nedges=M" prefix to verify shrink quality. */
+      char msg[256];
+      snprintf (msg, sizeof (msg),
+                "MINIMAL nvert=%d nedges=%d permtab[%d]=%d (%s)",
+                nvert, g->nedges, bad_idx, bad_val, bad_reason);
+      /* Free Scotch resources before failing — fork-mode means we're
+      ** about to _exit, but cleanup keeps ASAN/valgrind quiet. */
+      free (permtab);
+      SCOTCH_stratExit (&stradat);
+      SCOTCH_graphExit (&grafdat);
+      free (verttab);
+      free (edgetab);
+      hegel_fail (msg);
+    }
+
     free (permtab);
     SCOTCH_stratExit (&stradat);
     SCOTCH_graphExit (&grafdat);
     free (verttab);
     free (edgetab);
-    hegel_fail (msg);
   }
-
-  free (permtab);
-  SCOTCH_stratExit (&stradat);
-  SCOTCH_graphExit (&grafdat);
-  free (verttab);
-  free (edgetab);
 }
 
 /* ---- Layer 3: runner ---- */

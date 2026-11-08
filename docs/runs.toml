@@ -649,3 +649,20 @@ note = "red on v7.1: IDs {0, 1024}, ida_find_first_range (1, 1024) = -ENOENT, wa
 target = "tests/irl/linux/pins/xa_store_range.conf"
 verdict = "as-expected"
 note = "red on v7.1: xa_store_range (0, ULONG_MAX) does not return (crash: signal 14, the 250 ms timer)"
+
+# ------------------------------------------------------------- 2026-11-08 ----
+
+[[run]]
+id = "2026-11-08-scotch-pins-reducer-isolated"
+date = "2026-11-08"
+kind = "pins"
+project = "scotch"
+summary = "hgraphOrderCp after its test wrapped the code under test in HEGEL_ISOLATED: one origin, minimal shrink, fixed green"
+hegel_c = "8a3ddbe"
+libhegel = "0.50.0"
+notes = "With HEGEL_REPORT_MULTIPLE_FAILURES=1 the test had reported two failures for the one bug (crash: signal 11 shrunk to nvert=3, the hegel_fail on an invalid permutation stalled at nvert=7, on every seed, even fork-clean). After the change: one report, nvert=3 edges=[(1,2)], on seeds 1-8 with multiple reports off and on. CI's scotch-test-deb runs the same test fork-clean since 8a3ddbe and has been green since."
+
+[[run.result]]
+target = "tests/irl/scotch/pins/hgraphOrderCp.conf"
+verdict = "as-expected"
+note = "buggy red, shrunk to MINIMAL nvert=3 nedges=1 edges=[(1,2)] (origin HEGEL_ISOLATED at test_graph_order_shrink.c:239); fixed green"
