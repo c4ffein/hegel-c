@@ -138,7 +138,7 @@ Our own source files (.c, .h, .rs, .md, Makefile) start with an MIT SPDX header:
 ```
 Markdown files use the same lines inside an HTML comment. Enforced by the `check-license` target in each test Makefile.
 
-Third-party excerpts (Linux kernel code under `tests/irl/`) keep their upstream SPDX license and get a modification notice plus `SPDX-FileCopyrightText` lines right after it — never relabel them MIT, and never let them into `libhegel_c.a`. Licensing follows REUSE: texts in `LICENSES/`, header-less files covered by `REUSE.toml`, full check with `make check-reuse` (note: it over-reports ignored build artifacts inside still-untracked directories — a git `ls-files --directory` quirk).
+Third-party excerpts (Linux kernel code under `tests/irl/`) keep their upstream SPDX license and get a modification notice plus `SPDX-FileCopyrightText` lines right after it — never relabel them MIT, and never let them into `libhegel_c.a`. Licensing follows REUSE: texts in `LICENSES/`, header-less files covered by `REUSE.toml`, full check with `make check-reuse`, also a CI job (note: it over-reports ignored build artifacts inside still-untracked directories — a git `ls-files --directory` quirk).
 
 ## Key dependencies
 

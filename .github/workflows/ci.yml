@@ -73,6 +73,19 @@ jobs:
       - name: Lint runs, corpus and pins
         run: make lint-runs
 
+  # Per-file licensing (REUSE.toml + LICENSES/): every file has its license,
+  # no license text is unused, third-party excerpts keep theirs.  Same check
+  # as `make check-reuse`; the submodule is not checked out, so deps/hegel is
+  # not linted (it has its own licensing).
+  reuse:
+    name: REUSE licensing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: reuse lint
+        uses: fsfe/reuse-action@v6
+
   selftest:
     name: Selftest suite
     needs: engine
