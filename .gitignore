@@ -28,3 +28,7 @@ tests/irl/linux/asn1/probe_*
 tests/irl/linux/*/*_pinned.c
 tests/irl/linux/*/build-pin.log
 tests/irl/linux/*/pinned-include/
+
+# Claude Code: subagent worktrees and personal settings (.claude/skills/ is tracked)
+.claude/worktrees/
+.claude/settings.local.json
