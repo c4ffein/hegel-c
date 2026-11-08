@@ -288,12 +288,24 @@ use it. It is only needed when the code under test can behave differently
 on the same input: uninitialized reads, use-after-free, anything that
 depends on the heap layout. The pin for this bug (`hgraphOrderCp`) ran
 fork-clean from October for that reason; CI's `_run-tests` caught up in
-`8a3ddbe`.
+`8a3ddbe`, and CI has been green since.
 
 **The general rule:** a shrink that ends larger than it should, together
 with a nondeterministic-failure caveat, means the failure depends on
 something outside the drawn input. Rerun with `HEGEL_C_FORK=clean` before
 trusting the counterexample, or before blaming the shrinker.
+
+**One bug, one origin.** The same bug can show as a SIGSEGV inside Scotch
+or as an invalid permutation the property catches with `hegel_fail`. Those
+are different origins, and the engine shrinks different origins as
+different bugs. With `HEGEL_REPORT_MULTIPLE_FAILURES=1` the test reported
+two failures, even fork-clean: the crash shrank to `nvert=3`, the invalid
+permutation stalled at `nvert=7`. The test now wraps the code under test in
+`HEGEL_ISOLATED (tc) { ... }`, so a crash, a failed `HEGEL_ASSERT` and the
+`hegel_fail` all share one origin (`HEGEL_ISOLATED at <file:line>`): one
+report, at `nvert=3`, on every seed tried. The two fixes are complementary:
+clean mode makes the heap repeatable, the block makes the bug one bug. Fast
+mode stays nondeterministic with the block alone.
 
 ## Rules for writing tests that shrink well
 
