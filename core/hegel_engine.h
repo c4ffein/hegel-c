@@ -49,6 +49,9 @@ typedef struct hg_pool       hg_pool;
 typedef struct hg_sm         hg_sm;
 typedef struct hg_strgen     hg_strgen;
 typedef struct hg_repeat     hg_repeat;
+typedef struct hg_gbuilder   hg_gbuilder;   /* hegel_grammar_builder_t */
+typedef struct hg_grammar    hg_grammar;    /* hegel_grammar_t */
+typedef struct hg_gdraw      hg_gdraw;      /* hegel_grammar_draw_t */
 
 /* hegel_string_t / hegel_owned_string_t / hegel_generate_bytes_result_t */
 typedef struct { const char * data; size_t len; } hg_str;
@@ -256,6 +259,24 @@ typedef struct {
   int (*settings_get_print_blob)        (hg_context *, const hg_settings *, bool * out);
   int (*settings_get_nondeterminism_strictness) (hg_context *, const hg_settings *, uint32_t * out);
   /* ---- end settings ---- */
+  /* ---- Grammars (libhegel >= 0.50): strings from a Lark grammar ---- */
+  int (*grammar_builder_new)     (hg_context *, hg_str text, hg_gbuilder ** out);
+  int (*grammar_builder_file)    (hg_context *, const hg_gbuilder *, size_t index, hg_str * out);
+  int (*grammar_builder_provide) (hg_context *, hg_gbuilder *, size_t index, const hg_str * text);
+  int (*grammar_builder_free)    (hg_context *, hg_gbuilder *);
+  int (*grammar_new)             (hg_context *, const hg_gbuilder *, const hg_str * start,
+                                  uint64_t max_size, uint32_t max_depth,
+                                  const hg_strgen * alphabet, const hg_str * explicit_names,
+                                  size_t explicit_len, hg_grammar ** out);
+  int (*grammar_free)            (hg_context *, hg_grammar *);
+  int (*generate_grammar)        (hg_context *, hg_tc *, const hg_grammar *, uint64_t max_size,
+                                  hg_str * out);
+  int (*grammar_draw_new)        (hg_context *, const hg_grammar *, uint64_t max_size,
+                                  hg_gdraw ** out);
+  int (*grammar_draw_next)       (hg_context *, hg_tc *, hg_gdraw *, size_t * out_terminal);
+  int (*grammar_draw_provide)    (hg_context *, hg_gdraw *, hg_str value);
+  int (*grammar_draw_result)     (hg_context *, const hg_gdraw *, hg_str * out);
+  int (*grammar_draw_free)       (hg_context *, hg_gdraw *);
 } hg_engine;
 
 /*

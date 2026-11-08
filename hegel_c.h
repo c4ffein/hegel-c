@@ -591,6 +591,20 @@ void hegel_note (hegel_testcase * tc, const char * msg);
 ** including at file scope via a static initializer function. */
 uint64_t hegel_label (const char * name);
 
+/* The span label for a generator built from others: 64-bit FNV-1a over
+** the labels' little-endian bytes, in order, as libhegel's
+** hegel_label_combine.  Pass the generator's own label first and its
+** components' after it, so a list of ints and a list of strings get
+** different labels:
+**
+**   uint64_t parts[] = { hegel_label ("mylib.list"), elem_label };
+**   uint64_t label = hegel_label_combine (parts, 2);
+**
+** Order-sensitive; combining one label does not return it unchanged;
+** n = 0 gives the FNV offset basis (labels may be NULL then).  Pure, like
+** hegel_label — no engine, no test case. */
+uint64_t hegel_label_combine (const uint64_t * labels, size_t n);
+
 void hegel_start_span (hegel_testcase * tc, uint64_t label);
 
 /* End the current span.  Pass 0 for `discard` in normal use.
@@ -853,6 +867,100 @@ int64_t    hegel_pool_add     (hegel_testcase * tc, hegel_pool p);
 int64_t    hegel_pool_draw    (hegel_testcase * tc, hegel_pool p, bool consume);
 void       hegel_pool_restore (hegel_testcase * tc, hegel_pool p, int64_t var);
 void       hegel_pool_free    (hegel_testcase * tc, hegel_pool p);
+
+/* ---- Grammars: strings from a Lark grammar ----
+**
+** Draw a string the grammar accepts.  The grammar is in the syntax of
+** the Lark parsing library (https://lark-parser.readthedocs.io/en/stable/
+** grammar.html): rules, terminals (strings, regexes, priorities),
+** %import (Lark's bundled common / python / unicode / lark grammars
+** included), %ignore, %declare, %override, %extend, templates.
+**
+**   static const char * EXPR =
+**     "?start: sum\n"
+**     "?sum: product | sum \"+\" product\n"
+**     "?product: atom | product \"*\" atom\n"
+**     "?atom: NUMBER | \"(\" sum \")\"\n"
+**     "%import common.NUMBER\n";
+**
+**   char * s = hegel_draw_grammar (tc, EXPR, NULL);    // NULL = rule "start"
+**
+** The string is one choice of the test case and shrinks through its
+** derivation (to short strings of the grammar).  It is a NUL-terminated
+** C string with no NUL inside (terminals never draw one), allocated
+** with hegel_alloc: the test case owns it and frees it when the case
+** ends (don't free() it; hegel_free is allowed).  It is never truncated,
+** which a caller buffer could not promise: a cut-off string would not be
+** in the language.  Up to 8192 characters by default (UTF-8, so maybe
+** more bytes); set max_size below to keep them short.
+**
+** The grammar is checked and compiled on its first draw in a run, and
+** reused for every later case (in fork mode, by the parent, which owns
+** the engine).  A grammar the engine rejects (bad syntax, an undefined
+** rule, a rule with no finite string, a cap below the smallest string)
+** is a health failure carrying the engine's message.  A draw the engine
+** can't complete within its work limit discards the test case.
+**
+** hegel_draw_grammar_with takes options (zero fields = defaults):
+**   start       the rule to generate (NULL = "start");
+**   max_size    most characters per string, explicit values included
+**               (0 = 8192; at most 1048576);
+**   max_depth   how deeply rules may nest (0 = 200; at most 500);
+**   import_dir  the directory %import reads from: `%import a.b.X` reads
+**               <import_dir>/a/b.lark, Lark's bundled grammars stand in
+**               for missing files (NULL = bundled grammars only).  Read
+**               by the process that owns the engine — the fork parent,
+**               same cwd — once per run;
+**   explicit_names / n_explicit, fill / fill_ctx: terminals whose values
+**               the TEST draws.  The engine draws the string; for each
+**               occurrence of an explicit terminal (in order) it calls
+**               fill (tc, i, fill_ctx), i indexing explicit_names, which
+**               draws the value with ordinary hegel draws and returns it;
+**               hegel-c copies the value right away and splices it in.
+**               Every terminal the grammar %declares must be named; a
+**               defined terminal may be named to override its pattern.
+**               The value must lex as that terminal where it lands (the
+**               engine doesn't check it), must be valid UTF-8, and its
+**               pointer must survive the callback's return (a static or
+**               fill_ctx buffer, or a hegel_alloc block).  If the values
+**               push the string over max_size, the engine draws a new
+**               string and asks again from its first terminal (so fill
+**               may run more times than the result has terminals); after
+**               a few such attempts it discards the case.  Each value
+**               gets its own span.  Explicit names with no fill, or a fill
+**               returning NULL, is a health failure.
+**
+**   static const char * pick_name (hegel_testcase * tc, size_t i, void * ctx)
+**   {
+**     static const char * names[] = { "x", "y", "zz" };
+**     (void) i; (void) ctx;
+**     return names[hegel_draw_int (tc, 0, 2)];
+**   }
+**   static const char * const vars[] = { "VAR" };
+**   hegel_grammar_options o = { .explicit_names = vars, .n_explicit = 1,
+**                               .fill = pick_name };
+**   char * s = hegel_draw_grammar_with (tc, "start: VAR (\"+\" VAR)*\n"
+**                                           "%declare VAR\n", &o);
+**
+** No grammar draws inside HEGEL_ISOLATED (they are engine calls). */
+
+typedef const char * (*hegel_grammar_fill_fn) (hegel_testcase * tc, size_t terminal,
+                                               void * ctx);
+
+typedef struct {
+  const char *          start;
+  uint64_t              max_size;
+  uint32_t              max_depth;
+  const char *          import_dir;
+  const char * const *  explicit_names;
+  size_t                n_explicit;
+  hegel_grammar_fill_fn fill;
+  void *                fill_ctx;
+} hegel_grammar_options;
+
+char * hegel_draw_grammar      (hegel_testcase * tc, const char * grammar, const char * start);
+char * hegel_draw_grammar_with (hegel_testcase * tc, const char * grammar,
+                                const hegel_grammar_options * opts);
 
 /* ---- Crash isolation for a block: HEGEL_ISOLATED ----
 **

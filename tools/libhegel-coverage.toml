@@ -14,7 +14,9 @@
 #         gap         a feature hegel-c lacks (see TODO.md, "libhegel coverage")
 #
 # Classified 2026-11-06 against libhegel 0.50.0 (157 declared, 69 bound).
-# 2026-11-08: events, value draws, settings and profiles, repeat loops bound: 99 bound, 16 deliberate, 42 gap.
+# 2026-11-08: events, value draws, settings and profiles, repeat loops,
+# grammars and label_combine bound: 111 bound, 18 deliberate, 28 gap (the
+# pretty printer and multi-threaded generation).
 
 [[group]]
 name = "settings getters"
@@ -31,9 +33,9 @@ functions = ["hegel_settings_get_backend", "hegel_settings_get_database",
 [[group]]
 name = "own equivalents"
 status = "deliberate"
-why = "hegel-c has its own: one process-wide context for the process lifetime; hegel_label is the same FNV-1a in pure C; notes are captured by hegel-c's runner; replay goes through hegel_run_start_blob"
-functions = ["hegel_context_free", "hegel_label_from_name", "hegel_note",
-  "hegel_test_case_from_blob"]
+why = "hegel-c has its own: one process-wide context for the process lifetime; hegel_label and hegel_label_combine are the same pure FNV-1a hashes in pure C (tests/selftest/test_label_combine.c checks them against the engine's); notes are captured by hegel-c's runner; replay goes through hegel_run_start_blob"
+functions = ["hegel_context_free", "hegel_label_from_name", "hegel_label_combine",
+  "hegel_note", "hegel_test_case_from_blob"]
 
 [[group]]
 name = "unicode version"
@@ -42,20 +44,10 @@ why = "C has no host Unicode version, so generators use the engine's newest tabl
 functions = ["hegel_set_unicode_version"]
 
 [[group]]
-name = "grammars"
-status = "gap"
-why = "strings from a Lark grammar (and splicing generated values into them)"
-functions = ["hegel_generate_grammar", "hegel_grammar_builder_file",
-  "hegel_grammar_builder_free", "hegel_grammar_builder_new",
-  "hegel_grammar_builder_provide", "hegel_grammar_draw_free", "hegel_grammar_draw_new",
-  "hegel_grammar_draw_next", "hegel_grammar_draw_provide", "hegel_grammar_draw_result",
-  "hegel_grammar_free", "hegel_grammar_new", "hegel_grammar_placeholder"]
-
-[[group]]
-name = "labels"
-status = "gap"
-why = "combining span labels (hegel_label covers single names)"
-functions = ["hegel_label_combine"]
+name = "grammar placeholder markers"
+status = "deliberate"
+why = "hegel_draw_grammar_with splices explicit terminals' values in through the hegel_grammar_draw_* steps (a fill callback), so no hegel-c string ever holds a marker to look up; explicit names without a fill are refused"
+functions = ["hegel_grammar_placeholder"]
 
 [[group]]
 name = "multi-threaded generation"

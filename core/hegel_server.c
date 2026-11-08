@@ -13,6 +13,7 @@
 
 #include "hegel_internal.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,7 +52,7 @@ void hegel__buf_put (hegel_buf * b, const void * p, size_t n)
 
 /* ---- Per-case state ---- */
 
-enum { H_FREE = 0, H_COLL, H_REC, H_POOL, H_SM, H_REPEAT };
+enum { H_FREE = 0, H_COLL, H_REC, H_POOL, H_SM, H_REPEAT, H_GDRAW };
 
 typedef struct {
   int    kind;
@@ -91,6 +92,7 @@ static void free_handle (hegel_case_srv * c, srv_handle * h)
     case H_POOL: e->pool_free (e->ctx, h->ptr);       break;
     case H_SM:   e->sm_free (e->ctx, h->ptr);         break;
     case H_REPEAT: e->repeat_free (e->ctx, h->ptr);   break;
+    case H_GDRAW: e->grammar_draw_free (e->ctx, h->ptr); break;
   }
   h->in_iter = 0;
   h->kind = H_FREE;
@@ -248,11 +250,13 @@ static int regex_gen (const hg_engine * e, const uint8_t * pat, uint32_t plen, h
 }
 
 static void value_strgens_free (const hg_engine * e);
+static void grammar_cache_free (const hg_engine * e);
 
 void hegel__srv_run_end (void)
 {
   const hg_engine * e = hg_engine_get ();
   value_strgens_free (e);
+  grammar_cache_free (e);
   for (int i = 0; i < g_n_strgens; i++) {
     if (e) e->string_generator_free (e->ctx, g_strgens[i].gen);
     free (g_strgens[i].pattern);
@@ -521,6 +525,188 @@ static uint8_t serve_value_op (hegel_case_srv * c, uint8_t op, rd * r, hegel_buf
     }
   }
   return usage_error (resp, "hegel-c: unknown value draw op");
+}
+
+/* ---- Grammars (Lark) ----
+**
+** A grammar is compiled once per run, here in the server, and cached by
+** the exact bytes of its spec (hegel_internal.h): the text, start rule,
+** caps, import dir and explicit terminal names.  Compiled grammars are
+** immutable, so every later test case (each a fresh fork child in fork
+** mode) reuses one.  %import files are read here, from the spec's import
+** dir: the server is the side that owns the engine, and in fork mode it
+** shares the child's filesystem and working directory.  Every grammar
+** gets the NUL-free alphabet, so pattern-drawn characters are never
+** NUL (drawn strings are C strings; a literal "\0" is never drawn).
+**
+** A draw with explicit terminals is a per-case handle (H_GDRAW): the
+** body asks NEXT, gets a terminal index, draws its value with ordinary
+** requests, sends PROVIDE, and asks NEXT again until it gets the result. */
+
+typedef struct {
+  uint8_t    * key;        /* the spec's bytes */
+  uint32_t     klen;
+  hg_grammar * g;
+} grammar_entry;
+
+static grammar_entry * g_grammars = NULL;
+static int             g_n_grammars = 0;
+
+static void grammar_cache_free (const hg_engine * e)
+{
+  for (int i = 0; i < g_n_grammars; i++) {
+    if (e) e->grammar_free (e->ctx, g_grammars[i].g);
+    free (g_grammars[i].key);
+  }
+  free (g_grammars);
+  g_grammars = NULL;
+  g_n_grammars = 0;
+}
+
+/* One (u32 len, bytes) field of a spec. */
+static hg_str rd_lstr (rd * r)
+{
+  uint32_t l = RD (r, uint32_t);
+  if (r->bad || r->left < l) { r->bad = 1; return (hg_str){ NULL, 0 }; }
+  hg_str s = { (const char *) r->p, l };
+  r->p += l;
+  r->left -= l;
+  return s;
+}
+
+/* The text of %import file `path` under `dir`: 0 with *text = malloc'd
+** contents, 0 with *text = NULL when there is no such file (the engine
+** then falls back on its bundled grammars), -1 with `err` filled on a
+** read error. */
+static int read_grammar_file (hg_str dir, hg_str path, char ** text, size_t * tlen,
+                              char * err, size_t errcap)
+{
+  *text = NULL;
+  *tlen = 0;
+  if (!dir.len) return 0;
+  char * full = malloc (dir.len + path.len + 2);
+  if (!full) abort ();
+  memcpy (full, dir.data, dir.len);
+  full[dir.len] = '/';
+  memcpy (full + dir.len + 1, path.data, path.len);
+  full[dir.len + 1 + path.len] = '\0';
+  FILE * f = fopen (full, "rb");
+  if (!f) {
+    int missing = errno == ENOENT || errno == ENOTDIR;
+    if (!missing)
+      snprintf (err, errcap, "hegel-c: could not read grammar file %s: %s", full,
+                strerror (errno));
+    free (full);
+    return missing ? 0 : -1;
+  }
+  hegel_buf b;
+  hegel__buf_init (&b);
+  char chunk[4096];
+  size_t n;
+  while ((n = fread (chunk, 1, sizeof chunk, f)) > 0) hegel__buf_put (&b, chunk, n);
+  int bad = ferror (f);
+  fclose (f);
+  if (bad) {
+    snprintf (err, errcap, "hegel-c: could not read grammar file %s", full);
+    hegel__buf_free (&b);
+    free (full);
+    return -1;
+  }
+  free (full);
+  *text = malloc (b.len + 1);
+  if (!*text) abort ();
+  memcpy (*text, b.data, b.len);
+  *tlen = b.len;
+  hegel__buf_free (&b);
+  return 0;
+}
+
+/* Copy the engine's diagnostic for a failed grammar call into `err`
+** (before anything else on the context overwrites it). */
+static void grammar_error (const hg_engine * e, int rc, const char * what, char * err,
+                           size_t errcap)
+{
+  snprintf (err, errcap, "hegel-c: %s rejected by the engine (rc=%d): %s", what, rc,
+            hg_last_error (e));
+}
+
+/* The compiled grammar for a spec, from the run cache or built now.
+** NULL with `err` filled when the spec, a file or the grammar is bad. */
+static hg_grammar * grammar_get (const hg_engine * e, const uint8_t * spec, uint32_t slen,
+                                 char * err, size_t errcap)
+{
+  for (int i = 0; i < g_n_grammars; i++)
+    if (g_grammars[i].klen == slen && memcmp (g_grammars[i].key, spec, slen) == 0)
+      return g_grammars[i].g;
+
+  rd r = { spec, slen, 0 };
+  uint64_t max_size = RD (&r, uint64_t);
+  uint32_t max_depth = RD (&r, uint32_t), nexp = RD (&r, uint32_t);
+  hg_str text = rd_lstr (&r), start = rd_lstr (&r), dir = rd_lstr (&r);
+  if (r.bad || nexp > r.left / sizeof (uint32_t)) {
+    snprintf (err, errcap, "hegel-c: malformed grammar request");
+    return NULL;
+  }
+  hg_str * names = calloc (nexp ? nexp : 1, sizeof *names);
+  if (!names) abort ();
+  for (uint32_t i = 0; i < nexp; i++) names[i] = rd_lstr (&r);
+  if (r.bad) {
+    snprintf (err, errcap, "hegel-c: malformed grammar request");
+    free (names);
+    return NULL;
+  }
+
+  hg_grammar * g = NULL;
+  hg_gbuilder * b = NULL;
+  int rc = e->grammar_builder_new (e->ctx, text, &b);
+  if (rc != HG_OK) {
+    grammar_error (e, rc, "grammar", err, errcap);
+    free (names);
+    return NULL;
+  }
+  int failed = 0;
+  for (size_t i = 0; !failed; i++) {
+    hg_str path = { NULL, 0 };
+    rc = e->grammar_builder_file (e->ctx, b, i, &path);
+    if (rc == HG_E_NOT_FOUND) break;
+    if (rc != HG_OK) { grammar_error (e, rc, "grammar import", err, errcap); failed = 1; break; }
+    char * ftext;
+    size_t flen;
+    if (read_grammar_file (dir, path, &ftext, &flen, err, errcap) != 0) { failed = 1; break; }
+    hg_str fs = { ftext, flen };
+    rc = e->grammar_builder_provide (e->ctx, b, i, ftext ? &fs : NULL);
+    free (ftext);
+    if (rc != HG_OK) {
+      char what[600];
+      snprintf (what, sizeof what, "grammar import %.*s", (int) path.len, path.data);
+      grammar_error (e, rc, what, err, errcap);
+      failed = 1;
+    }
+  }
+  if (!failed) {
+    if (!g_no_nul_alphabet && (rc = make_text_gen (e, 0, 1, &g_no_nul_alphabet)) != HG_OK) {
+      grammar_error (e, rc, "grammar alphabet", err, errcap);
+      failed = 1;
+    }
+  }
+  if (!failed) {
+    rc = e->grammar_new (e->ctx, b, start.len ? &start : NULL, max_size, max_depth,
+                         g_no_nul_alphabet, names, nexp, &g);
+    if (rc != HG_OK) { grammar_error (e, rc, "grammar", err, errcap); failed = 1; g = NULL; }
+  }
+  e->grammar_builder_free (e->ctx, b);
+  free (names);
+  if (failed) return NULL;
+
+  g_grammars = realloc (g_grammars, (size_t) (g_n_grammars + 1) * sizeof *g_grammars);
+  if (!g_grammars) abort ();
+  g_grammars[g_n_grammars].key = malloc (slen ? slen : 1);
+  if (!g_grammars[g_n_grammars].key) abort ();
+  memcpy (g_grammars[g_n_grammars].key, spec, slen);
+  g_grammars[g_n_grammars].klen = slen;
+  g_grammars[g_n_grammars].g = g;
+  g_n_grammars++;
+  return g;
 }
 
 int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, uint32_t len,
@@ -880,6 +1066,63 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
     case HEGEL_OP_DRAW_DOMAIN:
       st = serve_value_op (c, op, &r, resp);
       break;
+    /* ---- Grammars ---- */
+    case HEGEL_OP_GRAMMAR_DRAW:
+    case HEGEL_OP_GRAMMAR_NEW: {
+      char err[2300];
+      hg_grammar * g = grammar_get (e, payload, len, err, sizeof err);
+      if (!g) { st = usage_error (resp, err); break; }
+      if (op == HEGEL_OP_GRAMMAR_NEW) {
+        hg_gdraw * d = NULL;
+        rc = e->grammar_draw_new (x, g, 0, &d);
+        if ((st = eng_status (c, rc, "grammar_draw_new", resp)) == HEGEL_RESP_OK) {
+          int64_t id = add_handle (c, H_GDRAW, d);
+          HEGEL_BUF_PUT (resp, id);
+        }
+        break;
+      }
+      hg_str s = { NULL, 0 };
+      rc = e->generate_grammar (x, t, g, 0, &s);
+      if ((st = eng_status (c, rc, "grammar draw", resp)) == HEGEL_RESP_OK) {
+        hegel__buf_put (resp, s.data, s.len);
+        e->owned_string_free (x, &s);
+      }
+      break;
+    }
+    case HEGEL_OP_GRAMMAR_NEXT:
+    case HEGEL_OP_GRAMMAR_PROVIDE: {
+      int64_t id = RD (&r, int64_t);
+      hg_gdraw * d = get_handle (c, id, H_GDRAW);
+      if (!d) { st = usage_error (resp, "hegel-c: stale or invalid grammar draw handle"); break; }
+      if (op == HEGEL_OP_GRAMMAR_PROVIDE) {
+        hg_str v = { (const char *) r.p, r.left };
+        st = eng_status (c, e->grammar_draw_provide (x, d, v), "grammar_draw_provide", resp);
+        break;
+      }
+      size_t terminal = 0;
+      rc = e->grammar_draw_next (x, t, d, &terminal);
+      if (rc == HG_OK) {
+        uint8_t done = 0;
+        uint64_t term = terminal;
+        HEGEL_BUF_PUT (resp, done);
+        HEGEL_BUF_PUT (resp, term);
+        break;
+      }
+      if (rc == HG_E_NOT_FOUND) {
+        hg_str s = { NULL, 0 };
+        rc = e->grammar_draw_result (x, d, &s);
+        if ((st = eng_status (c, rc, "grammar_draw_result", resp)) == HEGEL_RESP_OK) {
+          uint8_t done = 1;
+          HEGEL_BUF_PUT (resp, done);
+          hegel__buf_put (resp, s.data, s.len);
+          e->owned_string_free (x, &s);
+        }
+        free_handle (c, &c->handles[id]);
+        break;
+      }
+      st = eng_status (c, rc, "grammar_draw_next", resp);
+      break;
+    }
 
     default: {
       char msg[96];

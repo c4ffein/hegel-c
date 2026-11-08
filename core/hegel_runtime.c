@@ -614,6 +614,17 @@ uint64_t hegel_label (const char * name)
   return h;
 }
 
+uint64_t hegel_label_combine (const uint64_t * labels, size_t n)
+{
+  uint64_t h = 0xcbf29ce484222325ULL;   /* FNV-1a over LE bytes, as hegel_label_combine */
+  for (size_t i = 0; i < n; i++)
+    for (int k = 0; k < 8; k++) {
+      h ^= (labels[i] >> (8 * k)) & 0xff;
+      h *= 0x100000001b3ULL;
+    }
+  return h;
+}
+
 void hegel_start_span (hegel_testcase * tc, uint64_t label)
 {
   hegel__call (tc, HEGEL_OP_SPAN_START, &label, sizeof label, NULL, 0);
@@ -833,6 +844,118 @@ void hegel_pool_restore (hegel_testcase * tc, hegel_pool p, int64_t var)
 void hegel_pool_free (hegel_testcase * tc, hegel_pool p)
 {
   call_ids (tc, HEGEL_OP_POOL_FREE, NULL, 1, p.id, 0);
+}
+
+/* ---- Grammars ----
+**
+** The grammar lives in the server (compiled once per run, cached by
+** the spec's bytes); the body sends the spec with each draw.  With
+** explicit terminals the draw is a loop of requests: NEXT answers with
+** the terminal whose value is due (the body draws it through `fill`,
+** with ordinary requests, and PROVIDEs it) or with the finished string.
+** An escape mid-loop leaves the server's draw handle to the case-end
+** sweep. */
+
+static void put_lstr (hegel_buf * b, const char * s)
+{
+  uint32_t l = s ? (uint32_t) strlen (s) : 0;
+  HEGEL_BUF_PUT (b, l);
+  hegel__buf_put (b, s, l);
+}
+
+/* The drawn string as a case-owned C string; health failure on a NUL. */
+static char * grammar_string (hegel_testcase * tc, const uint8_t * p, size_t n)
+{
+  if (memchr (p, '\0', n))
+    escape_health (tc, "hegel-c: grammar draw produced a string containing NUL");
+  char * s = hegel_alloc (tc, n + 1);
+  if (n) memcpy (s, p, n);
+  return s;
+}
+
+char * hegel_draw_grammar_with (hegel_testcase * tc, const char * grammar,
+                                const hegel_grammar_options * opts)
+{
+  hegel_grammar_options none;
+  if (!opts) {
+    memset (&none, 0, sizeof none);
+    opts = &none;
+  }
+  if (!grammar) escape_health (tc, "hegel-c: hegel_draw_grammar with a NULL grammar");
+  if (opts->n_explicit && !opts->fill)
+    escape_health (tc, "hegel-c: hegel_draw_grammar_with: explicit terminals need a fill "
+                       "callback");
+  if (opts->n_explicit && !opts->explicit_names)
+    escape_health (tc, "hegel-c: hegel_draw_grammar_with: n_explicit without explicit_names");
+
+  hegel_buf spec;
+  hegel__buf_init (&spec);
+  uint32_t nexp = (uint32_t) opts->n_explicit;
+  HEGEL_BUF_PUT (&spec, opts->max_size);
+  HEGEL_BUF_PUT (&spec, opts->max_depth);
+  HEGEL_BUF_PUT (&spec, nexp);
+  put_lstr (&spec, grammar);
+  put_lstr (&spec, opts->start);
+  put_lstr (&spec, opts->import_dir);
+  for (uint32_t i = 0; i < nexp; i++) put_lstr (&spec, opts->explicit_names[i]);
+
+  hegel_buf r;
+  hegel__buf_init (&r);
+  char * s;
+  if (!nexp) {
+    hegel__call (tc, HEGEL_OP_GRAMMAR_DRAW, spec.data, (uint32_t) spec.len, &r, 0);
+    hegel__buf_free (&spec);
+    s = grammar_string (tc, r.data, r.len);
+  } else {
+    /* One span over the whole draw (labelled from the grammar's shape, as
+    ** hegel-rust's from_lark), one per explicit value. */
+    uint64_t parts[3] = { hegel_label ("hegel_c.from_lark"), hegel_label (grammar),
+                          hegel_label (opts->start ? opts->start : "start") };
+    hegel_start_span (tc, hegel_label_combine (parts, 3));
+    hegel__call (tc, HEGEL_OP_GRAMMAR_NEW, spec.data, (uint32_t) spec.len, &r, 0);
+    hegel__buf_free (&spec);
+    int64_t id = resp_i64 (&r);
+    for (;;) {
+      hegel__call (tc, HEGEL_OP_GRAMMAR_NEXT, &id, sizeof id, &r, 0);
+      if (resp_u8 (&r)) {
+        s = grammar_string (tc, r.data + 1, r.len - 1);
+        break;
+      }
+      uint64_t term = 0;
+      if (r.len >= 1 + sizeof term) memcpy (&term, r.data + 1, sizeof term);
+      if (term >= nexp) escape_health (tc, "hegel-c: engine asked for an unknown terminal");
+      uint64_t tparts[2] = { hegel_label ("hegel_c.from_lark.explicit"),
+                             hegel_label (opts->explicit_names[term]) };
+      hegel_start_span (tc, hegel_label_combine (tparts, 2));
+      const char * v = opts->fill (tc, (size_t) term, opts->fill_ctx);
+      hegel_stop_span (tc, 0);
+      if (!v) {
+        char msg[300];
+        snprintf (msg, sizeof msg, "hegel-c: grammar fill callback returned NULL for "
+                  "terminal %.200s", opts->explicit_names[term]);
+        escape_health (tc, msg);
+      }
+      hegel_buf p;
+      hegel__buf_init (&p);
+      HEGEL_BUF_PUT (&p, id);
+      hegel__buf_put (&p, v, strlen (v));
+      hegel__call (tc, HEGEL_OP_GRAMMAR_PROVIDE, p.data, (uint32_t) p.len, NULL, 0);
+      hegel__buf_free (&p);
+    }
+    hegel_stop_span (tc, 0);
+  }
+  hegel__buf_free (&r);
+  if (!tc->silent) tc->draw_count++;
+  trace (tc, "\"%s\"", s);
+  return s;
+}
+
+char * hegel_draw_grammar (hegel_testcase * tc, const char * grammar, const char * start)
+{
+  hegel_grammar_options o;
+  memset (&o, 0, sizeof o);
+  o.start = start;
+  return hegel_draw_grammar_with (tc, grammar, &o);
 }
 
 /* ---- Notes, assume, fail ---- */

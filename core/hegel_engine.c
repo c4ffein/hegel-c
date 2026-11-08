@@ -178,6 +178,19 @@ const hg_engine * hg_engine_get (void)
   BIND (settings_get_show_statistics, "hegel_settings_get_show_statistics");
   BIND (settings_get_print_blob,    "hegel_settings_get_print_blob");
   BIND (settings_get_nondeterminism_strictness, "hegel_settings_get_nondeterminism_strictness");
+  /* Grammars */
+  BIND (grammar_builder_new,        "hegel_grammar_builder_new");
+  BIND (grammar_builder_file,       "hegel_grammar_builder_file");
+  BIND (grammar_builder_provide,    "hegel_grammar_builder_provide");
+  BIND (grammar_builder_free,       "hegel_grammar_builder_free");
+  BIND (grammar_new,                "hegel_grammar_new");
+  BIND (grammar_free,               "hegel_grammar_free");
+  BIND (generate_grammar,           "hegel_generate_grammar");
+  BIND (grammar_draw_new,           "hegel_grammar_draw_new");
+  BIND (grammar_draw_next,          "hegel_grammar_draw_next");
+  BIND (grammar_draw_provide,       "hegel_grammar_draw_provide");
+  BIND (grammar_draw_result,        "hegel_grammar_draw_result");
+  BIND (grammar_draw_free,          "hegel_grammar_draw_free");
 
   if (!ok) {
     dlclose (h);

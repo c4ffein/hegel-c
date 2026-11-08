@@ -130,6 +130,16 @@
 #define HEGEL_OP_REPEAT_MORE   82  /* i64 id                           -> u8      */
 #define HEGEL_OP_REPEAT_FAILED 83  /* i64 id                                      */
 #define HEGEL_OP_REPEAT_FREE   84  /* i64 id                                      */
+/* Grammars (Lark).  "spec" = u64 max_size, u32 max_depth, u32 nexplicit,
+** then (u32 len, bytes) x (3 + nexplicit): grammar text, start rule
+** ("" = start), import dir ("" = none), each explicit terminal name.
+** The server compiles a spec once per run (cached by its exact bytes)
+** and reads %import files itself, from the import dir. */
+#define HEGEL_OP_GRAMMAR_DRAW    85   /* spec (nexplicit = 0)          -> str     */
+#define HEGEL_OP_GRAMMAR_NEW     86   /* spec                          -> i64 id  */
+#define HEGEL_OP_GRAMMAR_NEXT    87   /* i64 id   -> u8 done; done: str result (id
+                                      ** freed), else u64 explicit-terminal index */
+#define HEGEL_OP_GRAMMAR_PROVIDE 88   /* i64 id, str value                        */
 
 typedef struct {
   uint8_t  op;
@@ -196,7 +206,7 @@ void             hegel__srv_repeat_case_failed (hegel_case_srv * c, hegel_outcom
 int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, uint32_t len,
                      uint8_t * resp_status, hegel_buf * resp, hegel_outcome * out);
 
-/* Release run-scoped caches (string generators). */
+/* Release run-scoped caches (string generators, compiled grammars). */
 void hegel__srv_run_end (void);
 
 /* ---- The test case handle (public opaque type hegel_testcase) ---- */
