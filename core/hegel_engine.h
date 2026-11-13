@@ -5,7 +5,7 @@
 /*
 ** dlopen binding to libhegel — the official C ABI of Hegel's native
 ** in-process engine (the `hegeltest-c` crate in the hegeldev/hegel
-** monorepo, header `hegel.h`; verified against libhegel 0.50.0).
+** monorepo, header `hegel.h`; verified against libhegel 0.51.1).
 **
 ** We bind at runtime via dlopen/dlsym rather than linking -lhegel,
 ** for two reasons:
@@ -204,7 +204,10 @@ typedef struct {
                             const int64_t * groups, size_t num_groups);
   int (*sm_add_invariant)  (hg_context *, hg_tc *, hg_sm *, hg_str name, bool always_check);
   int (*sm_start)          (hg_context *, hg_tc *, hg_sm *, int64_t * out_conc);
-  int (*sm_next_group)          (hg_context *, hg_tc *, hg_sm *, int64_t * out_group);
+  /* out_conc: the round's concurrency level (libhegel 0.51.0; an older
+  ** engine ignores the argument). */
+  int (*sm_next_group)          (hg_context *, hg_tc *, hg_sm *, int64_t * out_group,
+                                 int64_t * out_conc);
   int (*sm_next_rule)           (hg_context *, hg_tc *, hg_sm *, int64_t worker, int64_t * out);
   int (*sm_rule_rejected)       (hg_context *, hg_tc *, hg_sm *, int64_t worker);
   int (*sm_should_check_invariant) (hg_context *, hg_tc *, hg_sm *, int64_t idx, bool * out);

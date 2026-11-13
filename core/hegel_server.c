@@ -951,7 +951,8 @@ int hegel__serve_op (hegel_case_srv * c, uint8_t op, const uint8_t * payload, ui
         break;
       }
       int64_t v = 0;
-      rc = op == HEGEL_OP_SM_GROUP ? e->sm_next_group (x, t, h, &v)
+      int64_t conc = 0;               /* the round's level: always 1, we asked for 1..1 */
+      rc = op == HEGEL_OP_SM_GROUP ? e->sm_next_group (x, t, h, &v, &conc)
                                    : e->sm_next_rule (x, t, h, 0, &v);
       if ((st = eng_status (c, rc, "state machine step", resp)) == HEGEL_RESP_OK)
         HEGEL_BUF_PUT (resp, v);
