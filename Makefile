@@ -118,7 +118,8 @@ help:
 	@echo "  make scotch-test-props        Run the Scotch property suite (tests/irl/scotch/props/)"
 	@echo "  make mpi-test                 Run MPI tests (requires mpicc/mpiexec)"
 	@echo "  make bench-bench              Run fork-vs-nofork benchmarks (see docs/benchmarking.md)"
-	@echo "  make docs-check               Verify transcluded snippets in docs/*.md match source"
+	@echo "  make docs-check               Verify transcluded snippets in docs/*.md match source,"
+	@echo "                                and the test counts README.md / CLAUDE.md state (also a CI job)"
 	@echo "  make docs-fix                 Regenerate transcluded snippets in place"
 	@echo ""
 	@echo "Meta target:"
@@ -474,6 +475,7 @@ clean-cores:
 
 docs-check:
 	python3 scripts/check_doc_includes.py
+	python3 scripts/check_doc_counts.py
 
 docs-fix:
 	python3 scripts/check_doc_includes.py --fix

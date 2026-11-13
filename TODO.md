@@ -9,10 +9,31 @@
 - **First tag (v0.1.0), which c4ffein/bugs waits for**: every hegel-c pin is
   a witness there with `ref = "pending"`; with a tag, its PLAN Phase 5 can
   run them on each new upstream release. Ready: the pending work is
-  committed, `make test` and CI are green (8a3ddbe), the libhegel 0.50.0
-  bump is done and the submodule is on its tag. Before tagging, run every
-  Scotch and Linux pin once more; then say so in the README, and point the
+  committed, `make test` and CI are green (8a3ddbe), the libhegel 0.51.1
+  bump is done and the submodule is on its tag, and every Scotch and Linux
+  pin was re-run on it (2026-11-13, runs `2026-11-13-*-pins-libhegel-0-51`,
+  all as expected). Left: tag, say so in the README, and point the
   witnesses at the tag in c4ffein/bugs.
+- **Follow-ups of the 2026-11-12 series** (bool + `hegel_draw_url_alloc`,
+  per-case timeout, graph bench row) **and of the libhegel 0.51.1 bump**:
+  - Commit `5b87b45` is the per-case timeout but carries the message of
+    `6c6dd6c` ("hegel_draw_url_alloc: ..."). It is pushed: rewording it
+    rewrites main. Decide, or leave it and let this line be the record.
+  - `experiments/libhegel-vs-hegel-c`: the "3 graph / hegel-c
+    nofork+ISOLATED" row is in `run.sh`, not in the Results block of its
+    README nor in `docs/libhegel-vs-hegel-c.md`. Rerun
+    (`make -C experiments/libhegel-vs-hegel-c run`), paste, and say in the
+    "Fork mode time" paragraph what the row shows (2026-11-12, on 0.50.0:
+    484 ms, against 2005 fork and 81 nofork).
+  - `tests/selftest/test_timeout_hang` cannot pass under
+    `HEGEL_C_FORK=clean`: it prints `shrunk: -1 8`, because the re-executed
+    child does not share the test's mmap. The timeout itself fires there.
+    Report the step another way (a note in the output, as the Scotch
+    reducer test does), or have the test say it needs fast fork.
+  - `timeout_ms` in a profile registered with `hegel_register_profile` is
+    ignored: the profile snapshots engine settings only, and the runner
+    reads the field from the run's own options (read in the code, no test).
+    Carry it with the profile, or say so in `hegel_c.h`.
 - **`make test` is red about one run in thirty, from an engine bug** —
   `bugs:8c229d24-4b71-4e69-b782-ddcf94bbf1fd` (libhegel-float-simplest-nonzero,
   in c4ffein/bugs, with its draft report): a float drawn between two drawn
@@ -117,8 +138,9 @@
   says "the board takes the child's role"; the same holds for a kernel:
   - `uml`: an `ARCH=um` kernel as a userspace process, a KUnit module fed
     draws over the pipe, KASAN; a crash is a SIGSEGV `waitpid` sees. Reaches
-    page cache, mm, fs, core net. First target: lib/buildid.c (sashiko
-    `29fb415a6a72`, needs `filemap_read_folio`); then ext4 `do_split`
+    page cache, mm, fs, core net. First target: lib/buildid.c (needs
+    `filemap_read_folio`; the SHA this line carried, `29fb415a6a72`, is a
+    btrfs raid56 commit, so the sashiko entry has to be looked up again); then ext4 `do_split`
     (`94824ac9a8aa`) and minix statfs (`8c97a6ddc956`).
   - `qemu`: the `.qemu` VM (validated with libnftables 2026-04-30), a guest
     agent over serial, VM reset as crash isolation. Reaches the syscall and
@@ -246,14 +268,6 @@
 | Embedded-systems demo | **TODO** — pick a target (Modbus / ring buffer / MQTT-SN / reviewer's choice), write 2–3 generators, host-compiled |
 | `docs/review-framing.md` (one-page packet) | **TODO** — per-reviewer specific questions |
 
-### Real-world README / quickstart
-
-`docs/shrinking.md` walks through one real harness and CLAUDE.md's
-"Writing generators" lists the conventions, but there's no "here's
-your first 5-minute test" walkthrough.
-For a library that might get adopted by strangers, a focused
-getting-started doc is worth 30 minutes of writing time.
-
 ### Missing from Go
 
 1. Named "batteries-included" generators. Go ships Binary, Dates, Datetimes, Emails, URLs, Domains, IPAddresses().IPv4()/IPv6().
@@ -274,12 +288,10 @@ and regex draws are full-match.)
 Five subagents wrote tests against diverse kernel targets (BQL, kfifo,
 bitmap, maple tree, ts_kmp) to collect API friction, not bugs. Votes =
 how many of them hit it independently. `hegel_draw_bytes` (2 votes) shipped
-then; the rest is open. Gen-layer items from that list are gone with the
+then, the comparison asserts (`HEGEL_ASSERT_EQ` and friends, 2 votes) on
+2026-11-13; the rest is open. Gen-layer items from that list are gone with the
 old gen layer.
 
-- **`HEGEL_ASSERT_EQ` / `_NE` / `_LT` / `_LE` / `_GT` / `_GE`** (+ `_PTR`,
-  `_BYTES(a, b, n)`) — 2 votes: ~70% of invariant code was format strings.
-  Print both sides automatically (`_Generic` for the integer types).
 - **Weighted rules:** `hegel_state_machine_add_rule_weighted(sm, name, fn, w)`
   — 2 votes: tests registered one rule under several names to bias the
   pick, which pollutes traces.

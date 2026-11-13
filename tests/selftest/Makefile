@@ -47,7 +47,8 @@ TESTS_PASS = test_pass_simple \
              test_repeat_basic \
              test_grammar_parse \
              test_grammar_explicit \
-             test_label_combine
+             test_label_combine \
+             test_assert_cmp
 
 # Tests that should FAIL (exit non-zero) — hegel detects the bug
 TESTS_FAIL = test_shrink_boundary \
@@ -57,7 +58,8 @@ TESTS_FAIL = test_shrink_boundary \
              test_span_tree_json_shrinks \
              test_stateful_shrink \
              test_isolated_assert \
-             test_collection_shrink
+             test_collection_shrink \
+             test_quickstart
 
 # Tests that should FAIL via crash isolation (exit non-zero)
 TESTS_CRASH = test_crash_segfault \

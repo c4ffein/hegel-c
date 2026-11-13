@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <float.h>
+#include <stddef.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -1146,6 +1148,131 @@ void hegel_health_fail (const char * msg);
                               _hegel_buf); \
     } \
   } while (0)
+
+/*
+** Comparison asserts: HEGEL_ASSERT_EQ / _NE / _LT / _LE / _GT / _GE (a, b)
+** compare two values and, on failure, print both — no format string to
+** write:
+**
+**     HEGEL_ASSERT_EQ (stack_len (&s), n);
+**       -> stack_len (&s) == n failed: 3 vs 4
+**
+** An optional printf-style message adds context; its arguments are
+** evaluated only when the assert fails:
+**
+**     HEGEL_ASSERT_LE (used, cap, "after %d pushes", i);
+**       -> used <= cap failed: 9 vs 8 (after 9 pushes)
+**
+** Operands are integers (any width, either signedness, bool, char),
+** floating-point values or pointers; each is evaluated exactly once.
+** Integers are compared by value, not by C's conversions: a negative int
+** is less than any unsigned value, so HEGEL_ASSERT_EQ (-1, UINT_MAX)
+** fails, and comparing a size_t with a literal draws no -Wsign-compare
+** warning.  An integer against a floating-point value compares as
+** doubles; NaN behaves as in C (equal to nothing).  A long double is
+** compared and printed as a double.
+**
+** HEGEL_ASSERT_STR_EQ (a, b) compares two C strings (NULL equals only
+** NULL) and prints both, with the offset of the first difference.
+** HEGEL_ASSERT_BYTES_EQ (a, b, n) compares n bytes and prints the first
+** differing offset and the two bytes there.
+**
+** As with HEGEL_ASSERT, the failure's origin is the assert's file:line.
+** C only (they rest on _Generic); needs GCC >= 8 or Clang >= 6 for the
+** optional message (__VA_OPT__).
+*/
+#ifndef __cplusplus
+
+enum { HEGEL__VAL_INT, HEGEL__VAL_UINT, HEGEL__VAL_CHAR, HEGEL__VAL_DOUBLE, HEGEL__VAL_PTR };
+enum { HEGEL__CMP_EQ, HEGEL__CMP_NE, HEGEL__CMP_LT, HEGEL__CMP_LE, HEGEL__CMP_GT, HEGEL__CMP_GE };
+
+typedef struct {
+  int kind;                                   /* HEGEL__VAL_* */
+  union { int64_t i; uint64_t u; double d; const void * p; } v;
+} hegel__val;
+
+static inline hegel__val hegel__val_int (long long x)
+{ hegel__val r = { .kind = HEGEL__VAL_INT, .v.i = x }; return r; }
+static inline hegel__val hegel__val_uint (unsigned long long x)
+{ hegel__val r = { .kind = HEGEL__VAL_UINT, .v.u = x }; return r; }
+static inline hegel__val hegel__val_char (char x)
+{ hegel__val r = { .kind = HEGEL__VAL_CHAR, .v.i = x }; return r; }
+static inline hegel__val hegel__val_double (long double x)
+{ hegel__val r = { .kind = HEGEL__VAL_DOUBLE, .v.d = (double) x }; return r; }
+static inline hegel__val hegel__val_ptr (const void * x)
+{ hegel__val r = { .kind = HEGEL__VAL_PTR, .v.p = x }; return r; }
+
+#define HEGEL__VAL(x) \
+  _Generic ((x), \
+    bool: hegel__val_uint, char: hegel__val_char, \
+    signed char: hegel__val_int, short: hegel__val_int, int: hegel__val_int, \
+    long: hegel__val_int, long long: hegel__val_int, \
+    unsigned char: hegel__val_uint, unsigned short: hegel__val_uint, \
+    unsigned int: hegel__val_uint, unsigned long: hegel__val_uint, \
+    unsigned long long: hegel__val_uint, \
+    float: hegel__val_double, double: hegel__val_double, long double: hegel__val_double, \
+    default: hegel__val_ptr) (x)
+
+int  hegel__cmp_holds (int op, hegel__val a, hegel__val b);
+void hegel__cmp_fail (const char * origin, const char * expr_a, const char * op,
+                      const char * expr_b, hegel__val a, hegel__val b, const char * ctx);
+int  hegel__str_differ (const char * a, const char * b);
+void hegel__str_fail (const char * origin, const char * expr_a, const char * expr_b,
+                      const char * a, const char * b, const char * ctx);
+void hegel__bytes_fail (const char * origin, const char * expr_a, const char * expr_b,
+                        const void * a, const void * b, size_t n, const char * ctx);
+
+#define HEGEL__ASSERT_CMP(name, op, opstr, sa, sb, a, b, ...) \
+  do { \
+    hegel__val hegel__a = HEGEL__VAL (a); \
+    hegel__val hegel__b = HEGEL__VAL (b); \
+    if (!hegel__cmp_holds ((op), hegel__a, hegel__b)) { \
+      char hegel__ctx[256] = ""; \
+      __VA_OPT__ (snprintf (hegel__ctx, sizeof (hegel__ctx), __VA_ARGS__);) \
+      hegel__cmp_fail (name " at " __FILE__ ":" HEGEL__STR (__LINE__), \
+                       (sa), (opstr), (sb), hegel__a, hegel__b, hegel__ctx); \
+    } \
+  } while (0)
+
+#define HEGEL_ASSERT_EQ(a, b, ...) \
+  HEGEL__ASSERT_CMP ("HEGEL_ASSERT_EQ", HEGEL__CMP_EQ, "==", #a, #b, a, b __VA_OPT__ (,) __VA_ARGS__)
+#define HEGEL_ASSERT_NE(a, b, ...) \
+  HEGEL__ASSERT_CMP ("HEGEL_ASSERT_NE", HEGEL__CMP_NE, "!=", #a, #b, a, b __VA_OPT__ (,) __VA_ARGS__)
+#define HEGEL_ASSERT_LT(a, b, ...) \
+  HEGEL__ASSERT_CMP ("HEGEL_ASSERT_LT", HEGEL__CMP_LT, "<", #a, #b, a, b __VA_OPT__ (,) __VA_ARGS__)
+#define HEGEL_ASSERT_LE(a, b, ...) \
+  HEGEL__ASSERT_CMP ("HEGEL_ASSERT_LE", HEGEL__CMP_LE, "<=", #a, #b, a, b __VA_OPT__ (,) __VA_ARGS__)
+#define HEGEL_ASSERT_GT(a, b, ...) \
+  HEGEL__ASSERT_CMP ("HEGEL_ASSERT_GT", HEGEL__CMP_GT, ">", #a, #b, a, b __VA_OPT__ (,) __VA_ARGS__)
+#define HEGEL_ASSERT_GE(a, b, ...) \
+  HEGEL__ASSERT_CMP ("HEGEL_ASSERT_GE", HEGEL__CMP_GE, ">=", #a, #b, a, b __VA_OPT__ (,) __VA_ARGS__)
+
+#define HEGEL_ASSERT_STR_EQ(a, b, ...) \
+  do { \
+    const char * hegel__a = (a); \
+    const char * hegel__b = (b); \
+    if (hegel__str_differ (hegel__a, hegel__b)) { \
+      char hegel__ctx[256] = ""; \
+      __VA_OPT__ (snprintf (hegel__ctx, sizeof (hegel__ctx), __VA_ARGS__);) \
+      hegel__str_fail ("HEGEL_ASSERT_STR_EQ at " __FILE__ ":" HEGEL__STR (__LINE__), \
+                       #a, #b, hegel__a, hegel__b, hegel__ctx); \
+    } \
+  } while (0)
+
+#define HEGEL_ASSERT_BYTES_EQ(a, b, n, ...) \
+  do { \
+    const void * hegel__a = (a); \
+    const void * hegel__b = (b); \
+    size_t       hegel__n = (n); \
+    if (hegel__n > 0 && memcmp (hegel__a, hegel__b, hegel__n) != 0) { \
+      char hegel__ctx[256] = ""; \
+      __VA_OPT__ (snprintf (hegel__ctx, sizeof (hegel__ctx), __VA_ARGS__);) \
+      hegel__bytes_fail ("HEGEL_ASSERT_BYTES_EQ at " __FILE__ ":" HEGEL__STR (__LINE__), \
+                         #a, #b, hegel__a, hegel__b, hegel__n, hegel__ctx); \
+    } \
+  } while (0)
+
+#endif /* !__cplusplus */
 
 #ifdef __cplusplus
 }

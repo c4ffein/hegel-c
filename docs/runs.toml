@@ -681,3 +681,192 @@ notes = "With HEGEL_REPORT_MULTIPLE_FAILURES=1 the test had reported two failure
 target = "tests/irl/scotch/pins/hgraphOrderCp.conf"
 verdict = "as-expected"
 note = "buggy red, shrunk to MINIMAL nvert=3 nedges=1 edges=[(1,2)] (origin HEGEL_ISOLATED at test_graph_order_shrink.c:239); fixed green"
+
+[[run]]
+id = "2026-11-13-scotch-pins-libhegel-0-51"
+date = "2026-11-13"
+kind = "pins"
+project = "scotch"
+summary = "every Scotch pin after the libhegel 0.50.0 -> 0.51.1 bump: 9 pins, 16 (pin, state) pairs, all as expected"
+hegel_c = "878efad"
+libhegel = "0.51.1"
+notes = "make test-pins on 878efad (the bump commit), engine built from the submodule (build/libhegel-0.51.1-source.so); the tree's uncommitted changes were documents and CI only. make test-props after it: 24 green."
+
+[[run.result]]
+target = "tests/irl/scotch/pins/archBuildBase.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/archBuildPairing.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/archSubSingle.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/current.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/graphGeomLoadChac.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/hgraphOrderCp.conf"
+verdict = "as-expected"
+note = "buggy red, shrunk to MINIMAL nvert=3 nedges=1 edges=[(1,2)] (origin HEGEL_ISOLATED at test_graph_order_shrink.c:239); fixed green"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/hgraphOrderKpDefault.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/kgraphMapFmDomnnbr.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/scotch/pins/kgraphRefineNoMapping.conf"
+verdict = "as-expected"
+
+[[run]]
+id = "2026-11-13-linux-pins-libhegel-0-51"
+date = "2026-11-13"
+kind = "pins"
+project = "linux"
+summary = "every Linux pin after the libhegel 0.50.0 -> 0.51.1 bump: 33 pins, 48 (pin, state) pairs, all as expected"
+hegel_c = "878efad"
+libhegel = "0.51.1"
+notes = "Same tree and engine as 2026-11-13-scotch-pins-libhegel-0-51, run right after it (make test-pins, about 45 min). First bump run with no unexpected verdict: maple_prealloc is red on buggy since 2026-11-08."
+
+[[run.result]]
+target = "tests/irl/linux/pins/asn1.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bch.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bch_mod8.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bitmap.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bootconfig_rediscovery.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bql.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/btree.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/bunzip2.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/glob.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/group_cpus.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/ida_find_first_range.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/idr.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/idr_rediscovery.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/interval_tree.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/kfifo.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/llist.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/lzo.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_destroy_walk.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_prealloc.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_store_root.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_tree.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/maple_tree_rediscovery.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/objagg.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/packing_roundtrip.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/parman.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/plist.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/scatterlist.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/sg_split.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/sg_split_v2.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/ts_kmp.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/xa_store_range.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/xarray.conf"
+verdict = "as-expected"
+
+[[run.result]]
+target = "tests/irl/linux/pins/xarray_pause.conf"
+verdict = "as-expected"

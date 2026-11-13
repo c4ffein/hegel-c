@@ -71,6 +71,20 @@ jobs:
       - name: Lint runs, corpus and pins
         run: make lint-runs
 
+  # The documents against the sources: code snippets in docs/*.md are the
+  # lines of the files they name, and the test counts README.md and
+  # CLAUDE.md state are the suites' (the TESTS_* lists of the test
+  # Makefiles, tests/irl/scotch/props/, the Scotch pin `current`).  Python
+  # standard library only; nothing is built.
+  docs:
+    name: Docs match sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check snippets and test counts
+        run: make docs-check
+
   # Per-file licensing (REUSE.toml + LICENSES/): every file has its license,
   # no license text is unused, third-party excerpts keep theirs.  Same check
   # as `make check-reuse`; the submodule is not checked out, so deps/hegel is

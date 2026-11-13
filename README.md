@@ -69,6 +69,7 @@ Until 2026-10 hegel-c also had a declarative schema layer (`hegel_gen.h`: descri
 
 ## Documentation
 
+- **[docs/quickstart.md](docs/quickstart.md)** — a first property test in five minutes: build, write, run, read the report, replay
 - **[docs/shrinking.md](docs/shrinking.md)** — integrated shrinking explained, with a worked example finding a real bug in Scotch and shrinking to the theoretical minimum
 - **[docs/testing.md](docs/testing.md)** — selftest suite three-layer pattern and test categories
 - **[docs/mpi-testing.md](docs/mpi-testing.md)** — MPI_Comm_spawn integration guide
@@ -83,7 +84,7 @@ Until 2026-10 hegel-c also had a declarative schema layer (`hegel_gen.h`: descri
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 58 (31 PASS, 8 FAIL, 4 CRASH, 8 HEALTH, 7 SHRINK) | `make selftest-test` |
+| selftest | 61 (32 PASS, 9 FAIL, 4 CRASH, 8 HEALTH, 8 SHRINK) | `make selftest-test` |
 | from-hegel-rust | 11 (5 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
 | Scotch IRL | 3 (1 sequential, 1 reducer demo, 1 PT-Scotch MPI) + a 29-test property suite | `make scotch-test` |

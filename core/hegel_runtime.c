@@ -1064,6 +1064,152 @@ void hegel_assert (int condition, const char * msg)
   hegel_fail (msg);
 }
 
+/* ---- Comparison asserts (HEGEL_ASSERT_EQ and friends) ---- */
+
+/* The value as a double, for a comparison with a floating-point operand. */
+static double hegel__val_as_double (hegel__val x)
+{
+  switch (x.kind) {
+    case HEGEL__VAL_DOUBLE: return x.v.d;
+    case HEGEL__VAL_UINT:   return (double) x.v.u;
+    case HEGEL__VAL_PTR:    return (double) (uintptr_t) x.v.p;
+    default:                return (double) x.v.i;
+  }
+}
+
+/* Integers and pointers by value: -1, 0 or 1.  A negative signed value is
+** below every unsigned one, whatever C's conversions would say. */
+static int hegel__val_order (hegel__val a, hegel__val b)
+{
+  int      a_neg = (a.kind == HEGEL__VAL_INT || a.kind == HEGEL__VAL_CHAR) && a.v.i < 0;
+  int      b_neg = (b.kind == HEGEL__VAL_INT || b.kind == HEGEL__VAL_CHAR) && b.v.i < 0;
+  uint64_t ua = a.kind == HEGEL__VAL_PTR ? (uint64_t) (uintptr_t) a.v.p : a.v.u;
+  uint64_t ub = b.kind == HEGEL__VAL_PTR ? (uint64_t) (uintptr_t) b.v.p : b.v.u;
+
+  if (a_neg != b_neg) return a_neg ? -1 : 1;
+  if (a_neg) return a.v.i < b.v.i ? -1 : a.v.i > b.v.i;
+  return ua < ub ? -1 : ua > ub;
+}
+
+int hegel__cmp_holds (int op, hegel__val a, hegel__val b)
+{
+  if (a.kind == HEGEL__VAL_DOUBLE || b.kind == HEGEL__VAL_DOUBLE) {
+    double x = hegel__val_as_double (a), y = hegel__val_as_double (b);
+    switch (op) {
+      case HEGEL__CMP_EQ: return x == y;
+      case HEGEL__CMP_NE: return x != y;
+      case HEGEL__CMP_LT: return x < y;
+      case HEGEL__CMP_LE: return x <= y;
+      case HEGEL__CMP_GT: return x > y;
+      default:            return x >= y;
+    }
+  }
+  int c = hegel__val_order (a, b);
+  switch (op) {
+    case HEGEL__CMP_EQ: return c == 0;
+    case HEGEL__CMP_NE: return c != 0;
+    case HEGEL__CMP_LT: return c < 0;
+    case HEGEL__CMP_LE: return c <= 0;
+    case HEGEL__CMP_GT: return c > 0;
+    default:            return c >= 0;
+  }
+}
+
+static void hegel__val_format (char * buf, size_t size, hegel__val x)
+{
+  switch (x.kind) {
+    case HEGEL__VAL_INT:  snprintf (buf, size, "%lld", (long long) x.v.i); break;
+    case HEGEL__VAL_UINT: snprintf (buf, size, "%llu", (unsigned long long) x.v.u); break;
+    case HEGEL__VAL_CHAR:
+      if (x.v.i >= 0x20 && x.v.i < 0x7f) snprintf (buf, size, "'%c' (%lld)", (int) x.v.i,
+                                                   (long long) x.v.i);
+      else snprintf (buf, size, "%lld", (long long) x.v.i);
+      break;
+    case HEGEL__VAL_DOUBLE:
+      /* the shortest of %g / %.17g that reads back as the same double */
+      snprintf (buf, size, "%g", x.v.d);
+      if (strtod (buf, NULL) != x.v.d && x.v.d == x.v.d) snprintf (buf, size, "%.17g", x.v.d);
+      break;
+    default:
+      if (x.v.p) snprintf (buf, size, "%p", x.v.p);
+      else snprintf (buf, size, "NULL");
+  }
+}
+
+/* "<what> failed: <detail>" plus the caller's context in parentheses. */
+static void hegel__assert_fail (const char * origin, const char * what, const char * detail,
+                                const char * ctx)
+{
+  char msg[1024];
+  if (ctx && ctx[0]) snprintf (msg, sizeof msg, "%s failed: %s (%s)", what, detail, ctx);
+  else snprintf (msg, sizeof msg, "%s failed: %s", what, detail);
+  hegel_fail_with_origin (origin, msg);
+}
+
+void hegel__cmp_fail (const char * origin, const char * expr_a, const char * op,
+                      const char * expr_b, hegel__val a, hegel__val b, const char * ctx)
+{
+  char va[64], vb[64], what[400], detail[160];
+  hegel__val_format (va, sizeof va, a);
+  hegel__val_format (vb, sizeof vb, b);
+  snprintf (what, sizeof what, "%s %s %s", expr_a, op, expr_b);
+  snprintf (detail, sizeof detail, "%s vs %s", va, vb);
+  hegel__assert_fail (origin, what, detail, ctx);
+}
+
+int hegel__str_differ (const char * a, const char * b)
+{
+  if (!a || !b) return a != b;
+  return strcmp (a, b) != 0;
+}
+
+/* A string for a report: quoted, at most 60 bytes of it, bytes outside
+** printable ASCII as \xNN. */
+static void hegel__str_quote (char * buf, size_t size, const char * s)
+{
+  size_t o = 0;
+  if (!s) { snprintf (buf, size, "NULL"); return; }
+  buf[o++] = '"';
+  for (size_t i = 0; s[i] && o + 12 < size; i++) {
+    unsigned char c = (unsigned char) s[i];
+    if (i == 60) { o += (size_t) snprintf (buf + o, size - o, "..."); break; }
+    if (c == '"' || c == '\\') { buf[o++] = '\\'; buf[o++] = (char) c; }
+    else if (c >= 0x20 && c < 0x7f) buf[o++] = (char) c;
+    else o += (size_t) snprintf (buf + o, size - o, "\\x%02x", c);
+  }
+  buf[o++] = '"';
+  buf[o] = 0;
+}
+
+void hegel__str_fail (const char * origin, const char * expr_a, const char * expr_b,
+                      const char * a, const char * b, const char * ctx)
+{
+  char qa[300], qb[300], what[400], detail[700];
+  hegel__str_quote (qa, sizeof qa, a);
+  hegel__str_quote (qb, sizeof qb, b);
+  snprintf (what, sizeof what, "%s == %s (strings)", expr_a, expr_b);
+  if (a && b) {
+    size_t i = 0;
+    while (a[i] && a[i] == b[i]) i++;
+    snprintf (detail, sizeof detail, "%s vs %s, first difference at byte %zu", qa, qb, i);
+  } else
+    snprintf (detail, sizeof detail, "%s vs %s", qa, qb);
+  hegel__assert_fail (origin, what, detail, ctx);
+}
+
+void hegel__bytes_fail (const char * origin, const char * expr_a, const char * expr_b,
+                        const void * a, const void * b, size_t n, const char * ctx)
+{
+  const unsigned char * pa = a, * pb = b;
+  char   what[400], detail[160];
+  size_t i = 0;
+  while (i + 1 < n && pa[i] == pb[i]) i++;
+  snprintf (what, sizeof what, "%s == %s (%zu bytes)", expr_a, expr_b, n);
+  snprintf (detail, sizeof detail, "first difference at byte %zu: 0x%02x vs 0x%02x",
+            i, pa[i], pb[i]);
+  hegel__assert_fail (origin, what, detail, ctx);
+}
+
 void hegel_health_fail (const char * msg)
 {
   hegel_testcase * tc = hegel__current_tc;
