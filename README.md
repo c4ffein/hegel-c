@@ -65,6 +65,7 @@ Until 2026-10 hegel-c also had a declarative schema layer (`hegel_gen.h`: descri
 - **Pure C public API, no C++.** A separate C++ Hegel binding is provided by the Hegel team. This lib stays pure C at the surface.
 - **Based on the official minimal hegel-c.** The main hegel now includes a low-level C header for FFI bindings, also called hegel-c. This repo is only a wrapper enabling more features.
 - **Pinned engine, watched upstream.** The engine version is pinned (`LIBHEGEL_VERSION` in the Makefile); a CI job checks every 6 hours for newer libhegel releases (`make check-libhegel-upstream` runs the same check locally).
+- **Linux only, for now.** The runtime loads `libhegel.so`, the Makefile pins the two Linux engine builds (amd64, arm64), and fork-clean mode, the database key and the test location read `/proc/self`. Nothing has been built or run on macOS or Windows.
 
 ## Documentation
 
