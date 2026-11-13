@@ -95,7 +95,8 @@ examples; the ~54-line `main` is the same in all of them (see "Lines").
 
 Variants: `raw_crash_fork.c` (raw with hand-rolled isolation: draw in the
 engine's process, fork for the code under test, signal = INTERESTING),
-`hc_crash_iso.c` (nofork + `HEGEL_ISOLATED`), `hcn_*` (the hc_*.c
+`hc_crash_iso.c` and `hc_graph_iso.c` (nofork + `HEGEL_ISOLATED`: one
+draw per case, and a draw-heavy generator), `hcn_*` (the hc_*.c
 sources built with `-Dhegel_run_test_n=hegel_run_test_nofork_n`, i.e.
 hegel-c without per-case fork), `raw_replay.c` (raw_minimal + a `REPRO`
 env var for `hegel_run_start_blob`).

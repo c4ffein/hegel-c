@@ -35,6 +35,7 @@ ROWS='
 3 graph|raw_graph|libhegel||^graph:
 3 graph|hc_graph|hegel-c fork||^graph:
 3 graph|hcn_graph|hegel-c nofork||^graph:
+3 graph|hc_graph_iso|hegel-c nofork+ISOLATED||^graph:
 4 tree|lite_tree|libhegel lite||^FAILED:\|^run error:
 4 tree|raw_tree|libhegel||^expr =
 4 tree|hc_tree|hegel-c fork||^expr =
@@ -103,7 +104,7 @@ echo
 echo "Lines of test code (comments and blank lines excluded; shared sut.h / common.h not counted)"
 printf '  %-18s %6s %12s %10s %7s\n' file lines boilerplate "property" chars
 sh ./loc.sh lite_minimal.c raw_minimal.c hc_minimal.c lite_crash.c raw_crash.c raw_crash_fork.c \
-   hc_crash.c hc_crash_iso.c lite_graph.c raw_graph.c hc_graph.c lite_tree.c raw_tree.c hc_tree.c \
+   hc_crash.c hc_crash_iso.c lite_graph.c raw_graph.c hc_graph.c hc_graph_iso.c lite_tree.c raw_tree.c hc_tree.c \
    lite_twobugs.c raw_twobugs.c hc_twobugs.c lite_misuse.c raw_misuse.c hc_misuse.c \
    lite_replay.c raw_replay.c raw_check.h |
   awk '{ printf "  %-18s %6d %12d %10d %7d\n", $1, $2, $3, $2 - $3, $4 }'

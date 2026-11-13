@@ -39,7 +39,7 @@ RAW     = $(addprefix raw_,$(PAIRS)) raw_crash_fork raw_replay
 # lite_*: the shortest correct libhegel version of each pair (no shared
 # helpers, no return-code checks beyond what correctness needs, no frees)
 LITE    = $(addprefix lite_,$(PAIRS)) lite_replay
-HC      = $(addprefix hc_,$(PAIRS)) hc_crash_iso
+HC      = $(addprefix hc_,$(PAIRS)) hc_crash_iso hc_graph_iso
 # hcn_*: the same hc_*.c under the nofork runner (no source change: the
 # fork runner's name is redefined on the command line)
 HCN     = $(addprefix hcn_,$(PAIRS))
