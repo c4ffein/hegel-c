@@ -9,11 +9,9 @@ on:
   pull_request:
     branches: [main]
 
-# Engine (libhegel.so) source version.  Pinned to the tag local dev
-# builds from and the runtime is verified against (see CLAUDE.md).
-# Bump deliberately — CI then builds and tests the exact engine dev uses.
-env:
-  HEGEL_ENGINE_VERSION: v0.17.4
+# The engine (libhegel.so) version is not set here: the `engine` job builds
+# whatever deps/hegel is checked out at, which the release watch keeps on
+# the Makefile's LIBHEGEL_VERSION tag (see CLAUDE.md, "libhegel").
 
 jobs:
   # Build the engine cdylib (libhegel.so) from source once and share it.
