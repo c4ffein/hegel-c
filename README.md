@@ -82,7 +82,7 @@ Until 2026-10 hegel-c also had a declarative schema layer (`hegel_gen.h`: descri
 
 | Suite | Tests | Command |
 |-------|-------|---------|
-| selftest | 34 (19 PASS, 8 FAIL, 4 CRASH, 3 HEALTH) | `make selftest-test` |
+| selftest | 58 (31 PASS, 8 FAIL, 4 CRASH, 8 HEALTH, 7 SHRINK) | `make selftest-test` |
 | from-hegel-rust | 11 (5 PASS, 6 SHRINK) | `make from-hegel-rust-test` |
 | MPI | 3 (1 mpiexec, 2 spawn) | `make mpi-test` |
 | Scotch IRL | 3 (1 sequential, 1 reducer demo, 1 PT-Scotch MPI) + a 29-test property suite | `make scotch-test` |
