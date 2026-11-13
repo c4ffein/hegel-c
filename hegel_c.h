@@ -306,7 +306,7 @@ int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
 **     int     y = HEGEL_DRAW_INT    ();           /. INT_MIN..INT_MAX ./
 **     int64_t a = HEGEL_DRAW_I64    (-100, 100);
 **     double  d = HEGEL_DRAW_DOUBLE (0.0, 1.0);
-**     bool    b = HEGEL_DRAW_BOOL   ();           /. 0 or 1 ./
+**     bool    b = HEGEL_DRAW_BOOL   ();
 **
 ** Same choices as the call they expand to, so they shrink the same. */
 
@@ -340,9 +340,8 @@ int hegel_draw_regex (hegel_testcase * tc, const char * pattern,
 #define HEGEL__DRAW_DOUBLE_2(lo, hi) hegel_draw_double ((tc), (lo),     (hi))
 #define HEGEL_DRAW_DOUBLE(...)       HEGEL__DISPATCH (HEGEL__DRAW_DOUBLE, __VA_ARGS__)
 
-/* Bool takes no range.  Draws hegel_draw_int (0, 1), so it shrinks to
-** false like any 0/1 draw. */
-#define HEGEL__DRAW_BOOL_0() ((bool)(hegel_draw_int ((tc), 0, 1)))
+/* Bool takes no range. */
+#define HEGEL__DRAW_BOOL_0() hegel_draw_bool ((tc))
 #define HEGEL_DRAW_BOOL(...) HEGEL__DISPATCH (HEGEL__DRAW_BOOL, __VA_ARGS__)
 
 /* ---- Value draws: dates, times, UUIDs, IP addresses, emails, URLs, domains ----
