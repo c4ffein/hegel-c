@@ -39,6 +39,7 @@
 
 #include <setjmp.h>
 #include <stdint.h>
+#include <time.h>
 
 /* ---- Escape codes (longjmp values / terminal outcomes) ---- */
 
@@ -308,6 +309,21 @@ void hegel__send (hegel_testcase * tc, uint8_t op, const void * payload, uint32_
 ** -1 on EOF/error. */
 int hegel__read_full  (int fd, void * buf, size_t n);
 int hegel__write_full (int fd, const void * buf, size_t n);
+
+/* ---- Per-case deadline for forked bodies ----
+**
+** How long a forked body (a fork-mode case, a HEGEL_ISOLATED block's
+** child) may run before its parent kills it, in milliseconds; 0 = no
+** deadline.  Set by the run driver when a run starts (hegel_run_options
+** .timeout_ms / HEGEL_C_TIMEOUT_MS), read by whichever process forks. */
+extern int64_t hegel__case_timeout_ms;
+
+/* `d` = now + ms, on the monotonic clock. */
+void hegel__deadline_in (struct timespec * d, int64_t ms);
+
+/* hegel__read_full that gives up at `deadline` (NULL = never).  Returns
+** 0 on success, -1 on EOF/error, -2 when the deadline passed first. */
+int hegel__read_deadline (int fd, void * buf, size_t n, const struct timespec * deadline);
 
 /* Run drivers (hegel_runner.c) with a custom body (stateful). */
 int hegel__run_property (void (*test_fn)(hegel_testcase *), uint64_t n_cases, int use_fork);

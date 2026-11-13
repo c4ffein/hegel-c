@@ -112,7 +112,45 @@ typedef struct {
   const char *        test_file;        /* test location (Antithesis reports), */
   uint32_t            test_line;        /*   NULL test_file: "<binary>", line 0 */
   const char *        test_function;    /* NULL: suite test name, else "run<N>" */
+  /* ---- hegel-c's own (see "Timeouts" below) ---- */
+  int64_t             timeout_ms;       /* per-case deadline; 0: 10 s, HEGEL_OFF: none */
 } hegel_run_options;
+
+/* ---- Timeouts ----
+**
+** A forked body that is still running after timeout_ms milliseconds is
+** killed (SIGKILL) and the case fails, like a crash: it shrinks, and the
+** report says "timed out after N ms".  So an infinite loop or a deadlock
+** in the code under test is a counterexample, not a hung test run.
+**
+** What is timed is a forked body's wall time: the whole test case under
+** the fork runners (engine time serving its draws included), the block
+** under HEGEL_ISOLATED in nofork mode.  Nofork code outside a block has
+** no deadline: nothing could kill it but the run itself.
+**
+** The origin (which bug this is, to the shrinker) is "timeout" for a
+** fork-mode case and the block's "HEGEL_ISOLATED at file:line" inside a
+** block, so a bug that hangs on some inputs and crashes on others
+** shrinks as one failure there.
+**
+** timeout_ms: 0 is the default, HEGEL_DEFAULT_TIMEOUT_MS (10 s);
+** HEGEL_OFF is no deadline; any other value is milliseconds.
+** HEGEL_C_TIMEOUT_MS in the environment overrides the option, with 0 for
+** no deadline — for a slow machine, an ASan build or a debugger session,
+** with no rebuild.  The runners without options (hegel_run_test, the
+** suite, the state machine runners) use the environment or the default.
+**
+** Cost and limits:
+**   - Every execution that hangs costs the whole timeout, and shrinking a
+**     hang replays it many times: a test meant to find hangs wants a
+**     timeout a few times its slowest honest case (hundreds of ms), not
+**     the default.
+**   - A case that runs close to the timeout fails on some replays and
+**     not on others: the engine then reports the failure with a
+**     "nondeterministic" caveat, or the run as flaky.  Raise the timeout.
+**   - Only the forked body is killed.  Processes it started itself
+**     (MPI_Comm_spawn workers, a shell) are left running. */
+#define HEGEL_DEFAULT_TIMEOUT_MS 10000
 
 /* report_multiple: by default a run stops at its first failure (one bug
 ** per run: a second one stays hidden until the first is fixed).  With it,
@@ -982,11 +1020,13 @@ char * hegel_draw_grammar_with (hegel_testcase * tc, const char * grammar,
 ** Under hegel_run_test_nofork the block runs in a forked child that sees
 ** every value drawn before it (copy-on-write — nothing is serialized);
 ** a crash there is a failure whose origin names the block, and it
-** shrinks like any other.  HEGEL_ASSERT / hegel_assume / hegel_note
+** shrinks like any other; so is a block still running at the run's
+** timeout (hegel_run_options.timeout_ms, 10 s by default), whose child
+** is killed.  HEGEL_ASSERT / hegel_assume / hegel_note
 ** inside the block work as usual.  Under the fork runners the whole case
 ** is already isolated, so the block runs inline.
 **
-** The block is one bug: every failure inside it — crash, abort,
+** The block is one bug: every failure inside it — crash, abort, timeout,
 ** HEGEL_ASSERT, hegel_fail — reports origin "HEGEL_ISOLATED at file:line"
 ** (the message still says which).  So code whose one bug shows up as a
 ** crash on some runs and a bad result on others (memory garbage decides)

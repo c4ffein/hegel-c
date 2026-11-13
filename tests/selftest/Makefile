@@ -92,7 +92,8 @@ TESTS_SHRINK = test_recursive_shrinks \
                test_value_draws_shrink \
                test_repeat_shrinks \
                test_repeat_crash_shrinks \
-               test_grammar_shrinks
+               test_grammar_shrinks \
+               test_timeout_hang
 
 ALL_TESTS = $(TESTS_PASS) $(TESTS_FAIL) $(TESTS_CRASH) $(TESTS_HEALTH) $(TESTS_SHRINK)
 

@@ -25,6 +25,7 @@
 
 #include "hegel_internal.h"
 
+#include <errno.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,22 +90,30 @@ static void capture_clear (void)
 
 /* ---- Fork-mode parent: serve one child's requests ---- */
 
-static void serve_child (hegel_case_srv * srv, int req_fd, int resp_fd, hegel_outcome * out)
+/* Returns 1 when the child was still running at `deadline` (NULL = no
+** deadline) — the caller kills it — and 0 otherwise. */
+static int serve_child (hegel_case_srv * srv, int req_fd, int resp_fd, hegel_outcome * out,
+                        const struct timespec * deadline)
 {
   hegel_buf payload, resp;
+  int timed_out = 0;
   hegel__buf_init (&payload);
   hegel__buf_init (&resp);
 
   for (;;) {
     hegel_msg_header h;
-    if (hegel__read_full (req_fd, &h, sizeof h) != 0) break;  /* EOF: crash */
+    int rd = hegel__read_deadline (req_fd, &h, sizeof h, deadline);
+    if (rd == -2) timed_out = 1;
+    if (rd != 0) break;                       /* EOF: crash */
     payload.len = 0;
     uint8_t chunk[4096];
     uint32_t left = h.len;
     int eof = 0;
     while (left) {
       uint32_t n = left < sizeof chunk ? left : (uint32_t) sizeof chunk;
-      if (hegel__read_full (req_fd, chunk, n) != 0) { eof = 1; break; }
+      rd = hegel__read_deadline (req_fd, chunk, n, deadline);
+      if (rd == -2) timed_out = 1;
+      if (rd != 0) { eof = 1; break; }
       hegel__buf_put (&payload, chunk, n);
       left -= n;
     }
@@ -122,9 +131,13 @@ static void serve_child (hegel_case_srv * srv, int req_fd, int resp_fd, hegel_ou
   }
   hegel__buf_free (&payload);
   hegel__buf_free (&resp);
+  return timed_out;
 }
 
-static void crash_outcome (hegel_case_srv * srv, int wstatus, hegel_outcome * out)
+/* `timed_out_ms`: nonzero when the runner killed the child at its
+** deadline (wstatus is then our own SIGKILL, and says nothing). */
+static void crash_outcome (hegel_case_srv * srv, int wstatus, int64_t timed_out_ms,
+                           hegel_outcome * out)
 {
   const char * site = hegel__srv_iso_site (srv);
   char where[300] = "";
@@ -132,7 +145,12 @@ static void crash_outcome (hegel_case_srv * srv, int wstatus, hegel_outcome * ou
   out->status = HG_STATUS_INTERESTING;
   if (site)   /* the block is the origin, whatever the crash (see hegel_fail_with_origin) */
     snprintf (out->origin, sizeof out->origin, "HEGEL_ISOLATED at %s", site);
-  if (WIFSIGNALED (wstatus)) {
+  if (timed_out_ms) {
+    if (!site)
+      snprintf (out->origin, sizeof out->origin, "timeout");
+    snprintf (out->msg, sizeof out->msg, "test case timed out after %lld ms (killed)%s",
+              (long long) timed_out_ms, where);
+  } else if (WIFSIGNALED (wstatus)) {
     int sig = WTERMSIG (wstatus);
     if (!site)
       snprintf (out->origin, sizeof out->origin, "crash: signal %d (%s)", sig, strsignal (sig));
@@ -337,14 +355,20 @@ static void run_case_forked (hegel_case_srv * srv, void (*test_fn)(hegel_testcas
   /* Parent */
   close (req[1]);
   close (resp[0]);
-  serve_child (srv, req[0], resp[1], out);
+  int64_t timeout_ms = hegel__case_timeout_ms;
+  struct timespec deadline;
+  if (timeout_ms) hegel__deadline_in (&deadline, timeout_ms);
+  int timed_out = serve_child (srv, req[0], resp[1], out, timeout_ms ? &deadline : NULL);
   close (req[0]);
   close (resp[1]);
 
+  /* Still running at the deadline (an infinite loop, a deadlock): kill it.
+  ** Only the child itself: processes it started are not ours to find. */
+  if (timed_out) kill (pid, SIGKILL);
   int wstatus = 0;
   while (waitpid (pid, &wstatus, 0) < 0) { /* EINTR */ }
 
-  if (out->status == -1) crash_outcome (srv, wstatus, out);
+  if (out->status == -1) crash_outcome (srv, wstatus, timed_out ? timeout_ms : 0, out);
 }
 
 /* Run one test case in-process; fill `out`. */
@@ -500,6 +524,28 @@ static int reproduce_target (uint64_t * run, const char ** blob, size_t * len)
   }
   *len = strlen (*blob);
   return 1;
+}
+
+/* The per-case deadline of a run, in ms (0 = none): HEGEL_C_TIMEOUT_MS if
+** set (as with HEGEL_C_FORK, the environment wins, so a slow machine or a
+** debugger session needs no rebuild), else the run option, else the
+** default. */
+static int64_t case_timeout_ms (const hegel_run_options * o)
+{
+  const char * e = getenv ("HEGEL_C_TIMEOUT_MS");
+  if (e && *e) {
+    char * end = NULL;
+    errno = 0;
+    long long v = strtoll (e, &end, 10);
+    if (errno || *end || v < 0) {
+      fprintf (stderr, "hegel-c: HEGEL_C_TIMEOUT_MS must be a number of milliseconds "
+                       "(0 = no timeout), got '%s'\n", e);
+      exit (1);
+    }
+    return v;
+  }
+  if (o->timeout_ms < 0) return 0;            /* HEGEL_OFF */
+  return o->timeout_ms ? o->timeout_ms : HEGEL_DEFAULT_TIMEOUT_MS;
 }
 
 /* Every run goes through here: numbered, and its result recorded so a
@@ -752,6 +798,8 @@ static int run_property_inner (void (*test_fn)(hegel_testcase *),
     e->settings_free (x, s);
     return 1;
   }
+
+  hegel__case_timeout_ms = case_timeout_ms (o);
 
   int rc = 0;
   int health_failed = 0;

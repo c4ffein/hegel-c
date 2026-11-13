@@ -547,6 +547,8 @@ int main(void) { hegel_run_test_nofork(test_build); return 0; }
 
 Rules: no draws, spans or collection calls inside the block (a health failure says so), no nesting, and don't leave it with `break` / `return` / `goto`. Every failure inside one block — crash, abort, `HEGEL_ASSERT` — counts as one bug, so code whose bug sometimes crashes and sometimes returns garbage shrinks as a single failure.
 
+Hangs: a forked body (a fork-mode case, or a block's child under nofork) still running after the run's timeout is killed and the case fails, so an infinite loop shrinks like a crash. The timeout is `hegel_run_options.timeout_ms` (default 10 s, `HEGEL_OFF` for none; `HEGEL_C_TIMEOUT_MS` in the environment overrides it). Each hanging execution costs the whole timeout, so when a test is expected to find hangs set it to a few times the slowest honest case (`.timeout_ms = 300`). Nofork code outside a block has no deadline.
+
 Fork-mode notes:
 
 - **Global state changes in the child are not visible to the next case** — the child exits after each case. Use `hegel_set_case_setup` for per-case initialization.

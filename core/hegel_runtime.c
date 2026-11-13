@@ -20,6 +20,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <signal.h>
+#include <time.h>
 #include <sys/wait.h>
 
 /* ---- Globals (single active test case per process by design) ---- */
@@ -29,6 +33,7 @@ char hegel__fail_msg[1024];
 char hegel__fail_origin[512];
 void (*hegel__case_setup)(void) = NULL;
 void (*hegel__draws_abandoned)(void) = NULL;
+int64_t hegel__case_timeout_ms = 0;
 
 void hegel_set_case_setup (void (*setup_fn)(void))
 {
@@ -41,6 +46,46 @@ int hegel__read_full (int fd, void * buf, size_t n)
 {
   uint8_t * p = buf;
   while (n > 0) {
+    ssize_t r = read (fd, p, n);
+    if (r < 0) {
+      if (errno == EINTR) continue;
+      return -1;
+    }
+    if (r == 0) return -1;  /* EOF */
+    p += r;
+    n -= (size_t)r;
+  }
+  return 0;
+}
+
+void hegel__deadline_in (struct timespec * d, int64_t ms)
+{
+  clock_gettime (CLOCK_MONOTONIC, d);
+  d->tv_sec += (time_t) (ms / 1000);
+  d->tv_nsec += (long) (ms % 1000) * 1000000L;
+  if (d->tv_nsec >= 1000000000L) {
+    d->tv_sec ++;
+    d->tv_nsec -= 1000000000L;
+  }
+}
+
+int hegel__read_deadline (int fd, void * buf, size_t n, const struct timespec * deadline)
+{
+  if (!deadline) return hegel__read_full (fd, buf, n);
+  uint8_t * p = buf;
+  while (n > 0) {
+    struct timespec now;
+    clock_gettime (CLOCK_MONOTONIC, &now);
+    int64_t left = (int64_t) (deadline->tv_sec - now.tv_sec) * 1000
+                 + (int64_t) (deadline->tv_nsec - now.tv_nsec) / 1000000;
+    if (left < 0) left = 0;                   /* poll (0): take what is already there */
+    struct pollfd pfd = { fd, POLLIN, 0 };
+    int ready = poll (&pfd, 1, left > INT_MAX ? INT_MAX : (int) left);
+    if (ready < 0) {
+      if (errno == EINTR) continue;
+      return -1;
+    }
+    if (ready == 0) return -2;
     ssize_t r = read (fd, p, n);
     if (r < 0) {
       if (errno == EINTR) continue;
@@ -1087,9 +1132,17 @@ void hegel_event_value (hegel_testcase * tc, const char * label, double value)
 ** (health failure): the parent can't see draws made in a process that
 ** may not survive. */
 
-static void report_iso_crash (hegel_testcase * tc, const char * site, int wstatus)
+static void report_iso_crash (hegel_testcase * tc, const char * site, int wstatus,
+                              int64_t timed_out_ms)
 {
-  if (WIFSIGNALED (wstatus)) {
+  if (timed_out_ms) {
+    /* The block is the origin, as for a crash: a bug that hangs on some
+    ** inputs and crashes on others shrinks as one. */
+    snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "HEGEL_ISOLATED at %s", site);
+    snprintf (hegel__fail_msg, sizeof hegel__fail_msg,
+              "HEGEL_ISOLATED block at %s timed out after %lld ms (killed)",
+              site, (long long) timed_out_ms);
+  } else if (WIFSIGNALED (wstatus)) {
     int sig = WTERMSIG (wstatus);
     snprintf (hegel__fail_origin, sizeof hegel__fail_origin, "HEGEL_ISOLATED at %s", site);
     snprintf (hegel__fail_msg, sizeof hegel__fail_msg,
@@ -1148,17 +1201,26 @@ int hegel__isolate_enter (hegel_testcase * tc, const char * site)
     return 1;
   }
 
-  /* Parent: relay notes, collect the verdict. */
+  /* Parent: relay notes, collect the verdict — or kill a child that is
+  ** still running at the deadline. */
   close (fds[1]);
+  int64_t timeout_ms = hegel__case_timeout_ms, timed_out_ms = 0;
+  struct timespec deadline;
+  if (timeout_ms) hegel__deadline_in (&deadline, timeout_ms);
+  const struct timespec * dl = timeout_ms ? &deadline : NULL;
   hegel_outcome out;
   memset (&out, 0, sizeof out);
   out.status = -1;
   for (;;) {
     hegel_msg_header h;
-    if (hegel__read_full (fds[0], &h, sizeof h) != 0) break;
+    int rd = hegel__read_deadline (fds[0], &h, sizeof h, dl);
+    if (rd == -2) timed_out_ms = timeout_ms;
+    if (rd != 0) break;
     uint8_t * payload = malloc (h.len ? h.len : 1);
     if (!payload) abort ();
-    if (h.len && hegel__read_full (fds[0], payload, h.len) != 0) { free (payload); break; }
+    rd = h.len ? hegel__read_deadline (fds[0], payload, h.len, dl) : 0;
+    if (rd == -2) timed_out_ms = timeout_ms;
+    if (rd != 0) { free (payload); break; }
     int done = 0;
     /* Only notes and the terminal verdicts (DONE .. HEALTH) come from an
     ** isolated child; ops numbered after HEALTH are ordinary requests. */
@@ -1170,12 +1232,13 @@ int hegel__isolate_enter (hegel_testcase * tc, const char * site)
     if (done) break;
   }
   close (fds[0]);
+  if (timed_out_ms) kill (pid, SIGKILL);
   int wstatus = 0;
   while (waitpid (pid, &wstatus, 0) < 0) { /* EINTR */ }
 
   switch (out.status) {
     case -1:
-      report_iso_crash (tc, site, wstatus);
+      report_iso_crash (tc, site, wstatus, timed_out_ms);
       break;
     case HG_STATUS_VALID:
       return 0;
