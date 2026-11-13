@@ -14,7 +14,8 @@
 **      version and the RFC 4122 variant, an unversioned one is never nil,
 **      both round-trip through text; IPv4 / IPv6 addresses round-trip
 **      through inet_ntop / inet_pton; emails, URLs and domains have the
-**      shape their RFC says, no NUL, and respect max_length
+**      shape their RFC says, no NUL, and respect max_length; a URL
+**      drawn with hegel_draw_url_alloc has that shape too
 **   3. Makefile runner      — TESTS_PASS; each property runs in fork
 **      mode AND in nofork mode, must exit 0 */
 
@@ -186,6 +187,13 @@ static void prop_strings (hegel_testcase * tc)
   HEGEL_ASSERT ((size_t) n == strlen (buf) && n < (int) sizeof buf - 1,
                 "url has an embedded NUL or was truncated (%d bytes)", n);
   HEGEL_ASSERT (url_ok (buf), "malformed url \"%s\"", buf);
+
+  /* The case-owned form: whole whatever its length, and writable. */
+  char * url = hegel_draw_url_alloc (tc);
+  size_t url_len = strlen (url);
+  HEGEL_ASSERT (url_ok (url), "malformed url \"%s\"", url);
+  url[url_len] = 'x';   /* the NUL's byte belongs to the block */
+  url[url_len] = '\0';
 
   n = hegel_draw_domain (tc, 0, buf, sizeof buf);
   HEGEL_ASSERT (n <= 255 && domain_ok (buf, (size_t) n), "malformed domain \"%s\"", buf);

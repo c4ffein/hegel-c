@@ -45,9 +45,12 @@
   - A passing repeat loop runs until the choice budget overruns (often
     ~400k iterations), which trips TooSlow in fork mode. A built-in cap would
     depart from the engine and hegel-rust; decide whether to offer one.
-  - URLs from `hegel_draw_url` have no length bound (631 characters seen in
-    2000 draws), and the caller-buffer contract truncates silently: an
-    allocating variant (case-owned, like `hegel_draw_grammar`) would be safer.
+  - ~~URLs from `hegel_draw_url` have no length bound (631 characters seen
+    in 2000 draws), and the caller-buffer contract truncates silently~~:
+    `hegel_draw_url_alloc` returns the whole URL, case-owned like
+    `hegel_draw_grammar`. Left: the same for text, regex, email and domain
+    if a harness needs it (their lengths are bounded, so a buffer can be
+    sized).
 - **Imperative helpers (2026-10-30).** Main is plain generators now (the
   schema layer moved to `experiments/`, see its README). What the
   harnesses read while deciding would have used:

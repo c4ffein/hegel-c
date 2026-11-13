@@ -381,13 +381,13 @@ hegel_datetime dt = hegel_draw_datetime(tc, &(hegel_datetime){ from, {0} }, NULL
 hegel_time t = hegel_draw_time(tc, NULL, NULL);
 hegel_uuid u = hegel_draw_uuid(tc, 4);        /* 0 = any version */
 hegel_ipv4 a = hegel_draw_ipv4(tc);           /* a.bytes[0..3], network order */
-char email[256], url[4096], host[256];
+char email[256], host[256];
 hegel_draw_email(tc, email, sizeof email);
-hegel_draw_url(tc, url, sizeof url);
+char *url = hegel_draw_url_alloc(tc);         /* whole URL, owned by the case */
 hegel_draw_domain(tc, 63, host, sizeof host);
 ```
 
-Prefer these to assembling dates or addresses from integer draws: they are always valid and shrink as values (a date toward 2000-01-01, a time toward its lower bound). NULL bounds are the engine's defaults; impossible bounds are health failures, not test failures. Size string buffers generously: a truncated email or URL is no longer valid.
+Prefer these to assembling dates or addresses from integer draws: they are always valid and shrink as values (a date toward 2000-01-01, a time toward its lower bound). NULL bounds are the engine's defaults; impossible bounds are health failures, not test failures. Size string buffers generously: a truncated email or domain is no longer valid. URLs have no length bound, so draw them with `hegel_draw_url_alloc` (`hegel_draw_url(tc, buf, capacity)` truncates into a buffer).
 
 ### Grammar strings
 

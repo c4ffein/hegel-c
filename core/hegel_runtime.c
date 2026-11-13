@@ -594,6 +594,19 @@ int hegel_draw_url (hegel_testcase * tc, char * buf, int capacity)
   return draw_value_string (tc, HEGEL_OP_DRAW_URL, NULL, 0, buf, capacity);
 }
 
+char * hegel_draw_url_alloc (hegel_testcase * tc)
+{
+  if (!tc->silent) tc->draw_count++;
+  hegel_buf r;
+  hegel__buf_init (&r);
+  hegel__call (tc, HEGEL_OP_DRAW_URL, NULL, 0, &r, 0);
+  char * s = hegel_alloc (tc, r.len + 1);   /* zeroed: the NUL is there */
+  if (r.len) memcpy (s, r.data, r.len);
+  hegel__buf_free (&r);
+  trace (tc, "\"%s\"", s);
+  return s;
+}
+
 int hegel_draw_domain (hegel_testcase * tc, int max_length, char * buf, int capacity)
 {
   /* 0 = the engine default, 255; out-of-range lengths go to the server

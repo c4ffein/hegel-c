@@ -420,10 +420,17 @@ hegel_ipv6 hegel_draw_ipv6 (hegel_testcase * tc);
 ** is at most 254 characters, a domain max_length; a URL has no bound
 ** (its path has as many components as the engine draws, each up to ~300
 ** characters percent-encoded) — 4096 bytes covers what it generates in
-** practice, and a return of capacity - 1 means the URL may be cut. */
+** practice, and a return of capacity - 1 means the URL may be cut.
+** hegel_draw_url_alloc (below) has no buffer to size. */
 int hegel_draw_email  (hegel_testcase * tc, char * buf, int capacity);
 int hegel_draw_url    (hegel_testcase * tc, char * buf, int capacity);
 int hegel_draw_domain (hegel_testcase * tc, int max_length, char * buf, int capacity);
+
+/* The same URL draw as hegel_draw_url (same choices, so it shrinks the
+** same), returned whole: a NUL-terminated string owned by the test case
+** (hegel_alloc: freed when the case ends, or earlier with hegel_free),
+** never truncated, never NULL. */
+char * hegel_draw_url_alloc (hegel_testcase * tc);
 
 /* ---- Test suite ---- */
 
